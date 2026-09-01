@@ -1,0 +1,6 @@
+{
+  "name": "ERUS AI Group Discussion Facilitator",
+  "description": "Autonomous AI moderator for online group discussions, real-time turn management, realistic 3D-styled seating rooms, multi-parameter scoring, student reports, and faculty analytics on Web and Mobile.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
