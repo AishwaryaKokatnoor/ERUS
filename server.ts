@@ -494,12 +494,16 @@ app.post('/api/session/simulate-peer', async (req, res) => {
 
     if (ai) {
       const recentHistory = liveTranscripts.slice(-4).map((t) => `${t.speakerName}: "${t.text}"`).join('\n');
-      const prompt = `You are simulating a college student named ${selectedPeer.name} (${selectedPeer.course} at ${selectedPeer.college}) participating in a group discussion.
+      const prompt = `You are simulating an Indian college student named ${selectedPeer.name} (${selectedPeer.course} at ${selectedPeer.college}) participating in a collegiate group discussion.
 Topic: "${currentLiveSession.topic}"
 Recent group statements:
 ${recentHistory}
 
-Write a natural, concise, intelligent speaking contribution (2-3 sentences max) that builds on, agrees with, or offers a constructive counterpoint to the recent discussion. Speak in natural Indian academic English.`;
+Language, Accent & Tone Guidelines:
+- Language: Authentic Indian Academic English as spoken in Indian university GDs.
+- Tone: Polite, articulate, well-structured, and collaborative.
+- Use natural collegiate phrasing such as: "Building upon what [Peer] pointed out...", "If we look at the ground reality in our context...", "I would like to offer a counter-perspective here...", "From a practical standpoint...", "We must also consider the grassroots implications...".
+- Length: 2 to 3 concise, intelligent sentences. Avoid American slang or idioms. Speak strictly in natural Indian collegiate English.`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-3.7-flash',
@@ -511,10 +515,11 @@ Write a natural, concise, intelligent speaking contribution (2-3 sentences max) 
 
     if (!peerStatement) {
       const fallbackList = [
-        'Building on that point, we must also consider how cloud scalability allows adaptive learning models to reach millions of students cost-effectively.',
-        'While I appreciate that perspective, human empathy, emotional intelligence, and moral mentorship can never be replicated by neural networks.',
-        'In technical laboratory disciplines, hands-on physical verification remains mandatory to avoid real-world engineering failures.',
-        'A balanced hybrid pedagogical framework will give teachers time back for individualized coaching rather than rote grading.',
+        'Building upon what my colleague pointed out, if we look at our Indian educational context, digital infrastructure and affordable access must be addressed first.',
+        'I would like to present a constructive counter-perspective here. While technological automation offers great scale, human mentorship, empathy, and moral guidance cannot be replaced.',
+        'Looking at the ground reality in technical disciplines, hands-on laboratory verification remains absolutely vital to ensure real-world engineering competency.',
+        'A balanced hybrid pedagogical approach would allow faculty members to dedicate quality time towards individual student mentoring rather than administrative tasks.',
+        'From a practical implementation standpoint, we must also examine data privacy and whether our institutions have adequate regulatory safeguards in place.',
       ];
       peerStatement = fallbackList[Math.floor(Math.random() * fallbackList.length)];
     }
@@ -599,7 +604,7 @@ app.post('/api/facilitator/moderate', async (req, res) => {
         : '';
 
       const prompt = `You are the AI Facilitator / Moderator for the ERUS AI Group Discussion Facilitator (ERUS-AIGDF) platform.
-Your job is to conduct online group discussions autonomously like an experienced human moderator.
+Your role is that of a dignified, articulate Indian collegiate GD moderator and evaluator.
 Topic: "${topic}"
 Current Phase: ${phase}
 Silence Duration: ${silenceDurationSeconds} seconds
@@ -611,17 +616,19 @@ ${recentContext || '(Discussion just started)'}
 Student Participation Stats:
 ${studentStats}
 
-Moderator Rules & Behaviors:
-1. If phase is 'intro': Introduce the discussion warmly, state the topic clearly, and mention that everyone will get an opportunity.
-2. If phase is 'rules': State the 5 core rules (Speak one person at a time, respect differing opinions, support with examples, encourage participation, stay on topic), then invite someone to start.
-3. If one student is dominating or spoke too much: Politely thank them and invite a less active or quiet student by name and seat.
-4. If there is a silence/deadlock (>15-20s): Intervene with a fresh, provocative open-ended question to restart the flow.
-5. If off-topic: Politely thank them and steer back to "${topic}".
-6. If discussion is in progress: Ask thoughtful probing questions tailored to the latest speaker's argument (e.g., asking for counter-evidence, practical implementation barriers, long-term societal effects, or addressing quiet participants).
-7. If phase is 'conclusion': Summarize the main arguments, thank all participants, and announce that individual assessment reports are being compiled.
+Language, Accent & Moderator Behavior Guidelines:
+- Language: Authentic, formal Indian Academic English with an Indian collegiate moderator demeanor (dignified, polite, encouraging yet firm).
+- Phrasing & Style:
+  1. If phase is 'intro': Introduce the discussion warmly with Indian academic greeting ("Good morning participants. Today's group discussion topic is: '${topic}'... Each candidate will receive an opportunity to put forth their views.").
+  2. If phase is 'rules': State the 5 core rules clearly (Speak one at a time, respect differing viewpoints, substantiate with examples, ensure balanced participation, stay strictly on topic), then invite someone to initiate.
+  3. If one student is dominating: Politely thank them and invite a less active or quiet peer by name and seat ("Thank you [Name] for your points. I would like to request our other peers, such as [Quiet Student], to share their perspective.").
+  4. If there is a silence/deadlock (>15-20s): Intervene with a fresh, provocative open-ended question relevant to practical realities, ethics, or societal impact in our context.
+  5. If off-topic: Politely thank them and steer back to "${topic}".
+  6. If discussion is in progress: Ask thoughtful probing questions tailored to the latest speaker's argument (asking for counter-evidence, practical implementation barriers in our context, long-term societal effects, or addressing quiet participants).
+  7. If phase is 'conclusion': Summarize the main arguments, thank all participants with dignity, and announce that individual assessment reports are being compiled.
 
 Generate your response in JSON format with:
-- speech: The exact dialogue the AI Facilitator speaks to the room (clear, natural, professional, max 2 sentences).
+- speech: The exact dialogue the AI Facilitator speaks to the room (clear, natural, professional Indian English, max 2 sentences).
 - actionType: One of ['introduce', 'explain_rules', 'invite_speaker', 'probing_question', 'deadlock_recovery', 'rebalance_turn', 'redirect_topic', 'conclude']
 - targetStudentName: Name of the student being addressed directly (if any)
 - isProbingQuestion: Boolean`;
@@ -664,17 +671,17 @@ Generate your response in JSON format with:
     let isProbing = true;
 
     if (phase === 'intro') {
-      speech = `Good morning everyone. Today's discussion topic is: "${topic}". Each participant will get an opportunity to speak. Please respect others' opinions and avoid interruptions.`;
+      speech = `Good morning participants. Welcome to this group discussion. Today's topic is: "${topic}". Each participant will receive an opportunity to put forth their views. Kindly maintain decorum, listen actively, and avoid interruptions.`;
       actionType = 'introduce';
       isProbing = false;
     } else if (phase === 'rules') {
-      speech = `Discussion Rules: 1. Speak only one person at a time. 2. Respect differing opinions. 3. Support arguments with examples. 4. Encourage participation. 5. Stay on topic. Let us begin. Who would like to start the discussion?`;
+      speech = `Before we begin, kindly note the ground rules: 1. Speak one at a time. 2. Respect differing viewpoints. 3. Support arguments with concrete examples. 4. Encourage quiet peers to participate. 5. Stay strictly on topic. Let us initiate the discussion. Who would like to start?`;
       actionType = 'explain_rules';
       isProbing = false;
     } else if (silenceDurationSeconds >= 15) {
       const deadlockPool = [
-        `Let me pose a question to the room: what unexpected regulatory or ethical challenges might emerge if this model is adopted globally?`,
-        `To restart our momentum: how might this issue fundamentally impact vulnerable communities or future workplace dynamics?`,
+        `Let me pose a question to the room: what unexpected regulatory or ethical challenges might emerge if this model is adopted in our Indian context?`,
+        `To restart our momentum: how might this issue fundamentally impact vulnerable communities and future workplace dynamics?`,
         `Playing devil's advocate: what if the primary risks we have identified are overstated, and delaying action carries far greater opportunity costs?`,
         `Let us examine the human experience: how will this change affect psychological safety, emotional empathy, and student motivation?`,
       ];
@@ -682,11 +689,11 @@ Generate your response in JSON format with:
       speech = unaskedDeadlock;
       actionType = 'deadlock_recovery';
     } else if (interruptionDetected) {
-      speech = `Please let one speaker finish before taking the floor. Let us respect everyone's speaking time.`;
+      speech = `Kindly allow the speaker to conclude their thoughts before taking the floor. Let us maintain mutual respect and speaking decorum.`;
       actionType = 'rebalance_turn';
       isProbing = false;
     } else if (phase === 'conclusion') {
-      speech = `Thank you everyone. We discussed both the key advantages and challenges thoroughly. I appreciate your active participation. Individual assessment reports will now be generated.`;
+      speech = `Thank you everyone. We have had a comprehensive and thoughtful discussion covering both opportunities and practical challenges. The session is now concluded, and individual assessment reports will be compiled.`;
       actionType = 'conclude';
       isProbing = false;
     } else {
@@ -751,7 +758,7 @@ You MUST evaluate the student against the exact 7 parameters:
 4. Confidence (Weightage: 15%) -> Score between 0 and 15 (Initiating discussion, Responding confidently, Handling questions)
 5. Content Quality (Weightage: 15%) -> Score between 0 and 15 (Relevance, Logical reasoning, Examples, Supporting arguments)
 6. Collaboration (Weightage: 10%) -> Score between 0 and 10 (Respect for others, Listening skills, Encouraging others, Team behavior)
-7. Leadership (Weightage: 5%) -> Score between 0 and 5 (Guiding discussion, Summarizing points, Conflict management)
+7. Leadership & Decision Making (Weightage: 5%) -> Score between 0 and 5. MANDATORY BEHAVIORAL RULE: If the student was the first to speak and initiated/started the GD, award maximum leadership score (5/5) and praise their leadership initiative in leadershipFeedback. If the student concluded or synthesized the discussion, award maximum score (5/5) and praise their decision-making and synthesis skills in leadershipFeedback.
 
 Overall Score Formula: English + Fluency + Clarity + Confidence + Content + Collaboration + Leadership (Max 100).
 Grade Scale:

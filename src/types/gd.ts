@@ -17,6 +17,8 @@ export interface Student {
   questionsInitiated: number;
   sentiment: 'positive' | 'neutral' | 'critical' | 'enthusiastic';
   lastSpokenAt?: number;
+  cameraActive?: boolean;
+  gender?: 'female' | 'male';
 }
 
 export interface BreakoutRoom {
@@ -54,7 +56,15 @@ export interface GDSession {
   createdAt: string;
   startedAt?: number;
   endedAt?: number;
+  slotName?: string;
+  slotTiming?: string;
+  slotDate?: string;
+  enrolledCount?: number;
+  maxCapacity?: number;
+  roomLayout?: GDRoomLayoutType;
 }
+
+export type GDRoomLayoutType = 'round_table' | 'speaker_center' | 'classroom';
 
 export interface TranscriptEntry {
   id: string;

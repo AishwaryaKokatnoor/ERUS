@@ -1,40 +1,227 @@
-// Helper for AI Facilitator Text-To-Speech with Indian/Global English voice preference
+// Helper for AI Facilitator and Multi-Persona Peer Speech Synthesis (Web Speech API)
+// Configured with First-Class Indian English (en-IN) Accent & Cadence
 
-class FacilitatorVoiceEngine {
+export interface VoicePersonaStudent {
+  id: string;
+  name: string;
+  seatNumber?: number;
+  gender?: 'female' | 'male';
+}
+
+class RoomVoiceEngine {
   private isMuted: boolean = false;
   private currentUtterance: SpeechSynthesisUtterance | null = null;
+  private cachedVoices: SpeechSynthesisVoice[] = [];
+
+  constructor() {
+    this.initVoices();
+  }
+
+  private initVoices() {
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      this.refreshVoices();
+      if (typeof window.speechSynthesis.onvoiceschanged !== 'undefined') {
+        window.speechSynthesis.onvoiceschanged = () => {
+          this.refreshVoices();
+        };
+      }
+    }
+  }
+
+  public refreshVoices(): SpeechSynthesisVoice[] {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return [];
+    try {
+      const voices = window.speechSynthesis.getVoices() || [];
+      if (voices.length > 0) {
+        this.cachedVoices = voices;
+      }
+      return voices;
+    } catch {
+      return [];
+    }
+  }
+
+  public getVoices(): SpeechSynthesisVoice[] {
+    if (this.cachedVoices.length > 0) return this.cachedVoices;
+    return this.refreshVoices();
+  }
+
+  // Detect whether a voice is an authentic Indian English voice
+  public isIndianVoice(voice: SpeechSynthesisVoice): boolean {
+    const lang = (voice.lang || '').toLowerCase().replace('_', '-');
+    const name = (voice.name || '').toLowerCase();
+    
+    return (
+      lang === 'en-in' ||
+      lang.startsWith('en-in') ||
+      lang === 'hi-in' ||
+      lang.startsWith('hi-in') ||
+      name.includes('india') ||
+      name.includes('indian') ||
+      name.includes('(india)') ||
+      name.includes('heera') ||
+      name.includes('ravi') ||
+      name.includes('neerja') ||
+      name.includes('prabhat') ||
+      name.includes('veena') ||
+      name.includes('hemant') ||
+      name.includes('swara') ||
+      name.includes('madhur') ||
+      name.includes('kalpana') ||
+      name.includes('rishi') ||
+      name.includes('sangeeta') ||
+      name.includes('lekha')
+    );
+  }
+
+  public getAvailableIndianVoices(): SpeechSynthesisVoice[] {
+    return this.getVoices().filter((v) => this.isIndianVoice(v));
+  }
+
+  // Find the most authentic Indian English female voice
+  public getIndianFemaleVoice(): SpeechSynthesisVoice | undefined {
+    const voices = this.getVoices();
+    const indianVoices = voices.filter((v) => this.isIndianVoice(v));
+
+    // 1. Specific named Indian female voices (Windows/Edge/Chrome/Apple)
+    const namedFemale = indianVoices.find((v) => {
+      const name = v.name.toLowerCase();
+      return (
+        name.includes('heera') ||
+        name.includes('neerja') ||
+        name.includes('veena') ||
+        name.includes('swara') ||
+        name.includes('kalpana') ||
+        name.includes('sangeeta') ||
+        name.includes('lekha') ||
+        name.includes('female')
+      );
+    });
+    if (namedFemale) return namedFemale;
+
+    // 2. Any Indian voice
+    if (indianVoices.length > 0) return indianVoices[0];
+
+    // 3. Fallback: Commonwealth / Neutral female voice with en-IN pronunciation request
+    return (
+      voices.find((v) => {
+        const lang = (v.lang || '').toLowerCase();
+        const name = v.name.toLowerCase();
+        return (
+          (lang.includes('en-gb') || lang.includes('en-au') || lang.startsWith('en')) &&
+          (name.includes('female') || name.includes('natural') || name.includes('online'))
+        );
+      }) || voices[0]
+    );
+  }
+
+  // Find the most authentic Indian English male voice
+  public getIndianMaleVoice(): SpeechSynthesisVoice | undefined {
+    const voices = this.getVoices();
+    const indianVoices = voices.filter((v) => this.isIndianVoice(v));
+
+    // 1. Specific named Indian male voices (Windows/Edge/Chrome/Apple)
+    const namedMale = indianVoices.find((v) => {
+      const name = v.name.toLowerCase();
+      return (
+        name.includes('ravi') ||
+        name.includes('prabhat') ||
+        name.includes('hemant') ||
+        name.includes('madhur') ||
+        name.includes('rishi') ||
+        name.includes('male')
+      );
+    });
+    if (namedMale) return namedMale;
+
+    // 2. Any Indian voice that isn't explicitly female
+    const nonFemale = indianVoices.find((v) => {
+      const name = v.name.toLowerCase();
+      return (
+        !name.includes('heera') &&
+        !name.includes('neerja') &&
+        !name.includes('veena') &&
+        !name.includes('kalpana')
+      );
+    });
+    if (nonFemale) return nonFemale;
+    if (indianVoices.length > 0) return indianVoices[0];
+
+    // 3. Fallback: Commonwealth / Neutral male voice
+    return (
+      voices.find((v) => {
+        const lang = (v.lang || '').toLowerCase();
+        const name = v.name.toLowerCase();
+        return (
+          (lang.includes('en-gb') || lang.includes('en-au') || lang.startsWith('en')) &&
+          (name.includes('male') || name.includes('natural') || name.includes('online'))
+        );
+      }) || voices[0]
+    );
+  }
+
+  // Find the most authentic Indian English facilitator voice
+  public getIndianFacilitatorVoice(): SpeechSynthesisVoice | undefined {
+    const voices = this.getVoices();
+    const indianVoices = voices.filter((v) => this.isIndianVoice(v));
+
+    // Priority: Neerja, Heera, Ravi, Prabhat, Google English (India)
+    const primary = indianVoices.find((v) => {
+      const name = v.name.toLowerCase();
+      return (
+        name.includes('neerja') ||
+        name.includes('heera') ||
+        name.includes('prabhat') ||
+        name.includes('ravi') ||
+        name.includes('google')
+      );
+    });
+    if (primary) return primary;
+
+    if (indianVoices.length > 0) return indianVoices[0];
+
+    // Fallback: Commonwealth / Neutral English voice
+    return (
+      voices.find((v) => (v.lang || '').toLowerCase().includes('en-gb')) ||
+      voices.find((v) => (v.lang || '').toLowerCase().startsWith('en')) ||
+      voices[0]
+    );
+  }
 
   public setMuted(muted: boolean) {
     this.isMuted = muted;
-    if (muted && window.speechSynthesis) {
+    if (muted && typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
   }
 
+  public isRoomAudioMuted(): boolean {
+    return this.isMuted;
+  }
+
+  // AI Facilitator Speech in Indian English Accent
   public speak(text: string, onEnd?: () => void) {
+    this.speakAsFacilitator(text, onEnd);
+  }
+
+  public speakAsFacilitator(text: string, onEnd?: () => void) {
     if (this.isMuted || typeof window === 'undefined' || !window.speechSynthesis) {
       if (onEnd) onEnd();
       return;
     }
 
     try {
-      window.speechSynthesis.cancel(); // Stop prior speech
+      window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.02;
+
+      // Explicitly set Indian English locale & cadence
+      utterance.lang = 'en-IN';
+      utterance.rate = 0.95; // Dignified, clear Indian academic cadence
       utterance.pitch = 1.0;
 
-      // Look for preferred voices (Indian English or natural English)
-      const voices = window.speechSynthesis.getVoices();
-      const preferredVoice = voices.find(
-        (v) =>
-          v.lang.includes('en-IN') ||
-          v.name.toLowerCase().includes('india') ||
-          v.lang.includes('en-GB') ||
-          v.lang.includes('en-US')
-      );
-
-      if (preferredVoice) {
-        utterance.voice = preferredVoice;
+      const voice = this.getIndianFacilitatorVoice();
+      if (voice) {
+        utterance.voice = voice;
       }
 
       utterance.onend = () => {
@@ -50,7 +237,76 @@ class FacilitatorVoiceEngine {
       this.currentUtterance = utterance;
       window.speechSynthesis.speak(utterance);
     } catch (e) {
-      console.warn('Speech synthesis error:', e);
+      console.warn('Facilitator voice synthesis error:', e);
+      if (onEnd) onEnd();
+    }
+  }
+
+  // Multi-Persona Peer Student Speech in Indian English Accent
+  public speakAsStudent(student: VoicePersonaStudent, text: string, onEnd?: () => void) {
+    if (this.isMuted || typeof window === 'undefined' || !window.speechSynthesis) {
+      if (onEnd) onEnd();
+      return;
+    }
+
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+
+      // Explicitly set Indian English locale
+      utterance.lang = 'en-IN';
+
+      const femaleNames = [
+        'priya',
+        'sneha',
+        'ananya',
+        'divya',
+        'ritu',
+        'pooja',
+        'kavya',
+        'neha',
+        'riya',
+        'tanvi',
+        'shreya',
+        'sanjana',
+      ];
+      const firstName = (student.name || '').split(' ')[0].toLowerCase();
+      const isFemale = student.gender === 'female' || femaleNames.includes(firstName);
+
+      const seatNum = student.seatNumber || (parseInt(student.id.replace(/\D/g, ''), 10) || 1);
+
+      if (isFemale) {
+        const femaleVoice = this.getIndianFemaleVoice();
+        if (femaleVoice) {
+          utterance.voice = femaleVoice;
+        }
+        // Subtle pitch & rate modulation for varied Indian female student personas
+        utterance.pitch = 1.10 + ((seatNum % 3) * 0.05);
+        utterance.rate = 0.96 + ((seatNum % 2) * 0.03);
+      } else {
+        const maleVoice = this.getIndianMaleVoice();
+        if (maleVoice) {
+          utterance.voice = maleVoice;
+        }
+        // Subtle pitch & rate modulation for varied Indian male student personas
+        utterance.pitch = 0.88 + ((seatNum % 3) * 0.04);
+        utterance.rate = 0.95 + ((seatNum % 2) * 0.03);
+      }
+
+      utterance.onend = () => {
+        this.currentUtterance = null;
+        if (onEnd) onEnd();
+      };
+
+      utterance.onerror = () => {
+        this.currentUtterance = null;
+        if (onEnd) onEnd();
+      };
+
+      this.currentUtterance = utterance;
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      console.warn('Student voice synthesis error:', e);
       if (onEnd) onEnd();
     }
   }
@@ -58,8 +314,10 @@ class FacilitatorVoiceEngine {
   public stop() {
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
+      this.currentUtterance = null;
     }
   }
 }
 
-export const facilitatorVoice = new FacilitatorVoiceEngine();
+export const roomVoice = new RoomVoiceEngine();
+export const facilitatorVoice = roomVoice; // Backward compatibility

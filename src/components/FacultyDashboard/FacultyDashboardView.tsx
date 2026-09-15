@@ -169,10 +169,20 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-2xl shadow-xs transition-colors">
           <span className="text-xs text-slate-500 dark:text-slate-400 block mb-1">Enrolled Students</span>
           <div className="flex items-baseline gap-1">
-            <span className="text-2xl font-bold text-slate-900 dark:text-white font-mono">{session.students.length}</span>
-            <span className="text-xs text-slate-500">Students</span>
+            <span className="text-2xl font-bold text-slate-900 dark:text-white font-mono">
+              {session.enrolledCount ?? session.students.length}
+            </span>
+            <span className="text-xs text-slate-500">/ {session.maxCapacity || 15}</span>
           </div>
-          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold block mt-1">100% Seated</span>
+          <span className={`text-[10px] font-semibold block mt-1 ${
+            (session.enrolledCount ?? session.students.length) >= (session.maxCapacity || 15)
+              ? 'text-rose-600 dark:text-rose-400'
+              : 'text-emerald-600 dark:text-emerald-400'
+          }`}>
+            {(session.enrolledCount ?? session.students.length) >= (session.maxCapacity || 15)
+              ? 'Slot Full (100% Capacity)'
+              : `${(session.maxCapacity || 15) - (session.enrolledCount ?? session.students.length)} Seats Open`}
+          </span>
         </div>
 
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-2xl shadow-xs transition-colors">
@@ -375,7 +385,7 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
                         className="w-6 h-6 rounded-full object-cover border border-slate-200 dark:border-slate-700" 
                         referrerPolicy="no-referrer"
                       />
-                      <span>{st.name} {st.isUser && '(You)'}</span>
+                      <span>{st.name}</span>
                     </div>
                   </td>
                   <td className="py-3 px-3 font-mono font-bold text-indigo-600 dark:text-indigo-400">

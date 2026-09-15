@@ -23,7 +23,8 @@ import {
   Student,
   SkillScore 
 } from '../../types/gd';
-import { SAMPLE_REPORT_RAHUL } from '../../data/mockGDData';
+import { AuthUser } from '../../types/auth';
+import { SAMPLE_REPORT_RAHUL, generateStudentReport } from '../../data/mockGDData';
 import confetti from 'canvas-confetti';
 
 interface StudentReportViewProps {
@@ -31,6 +32,8 @@ interface StudentReportViewProps {
   report?: StudentAssessmentReport;
   onBackToRoom: () => void;
   onViewFacultyDashboard: () => void;
+  currentUser?: AuthUser | null;
+  targetStudentId?: string | null;
 }
 
 export const StudentReportView: React.FC<StudentReportViewProps> = ({
@@ -38,13 +41,39 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
   report: initialReport,
   onBackToRoom,
   onViewFacultyDashboard,
+  currentUser,
+  targetStudentId,
 }) => {
-  const [selectedStudentId, setSelectedStudentId] = useState<string>(
-    initialReport?.studentId || 's1'
-  );
-  const [currentReport, setCurrentReport] = useState<StudentAssessmentReport>(
-    initialReport || SAMPLE_REPORT_RAHUL
-  );
+  const isStudent = currentUser?.role === 'student';
+  const isFaculty = currentUser?.role === 'faculty';
+
+  // Find the active student for this user
+  const userStudent = session.students.find(
+    (s) => s.isUser || (currentUser && (s.id === currentUser.id || s.name === currentUser.name))
+  ) || session.students[0];
+
+  // For students, selectedStudentId is strictly their own ID.
+  // For faculty, it's targetStudentId or initialReport's studentId or first student
+  const effectiveInitialStudentId = isStudent
+    ? userStudent.id
+    : (targetStudentId || initialReport?.studentId || session.students[0]?.id || 's1');
+
+  const [selectedStudentId, setSelectedStudentId] = useState<string>(effectiveInitialStudentId);
+
+  // Initialize report personalized for the active student if they are a student
+  const [currentReport, setCurrentReport] = useState<StudentAssessmentReport>(() => {
+    if (isStudent) {
+      if (
+        initialReport &&
+        (initialReport.studentId === userStudent.id || initialReport.studentName === currentUser?.name)
+      ) {
+        return initialReport;
+      }
+      return generateStudentReport(userStudent, session.topic, session.durationMinutes, initialReport);
+    }
+    return initialReport || SAMPLE_REPORT_RAHUL;
+  });
+
   const [isLoading, setIsLoading] = useState(false);
 
   // Trigger celebration on mount if grade is Very Good or Excellent
@@ -58,8 +87,26 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
     } catch (e) {}
   }, []);
 
-  // Handle student switch and fetch/generate their report
+  // Ensure student always stays strictly locked to their own report
+  useEffect(() => {
+    if (isStudent) {
+      setSelectedStudentId(userStudent.id);
+      if (currentReport.studentName !== (currentUser?.name || userStudent.name)) {
+        setCurrentReport(generateStudentReport(userStudent, session.topic, session.durationMinutes, initialReport));
+      }
+    } else if (targetStudentId && targetStudentId !== selectedStudentId) {
+      setSelectedStudentId(targetStudentId);
+      handleSelectStudent(targetStudentId);
+    }
+  }, [isStudent, userStudent.id, currentUser?.name, targetStudentId]);
+
+  // Handle student switch (Allowed only for faculty reviewers)
   const handleSelectStudent = async (studentId: string) => {
+    // If student, disallow switching to other students' reports
+    if (isStudent && studentId !== userStudent.id) {
+      return;
+    }
+
     setSelectedStudentId(studentId);
     const targetStudent = session.students.find((s) => s.id === studentId);
     if (!targetStudent) return;
@@ -80,9 +127,12 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
       const data = await res.json();
       if (data.report) {
         setCurrentReport(data.report);
+      } else {
+        setCurrentReport(generateStudentReport(targetStudent, session.topic, session.durationMinutes));
       }
     } catch (err) {
       console.error(err);
+      setCurrentReport(generateStudentReport(targetStudent, session.topic, session.durationMinutes));
     } finally {
       setIsLoading(false);
     }
@@ -115,44 +165,68 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
       {/* Top Controls (Hidden during print) */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 no-print">
         
-        {/* Student Selector Switcher */}
-        <div className="flex items-center gap-2">
-          <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">Select Participant:</label>
-          <div className="relative">
-            <select
-              id="student-report-select"
-              value={selectedStudentId}
-              onChange={(e) => handleSelectStudent(e.target.value)}
-              className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl px-3.5 py-2 text-xs font-bold focus:outline-none focus:border-indigo-500 pr-8 cursor-pointer shadow-xs"
-            >
-              {session.students.map((st) => (
-                <option key={st.id} value={st.id}>
-                  Seat {st.seatNumber}: {st.name} {st.isUser ? '(You)' : ''}
-                </option>
-              ))}
-            </select>
+        {/* Left: Role-based Indicator / Selector */}
+        {isStudent ? (
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-xs font-bold border border-indigo-200 dark:border-indigo-800 shadow-xs">
+              <ShieldCheck className="w-4 h-4 text-indigo-500" />
+              <span>Confidential Student Report: {currentUser?.name || userStudent.name} (Seat {currentStudentObj?.seatNumber || 1})</span>
+            </span>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 hidden sm:inline">
+              🔒 Private to your account • Only you can view this report
+            </span>
           </div>
-        </div>
+        ) : (
+          /* Faculty can select any participant in the session */
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold text-slate-600 dark:text-slate-400">Select Participant:</label>
+            <div className="relative">
+              <select
+                id="student-report-select"
+                value={selectedStudentId}
+                onChange={(e) => handleSelectStudent(e.target.value)}
+                className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl px-3.5 py-2 text-xs font-bold focus:outline-none focus:border-indigo-500 pr-8 cursor-pointer shadow-xs"
+              >
+                {session.students.map((st) => (
+                  <option key={st.id} value={st.id}>
+                    Seat {st.seatNumber}: {st.name} {st.isUser ? '(Demo Student)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
           <button
             id="print-report-btn"
             onClick={handlePrint}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-700 transition-all shadow-xs"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-700 transition-all shadow-xs cursor-pointer"
           >
             <Printer className="w-3.5 h-3.5" />
             <span>Print / PDF</span>
           </button>
 
-          <button
-            id="faculty-dash-cta"
-            onClick={onViewFacultyDashboard}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md shadow-indigo-600/20"
-          >
-            <span>Faculty Analytics</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
+          {isStudent ? (
+            <button
+              id="back-to-room-btn"
+              onClick={onBackToRoom}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md shadow-indigo-600/20 cursor-pointer"
+            >
+              <span>Back to GD Room</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          ) : (
+            <button
+              id="faculty-dash-cta"
+              onClick={onViewFacultyDashboard}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md shadow-indigo-600/20 cursor-pointer"
+            >
+              <span>Faculty Analytics</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
       </div>
