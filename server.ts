@@ -1,13 +1,15 @@
 import express from 'express';
+import http from 'http';
 import path from 'path';
 import dotenv from 'dotenv';
+import { Server as SocketIOServer } from 'socket.io';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 app.use(express.json());
 
@@ -22,6 +24,52 @@ if (process.env.GEMINI_API_KEY) {
       },
     },
   });
+}
+
+// Real-Time Socket.IO Room Participant Store
+export interface RoomParticipant {
+  socketId: string;
+  userId: string;
+  name: string;
+  seatNumber: number;
+  college: string;
+  course: string;
+  batch: string;
+  avatar: string;
+  role: 'student' | 'faculty';
+  micActive: boolean;
+  isSpeaking: boolean;
+  hasRaisedHand: boolean;
+  cameraActive: boolean;
+  speakingDurationSeconds: number;
+  speakingTurns: number;
+  interruptionCount: number;
+  questionsAnswered: number;
+  questionsInitiated: number;
+  joinedAt: number;
+}
+
+// Room participants mapping: roomId -> Map<socketId, RoomParticipant>
+const roomUsersMap = new Map<string, Map<string, RoomParticipant>>();
+// Socket to room mapping: socketId -> { roomId: string; userId: string }
+const socketToRoomMap = new Map<string, { roomId: string; userId: string }>();
+
+function normalizeRoomId(roomId?: string): string {
+  return (roomId || 'slot-morning-1').trim();
+}
+
+function allocateSeatNumber(roomMap: Map<string, RoomParticipant>, preferredSeat?: number): number {
+  const occupiedSeats = new Set<number>();
+  for (const p of roomMap.values()) {
+    if (p.seatNumber) occupiedSeats.add(p.seatNumber);
+  }
+  if (preferredSeat && preferredSeat >= 1 && preferredSeat <= 15 && !occupiedSeats.has(preferredSeat)) {
+    return preferredSeat;
+  }
+  for (let s = 1; s <= 15; s++) {
+    if (!occupiedSeats.has(s)) return s;
+  }
+  return roomMap.size + 1;
 }
 
 // In-Memory Backend State Store for Seamless Full-Stack Integration
@@ -1082,7 +1130,15 @@ app.get('/api/topics', (req, res) => {
   });
 });
 
-// Vite middleware / SPA static serving
+// Endpoint: GET Live Room Participants
+app.get('/api/room/:roomId/users', (req, res) => {
+  const roomId = normalizeRoomId(req.params.roomId);
+  const roomMap = roomUsersMap.get(roomId);
+  const users = roomMap ? Array.from(roomMap.values()) : [];
+  res.json({ success: true, roomId, count: users.length, users });
+});
+
+// Vite middleware / SPA static serving & Socket.IO initialization
 async function setupVite() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -1098,8 +1154,210 @@ async function setupVite() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[ERUS-AIGDF] Server active on port ${PORT}`);
+  const httpServer = http.createServer(app);
+  const io = new SocketIOServer(httpServer, {
+    cors: {
+      origin: '*',
+      methods: ['GET', 'POST'],
+    },
+  });
+
+  io.on('connection', (socket) => {
+    console.log(`[Socket.IO] Client connected: ${socket.id}`);
+
+    // 1. Join Room: Ensure all users join the exact SAME room
+    const handleJoin = (data: { roomId?: string; user?: any }) => {
+      const roomId = normalizeRoomId(data?.roomId);
+      const user = data?.user || {};
+
+      // Leave any existing room this socket was in
+      const existing = socketToRoomMap.get(socket.id);
+      if (existing && existing.roomId !== roomId) {
+        socket.leave(existing.roomId);
+        const oldRoom = roomUsersMap.get(existing.roomId);
+        if (oldRoom) {
+          oldRoom.delete(socket.id);
+          io.to(existing.roomId).emit('room_users', Array.from(oldRoom.values()));
+        }
+      }
+
+      socket.join(roomId);
+
+      if (!roomUsersMap.has(roomId)) {
+        roomUsersMap.set(roomId, new Map());
+      }
+      const roomMap = roomUsersMap.get(roomId)!;
+
+      // Clean up any stale connection for the same user ID in this room
+      if (user.id) {
+        for (const [sId, p] of roomMap.entries()) {
+          if (p.userId === user.id && sId !== socket.id) {
+            roomMap.delete(sId);
+            socketToRoomMap.delete(sId);
+          }
+        }
+      }
+
+      const seatNumber = allocateSeatNumber(roomMap, user.seatNumber);
+      const participant: RoomParticipant = {
+        socketId: socket.id,
+        userId: user.id || socket.id,
+        name: user.name || 'Participant',
+        seatNumber,
+        college: user.college || 'Engineering Institute',
+        course: user.course || 'B.Tech CSE',
+        batch: user.batch || '2022-2026',
+        avatar: user.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(user.name || socket.id)}`,
+        role: user.role || 'student',
+        micActive: !!user.micActive,
+        isSpeaking: !!user.isSpeaking,
+        hasRaisedHand: !!user.hasRaisedHand,
+        cameraActive: !!user.cameraActive,
+        speakingDurationSeconds: user.speakingDurationSeconds || 0,
+        speakingTurns: user.speakingTurns || 0,
+        interruptionCount: user.interruptionCount || 0,
+        questionsAnswered: user.questionsAnswered || 0,
+        questionsInitiated: user.questionsInitiated || 0,
+        joinedAt: Date.now(),
+      };
+
+      roomMap.set(socket.id, participant);
+      socketToRoomMap.set(socket.id, { roomId, userId: participant.userId });
+
+      console.log(`[Socket.IO] User "${participant.name}" joined room "${roomId}" (Seat ${participant.seatNumber}). Room size: ${roomMap.size}`);
+
+      // Broadcast to ALL clients in the room using io.to (including sender)
+      const userList = Array.from(roomMap.values());
+      io.to(roomId).emit('room_users', userList);
+      io.to(roomId).emit('user_joined', { participant, roomId });
+    };
+
+    socket.on('join_room', handleJoin);
+    socket.on('join-room', handleJoin);
+
+    // 2. Leave Room
+    const handleLeave = (data: { roomId?: string }) => {
+      const roomId = normalizeRoomId(data?.roomId);
+      socket.leave(roomId);
+      const roomMap = roomUsersMap.get(roomId);
+      if (roomMap && roomMap.has(socket.id)) {
+        const departing = roomMap.get(socket.id);
+        roomMap.delete(socket.id);
+        socketToRoomMap.delete(socket.id);
+        const userList = Array.from(roomMap.values());
+        console.log(`[Socket.IO] User "${departing?.name}" left room "${roomId}". Remaining: ${userList.length}`);
+        // Broadcast to ALL clients in the room
+        io.to(roomId).emit('room_users', userList);
+        io.to(roomId).emit('user_left', { socketId: socket.id, userId: departing?.userId, name: departing?.name });
+      }
+    };
+
+    socket.on('leave_room', handleLeave);
+    socket.on('leave-room', handleLeave);
+
+    // 3. User Speech Statement Broadcast
+    socket.on('user_speak', (data: { roomId: string; transcript: any; studentId: string; text: string; elapsedSeconds?: number }) => {
+      const roomId = normalizeRoomId(data?.roomId);
+      const roomMap = roomUsersMap.get(roomId);
+      if (roomMap) {
+        for (const p of roomMap.values()) {
+          if (p.userId === data.studentId || p.socketId === data.studentId) {
+            p.isSpeaking = true;
+            p.speakingTurns = (p.speakingTurns || 0) + 1;
+            p.speakingDurationSeconds = (p.speakingDurationSeconds || 0) + Math.max(15, Math.round((data.text || '').length / 8));
+          } else {
+            p.isSpeaking = false;
+          }
+        }
+        io.to(roomId).emit('room_users', Array.from(roomMap.values()));
+      }
+
+      // Broadcast transcript and active speaker to ALL clients in room
+      io.to(roomId).emit('new_transcript', data.transcript);
+      io.to(roomId).emit('speaker_active', { speakerId: data.studentId, isSpeaking: true });
+    });
+
+    // 4. Speaker Yield / Finish Turn
+    socket.on('speaker_yield', (data: { roomId: string; studentId?: string }) => {
+      const roomId = normalizeRoomId(data?.roomId);
+      const roomMap = roomUsersMap.get(roomId);
+      if (roomMap) {
+        for (const p of roomMap.values()) {
+          p.isSpeaking = false;
+        }
+        io.to(roomId).emit('room_users', Array.from(roomMap.values()));
+      }
+      io.to(roomId).emit('speaker_active', { speakerId: null, isSpeaking: false });
+    });
+
+    // 5. Hand Raise Toggle
+    socket.on('hand_raise_toggle', (data: { roomId: string; studentId: string }) => {
+      const roomId = normalizeRoomId(data?.roomId);
+      const roomMap = roomUsersMap.get(roomId);
+      if (roomMap) {
+        for (const p of roomMap.values()) {
+          if (p.userId === data.studentId || p.socketId === data.studentId) {
+            p.hasRaisedHand = !p.hasRaisedHand;
+          }
+        }
+        io.to(roomId).emit('room_users', Array.from(roomMap.values()));
+      }
+    });
+
+    // 6. Camera / Mic Media Status Toggle
+    socket.on('media_toggle', (data: { roomId: string; studentId: string; cameraActive?: boolean; micActive?: boolean }) => {
+      const roomId = normalizeRoomId(data?.roomId);
+      const roomMap = roomUsersMap.get(roomId);
+      if (roomMap) {
+        for (const p of roomMap.values()) {
+          if (p.userId === data.studentId || p.socketId === data.studentId) {
+            if (data.cameraActive !== undefined) p.cameraActive = data.cameraActive;
+            if (data.micActive !== undefined) p.micActive = data.micActive;
+          }
+        }
+        io.to(roomId).emit('room_users', Array.from(roomMap.values()));
+      }
+    });
+
+    // 7. Facilitator Speech Broadcast
+    socket.on('facilitator_speak', (data: { roomId: string; transcript: any; speech: string; actionType?: string; phase?: string }) => {
+      const roomId = normalizeRoomId(data?.roomId);
+      io.to(roomId).emit('new_transcript', data.transcript);
+      io.to(roomId).emit('facilitator_spoken', {
+        speech: data.speech,
+        actionType: data.actionType,
+        phase: data.phase,
+      });
+    });
+
+    // 8. Room Layout Change Sync
+    socket.on('layout_change', (data: { roomId: string; layout: string }) => {
+      const roomId = normalizeRoomId(data?.roomId);
+      io.to(roomId).emit('layout_updated', { layout: data.layout });
+    });
+
+    // 9. Client Disconnect: Auto remove from room and broadcast updated user list
+    socket.on('disconnect', () => {
+      const entry = socketToRoomMap.get(socket.id);
+      if (entry) {
+        const { roomId, userId } = entry;
+        socketToRoomMap.delete(socket.id);
+        const roomMap = roomUsersMap.get(roomId);
+        if (roomMap) {
+          const departing = roomMap.get(socket.id);
+          roomMap.delete(socket.id);
+          const userList = Array.from(roomMap.values());
+          console.log(`[Socket.IO] Client disconnected: ${socket.id} (${departing?.name}). Room "${roomId}" remaining: ${userList.length}`);
+          // Broadcast to ALL remaining clients in room
+          io.to(roomId).emit('room_users', userList);
+          io.to(roomId).emit('user_left', { socketId: socket.id, userId, name: departing?.name });
+        }
+      }
+    });
+  });
+
+  httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`[ERUS-AIGDF] Server active on port ${PORT} (Socket.IO + Express)`);
   });
 }
 

@@ -122,34 +122,34 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
   };
 
   return (
-    <div className="w-full max-w-xl mx-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800 p-6 sm:p-8 rounded-3xl shadow-xl shadow-indigo-500/5 transition-all">
+    <div className="w-full max-w-lg mx-auto bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 p-6 sm:p-8 rounded-2xl shadow-sm dark:shadow-xl transition-all">
       
       {/* Header & Mode Switcher */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-indigo-500/20 ring-4 ring-indigo-50 dark:ring-indigo-950/50 shrink-0">
-            {isRegistering ? <UserPlus className="w-6 h-6" /> : <GraduationCap className="w-6 h-6" />}
+          <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/40 flex items-center justify-center shrink-0">
+            {isRegistering ? <UserPlus className="w-5 h-5" /> : <GraduationCap className="w-5 h-5" />}
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-                {isRegistering ? 'Student Registration' : 'Student Portal'}
+              <h2 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900 dark:text-white">
+                {isRegistering ? 'Student Registration' : 'Student Sign In'}
               </h2>
-              <span className="text-[10px] uppercase font-extrabold px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950/80 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+              <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                 Participant
               </span>
             </div>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
               {isRegistering
-                ? 'Create your account to join academic discussion slots and view evaluations'
-                : 'Sign in to join the active Group Discussion room & view your scorecards'}
+                ? 'Register to join group discussion slots and receive feedback'
+                : 'Join the active group discussion room and view your scorecard'}
             </p>
           </div>
         </div>
       </div>
 
       {/* Mode Toggle Pills (Sign In vs Register) */}
-      <div className="flex p-1 mb-6 rounded-xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+      <div className="flex p-1 mb-5 rounded-xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
         <button
           type="button"
           onClick={() => {
@@ -157,9 +157,9 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
             setError(null);
             setSuccessMsg(null);
           }}
-          className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+          className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
             !isRegistering
-              ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-white shadow-xs'
+              ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
               : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
           }`}
         >
@@ -172,26 +172,26 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
             setError(null);
             setSuccessMsg(null);
           }}
-          className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+          className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
             isRegistering
-              ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-white shadow-xs'
+              ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
               : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
           }`}
         >
-          Register New User
+          Register New Student
         </button>
       </div>
 
       {/* Notifications */}
       {error && (
-        <div className="mb-5 p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 flex items-start gap-2.5 text-xs text-rose-700 dark:text-rose-300 animate-in fade-in slide-in-from-top-1">
+        <div className="mb-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 flex items-start gap-2.5 text-xs text-rose-700 dark:text-rose-300">
           <AlertCircle className="w-4 h-4 shrink-0 text-rose-500 mt-0.5" />
           <span>{error}</span>
         </div>
       )}
 
       {successMsg && (
-        <div className="mb-5 p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 flex items-start gap-2.5 text-xs text-emerald-700 dark:text-emerald-300 animate-in fade-in slide-in-from-top-1">
+        <div className="mb-4 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 flex items-start gap-2.5 text-xs text-emerald-700 dark:text-emerald-300">
           <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500 mt-0.5" />
           <span>{successMsg}</span>
         </div>
@@ -200,10 +200,10 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
       {/* 1. SIGN IN FORM */}
       {!isRegistering ? (
         <>
-          <form onSubmit={handleLoginSubmit} className="space-y-4">
+          <form onSubmit={handleLoginSubmit} className="space-y-3.5">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                Student ID or College Email
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Student ID or Email
               </label>
               <div className="relative">
                 <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -211,19 +211,19 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
                   type="text"
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
-                  placeholder="e.g. rahul.kumar@dit.edu.in or STU-2022-041"
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                  placeholder="e.g. rahul.kumar@dit.edu.in"
+                  className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
                   required
                 />
               </div>
             </div>
 
             <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
                   Password
                 </label>
-                <span className="text-[11px] text-slate-400 hover:text-indigo-600 cursor-pointer">
+                <span className="text-[11px] text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer">
                   Forgot password?
                 </span>
               </div>
@@ -234,7 +234,7 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter your password"
-                  className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                  className="w-full pl-10 pr-10 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
                   required
                 />
                 <button
@@ -250,7 +250,7 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full mt-2 py-3 px-4 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-indigo-700 text-white font-semibold text-xs sm:text-sm shadow-md shadow-indigo-600/20 hover:shadow-lg hover:shadow-indigo-600/30 transition-all flex items-center justify-center gap-2 group cursor-pointer"
+              className="w-full mt-2 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs sm:text-sm shadow-sm transition-all flex items-center justify-center gap-2 group cursor-pointer"
             >
               {isLoading ? (
                 <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -430,7 +430,7 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full mt-3 py-3 px-4 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-indigo-700 text-white font-semibold text-xs sm:text-sm shadow-md shadow-indigo-600/20 hover:shadow-lg hover:shadow-indigo-600/30 transition-all flex items-center justify-center gap-2 cursor-pointer"
+            className="w-full mt-3 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs sm:text-sm shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
           >
             {isLoading ? (
               <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />

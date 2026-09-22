@@ -38,6 +38,7 @@ import { roomVoice, facilitatorVoice } from '../../utils/speechSynthesis';
 import { useUserMedia } from '../../utils/useUserMedia';
 import { getNextUniqueFacilitatorPrompt, sessionQuestionTracker } from '../../utils/facilitatorQuestionEngine';
 import { SlotSelectionModal } from './SlotSelectionModal';
+import { getSocket } from '../../utils/socket';
 
 interface RealisticGDRoomProps {
   session: GDSession;
@@ -111,11 +112,22 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // Synchronize webcam live state to user's student state (only when currentUser is a student participant)
   useEffect(() => {
     if (isFaculty) return;
+    const userStudent = session.students.find((s) => s.isUser);
+    if (userStudent) {
+      try {
+        const socket = getSocket();
+        socket.emit('media_toggle', {
+          roomId: session.id,
+          studentId: userStudent.id,
+          cameraActive: isCameraOn,
+        });
+      } catch (e) {}
+    }
     setSession((prev) => ({
       ...prev,
       students: prev.students.map((s) => (s.isUser ? { ...s, cameraActive: isCameraOn } : s)),
     }));
-  }, [isCameraOn, isFaculty, setSession]);
+  }, [isCameraOn, isFaculty, setSession, session.id]);
 
   const handleLayoutChange = (newLayout: GDRoomLayoutType) => {
     setCurrentLayout(newLayout);
@@ -123,7 +135,46 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     if (onUpdateLayout) {
       onUpdateLayout(newLayout);
     }
+    try {
+      const socket = getSocket();
+      socket.emit('layout_change', { roomId: session.id, layout: newLayout });
+    } catch (e) {}
   };
+
+  // Socket listener for room layout updates and facilitator broadcasts from other clients
+  useEffect(() => {
+    const socket = getSocket();
+    const handleLayoutUpdated = (data: { layout: GDRoomLayoutType }) => {
+      if (data?.layout) {
+        setCurrentLayout(data.layout);
+        setSession((prev) => ({ ...prev, roomLayout: data.layout }));
+      }
+    };
+    const handleFacilitatorSpoken = (data: { speech: string; actionType?: string; phase?: any }) => {
+      if (data?.speech) {
+        setSession((prev) => ({
+          ...prev,
+          facilitatorSpeech: data.speech,
+          facilitatorAction: data.actionType || prev.facilitatorAction,
+          isFacilitatorSpeaking: true,
+          currentPhase: data.phase || prev.currentPhase,
+          silenceTimerSeconds: 0,
+        }));
+        facilitatorVoice.speak(data.speech, () => {
+          setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
+          setIsAiProcessing(false);
+        });
+      }
+    };
+
+    socket.on('layout_updated', handleLayoutUpdated);
+    socket.on('facilitator_spoken', handleFacilitatorSpoken);
+
+    return () => {
+      socket.off('layout_updated', handleLayoutUpdated);
+      socket.off('facilitator_spoken', handleFacilitatorSpoken);
+    };
+  }, []);
 
   const latestSpeakerTranscript = transcripts.slice().reverse().find((t) => !t.isFacilitator);
   const activeStudentUser = !isFaculty ? session.students.find((s) => s.isUser) : null;
@@ -342,6 +393,18 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
     setTranscripts((prev) => [...prev, entry]);
 
+    // Broadcast facilitator prompt to all clients in room
+    try {
+      const socket = getSocket();
+      socket.emit('facilitator_speak', {
+        roomId: session.id,
+        transcript: entry,
+        speech: text,
+        actionType,
+        phase,
+      });
+    } catch (e) {}
+
     facilitatorVoice.speak(text, () => {
       setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
       setIsAiProcessing(false);
@@ -425,6 +488,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       setTranscripts((prev) => [...prev, facultyEntry]);
       setIsAiProcessing(true);
 
+      try {
+        const socket = getSocket();
+        socket.emit('facilitator_speak', {
+          roomId: session.id,
+          transcript: facultyEntry,
+          speech: text,
+          actionType: 'moderation',
+        });
+      } catch (e) {}
+
       // Vocalize faculty intervention through facilitator voice engine
       facilitatorVoice.speak(text, () => {
         setIsAiProcessing(false);
@@ -464,6 +537,18 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
     setTranscripts((prev) => [...prev, newEntry]);
     studentTurnsSinceIntervention.current += 1;
+
+    // Broadcast user speech statement to the room
+    try {
+      const socket = getSocket();
+      socket.emit('user_speak', {
+        roomId: session.id,
+        transcript: newEntry,
+        studentId: userStudent.id,
+        text,
+        elapsedSeconds,
+      });
+    } catch (e) {}
 
     // If triggered without live mic (e.g. Quick Speaking Point clicked), vocalize in authentic Indian English so it is audible to everyone in the room
     if (!isListeningMic && !isFaculty) {
@@ -510,6 +595,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         currentSpeakerId: null,
         students: prev.students.map((s) => ({ ...s, isSpeaking: false })),
       }));
+
+      try {
+        const socket = getSocket();
+        socket.emit('speaker_yield', {
+          roomId: session.id,
+          studentId: userStudent.id,
+        });
+      } catch (e) {}
 
       // If auto simulate is enabled, trigger peer response
       if (autoSimulatePeers) {
@@ -649,10 +742,19 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   const handleRaiseHandToggle = () => {
     const userStudent = session.students.find((s) => s.isUser) || session.students[0];
+    if (userStudent) {
+      try {
+        const socket = getSocket();
+        socket.emit('hand_raise_toggle', {
+          roomId: session.id,
+          studentId: userStudent.id,
+        });
+      } catch (e) {}
+    }
     setSession((prev) => ({
       ...prev,
       students: prev.students.map((s) =>
-        s.id === userStudent.id ? { ...s, hasRaisedHand: !s.hasRaisedHand } : s
+        s.id === userStudent?.id ? { ...s, hasRaisedHand: !s.hasRaisedHand } : s
       ),
     }));
   };
@@ -671,34 +773,32 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     <div className="max-w-7xl mx-auto p-3 sm:p-6 space-y-5">
       
       {/* Session Title & Facilitator Broadcast Banner */}
-      <div className="bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-sm dark:shadow-xl relative overflow-hidden backdrop-blur-md transition-colors duration-200">
-        <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/10 dark:bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
-        
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 relative z-10">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs transition-colors duration-200">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 flex-wrap mb-1.5">
-              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30 flex items-center gap-1.5">
-                <Radio className="w-3 h-3 text-emerald-500 dark:text-emerald-400 animate-pulse" />
-                {session.slotName ? session.slotName.toUpperCase() : `LIVE GD SESSION #${session.id.toUpperCase()}`}
+              <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 flex items-center gap-1.5">
+                <Radio className="w-3 h-3 text-emerald-500 animate-pulse" />
+                {session.slotName ? session.slotName : `Session #${session.id}`}
               </span>
               {session.slotTiming && (
-                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-700/50 flex items-center gap-1">
+                <span className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 flex items-center gap-1">
                   <Clock className="w-3 h-3 text-amber-500" />
                   <span>{session.slotTiming}</span>
                 </span>
               )}
-              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+              <span className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                 Difficulty: {session.difficulty}
               </span>
-              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-teal-50 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-700/50">
-                {session.enrolledCount ?? session.students.length} / {session.maxCapacity || 15} Students Enrolled
+              <span className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                {session.enrolledCount ?? session.students.length} / {session.maxCapacity || 15} Students
               </span>
             </div>
             
-            <h1 className="text-xl sm:text-2xl font-heading font-bold text-slate-900 dark:text-white tracking-tight">
-              Topic: {session.topic}
+            <h1 className="text-lg sm:text-xl font-heading font-bold text-slate-900 dark:text-white tracking-tight">
+              {session.topic}
             </h1>
-            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 mt-1 max-w-3xl">
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-3xl line-clamp-1">
               {session.description}
             </p>
           </div>
@@ -709,40 +809,40 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               id="ai-probe-btn"
               onClick={() => requestAiIntervention('probing')}
               disabled={isAiProcessing}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-600/20 dark:hover:bg-indigo-600/30 text-indigo-700 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-500/40 transition-all shadow-xs active:scale-95 disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 transition-all cursor-pointer disabled:opacity-50"
             >
-              <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-              <span>AI Probing Question</span>
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Ask Probing Question</span>
             </button>
 
             <button
               id="ai-rules-btn"
               onClick={() => speakFacilitator("Discussion Rules: 1. Speak one person at a time. 2. Respect differing opinions. 3. Support arguments with examples. 4. Encourage participation. 5. Stay on topic. Let us maintain balanced dialogue.", 'explain_rules', 'rules')}
               disabled={isAiProcessing}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-all"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-all cursor-pointer"
             >
-              <HelpCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+              <HelpCircle className="w-3.5 h-3.5 text-slate-500" />
               <span>Explain Rules</span>
             </button>
 
             <button
               id="finish-session-btn"
               onClick={onFinishSession}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md shadow-emerald-700/20 dark:shadow-emerald-900/30 transition-all active:scale-95"
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-all shadow-xs cursor-pointer"
             >
-              <Award className="w-4 h-4" />
-              <span>Conclude & Generate Report</span>
+              <Award className="w-3.5 h-3.5" />
+              <span>Conclude & Report</span>
             </button>
           </div>
         </div>
 
         {/* Student Slot Selector: Browse & Select Slots on the same topic */}
         {availableSlots && availableSlots.length > 0 && (
-          <div className="mt-4 pt-3.5 border-t border-slate-200/80 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3 relative z-10">
+          <div className="mt-3.5 pt-3 border-t border-slate-100 dark:border-slate-800/80 flex flex-col md:flex-row md:items-center justify-between gap-2.5">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                <Calendar className="w-3.5 h-3.5 text-indigo-500" />
-                <span>Available Slots on This Topic:</span>
+              <span className="text-xs font-medium text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                <span>Available Slots:</span>
               </span>
               <div className="flex items-center gap-1.5 flex-wrap">
                 {availableSlots
@@ -768,34 +868,27 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                         disabled={isFull && !isCurrent}
                         className={`px-2.5 py-1 rounded-lg text-xs transition-all flex items-center gap-1.5 ${
                           isCurrent
-                            ? 'bg-indigo-600 text-white font-bold shadow-xs cursor-default'
+                            ? 'bg-indigo-600 text-white font-medium shadow-2xs cursor-default'
                             : isFull
-                            ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/60 opacity-80 cursor-not-allowed'
-                            : 'bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-indigo-300 cursor-pointer'
+                            ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/40 opacity-70 cursor-not-allowed'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-indigo-300 cursor-pointer'
                         }`}
                       >
-                        <span className="font-medium">{slot.slotName || slot.id}</span>
+                        <span>{slot.slotName || slot.id}</span>
                         {slot.slotTiming && (
                           <span className={`text-[10px] font-mono ${isCurrent ? 'text-indigo-100' : 'text-slate-400'}`}>
                             ({slot.slotTiming})
                           </span>
                         )}
-                        <span className={`text-[10px] font-mono px-1 rounded font-bold ${
+                        <span className={`text-[10px] font-mono px-1 rounded ${
                           isCurrent 
                             ? 'bg-white/20 text-white' 
                             : isFull 
-                            ? 'bg-rose-200/80 dark:bg-rose-900 text-rose-800 dark:text-rose-200' 
-                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                            ? 'bg-rose-100 dark:bg-rose-900 text-rose-700 dark:text-rose-300' 
+                            : 'bg-slate-200/80 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
                         }`}>
                           {enrolled}/{maxCap}
                         </span>
-                        {isCurrent ? (
-                          <span className="text-[10px] uppercase font-bold bg-white/25 px-1 rounded">Joined</span>
-                        ) : isFull ? (
-                          <span className="text-[9px] uppercase font-bold bg-rose-600 text-white px-1 rounded">Full</span>
-                        ) : (
-                          <span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-semibold">{seatsLeft} open</span>
-                        )}
                       </button>
                     );
                 })}
@@ -807,24 +900,24 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    if (window.confirm('Reset all demo slots back to default enrollment counts (Slot 2: 8/15 open, Slot 3: 11/15 open)?')) {
+                    if (window.confirm('Reset all demo slots back to default enrollment counts?')) {
                       onResetSlots();
                     }
                   }}
-                  className="text-xs text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1 cursor-pointer transition-colors"
+                  className="text-xs text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 flex items-center gap-1 cursor-pointer transition-colors"
                   title="Reset slots to default demo counts"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" />
+                  <RefreshCw className="w-3 h-3" />
                   <span>Reset Demo Slots</span>
                 </button>
               )}
               <button
                 type="button"
                 onClick={() => setIsSlotModalOpen(true)}
-                className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
               >
-                <span>Browse All Slots ({availableSlots.length})</span>
-                <ArrowRight className="w-3.5 h-3.5" />
+                <span>All Slots ({availableSlots.length})</span>
+                <ArrowRight className="w-3 h-3" />
               </button>
             </div>
           </div>
@@ -832,9 +925,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
         {/* Interruption Warning Alert banner */}
         {interruptionWarning && (
-          <div className="mt-3.5 bg-amber-50 dark:bg-amber-950/80 border border-amber-300 dark:border-amber-600/60 text-amber-800 dark:text-amber-200 px-3.5 py-2 rounded-xl text-xs flex items-center gap-2.5 animate-bounce">
-            <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
-            <span className="font-medium">{interruptionWarning}</span>
+          <div className="mt-3 bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 px-3 py-1.5 rounded-xl text-xs flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" />
+            <span>{interruptionWarning}</span>
           </div>
         )}
       </div>
@@ -847,106 +940,93 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           <div className="bg-white/95 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 rounded-3xl p-4 sm:p-6 shadow-md dark:shadow-2xl relative min-h-[580px] flex flex-col justify-between overflow-hidden transition-colors duration-200">
             
             {/* Ambient Lighting & Stage Grid */}
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(99,102,241,0.05),transparent_70%)] dark:bg-[radial-gradient(circle_at_50%_45%,rgba(99,102,241,0.08),transparent_70%)] pointer-events-none" />
-            <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-indigo-100/30 dark:from-indigo-950/20 to-transparent pointer-events-none" />
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(99,102,241,0.04),transparent_70%)] dark:bg-[radial-gradient(circle_at_50%_45%,rgba(99,102,241,0.06),transparent_70%)] pointer-events-none" />
 
             {/* Room Visibility & Layout Selector Toolbar */}
-            <div className="relative z-10 flex flex-wrap items-center justify-between gap-2 pb-3 mb-2 border-b border-slate-200 dark:border-slate-800">
+            <div className="relative z-10 flex flex-wrap items-center justify-between gap-2 pb-2.5 mb-2 border-b border-slate-200/80 dark:border-slate-800">
               <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-indigo-50 dark:bg-indigo-950/70 border border-indigo-200 dark:border-indigo-800/80 text-xs font-semibold text-indigo-700 dark:text-indigo-300">
-                  <Eye className="w-3.5 h-3.5" />
-                  <span>Room Visibility:</span>
-                </div>
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                  <Eye className="w-3.5 h-3.5 text-indigo-500" />
+                  <span>Room Layout:</span>
+                </span>
                 {currentUser?.role === 'faculty' && (
-                  <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                  <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
                     Faculty Control
                   </span>
                 )}
               </div>
 
-              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-950 p-1 rounded-xl border border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200/80 dark:border-slate-700/80">
                 <button
                   type="button"
                   onClick={() => handleLayoutChange('round_table')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                     currentLayout === 'round_table'
-                      ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-xs border border-slate-200 dark:border-slate-700 font-semibold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
-                  title="1. Round Table: Circular conference table with all participants seated around"
+                  title="Round Table: Circular discussion table"
                 >
                   <CircleDot className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">1. Round Table</span>
-                  <span className="sm:hidden">Round</span>
+                  <span>Round Table</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleLayoutChange('speaker_center')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                     currentLayout === 'speaker_center'
-                      ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-xs border border-slate-200 dark:border-slate-700 font-semibold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
-                  title="2. Speaker in Middle: The person speaking is in the middle of the round table"
+                  title="Speaker Spotlight: Focus spotlight on active speaker"
                 >
                   <Target className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">2. Speaker in Middle</span>
-                  <span className="sm:hidden">Speaker Center</span>
+                  <span>Speaker Spotlight</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleLayoutChange('classroom')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                     currentLayout === 'classroom'
-                      ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-xs border border-slate-200 dark:border-slate-700 font-semibold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
-                  title="3. Classroom Presentation: The person speaking is at the front like a classroom presentation"
+                  title="Classroom: Front stage and audience desks"
                 >
                   <Presentation className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">3. Classroom Presentation</span>
-                  <span className="sm:hidden">Classroom</span>
+                  <span>Classroom</span>
                 </button>
               </div>
             </div>
 
-            {/* Top Stage: AI Facilitator Station (At the head of the discussion table) */}
-            <div className="relative z-10 flex flex-col items-center justify-center pt-1 mb-2">
-              <div className="relative flex items-center justify-center">
-                {session.isFacilitatorSpeaking && (
-                  <div className="absolute w-24 h-24 rounded-full bg-indigo-500/30 animate-pulse-ring pointer-events-none" />
-                )}
-                <div className={`w-16 h-16 sm:w-18 sm:h-18 rounded-2xl flex items-center justify-center shadow-md dark:shadow-xl transition-all duration-300 ${
+            {/* Top Stage: AI Facilitator Station */}
+            <div className="relative z-10 flex items-center justify-between gap-3 py-2 px-3 sm:px-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-800 mb-3">
+              <div className="flex items-center gap-2.5 shrink-0">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
                   session.isFacilitatorSpeaking 
-                    ? 'bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-500 ring-4 ring-indigo-400/50 shadow-indigo-500/40 scale-105' 
-                    : 'bg-slate-100 dark:bg-slate-800 border-2 border-indigo-300 dark:border-indigo-500/40 shadow-slate-200 dark:shadow-slate-950'
+                    ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-400/40 animate-speaking' 
+                    : 'bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 border border-indigo-200/80 dark:border-indigo-800'
                 }`}>
-                  <Sparkles className={`w-8 h-8 ${session.isFacilitatorSpeaking ? 'text-white animate-spin' : 'text-indigo-600 dark:text-indigo-400'}`} />
+                  <Sparkles className="w-4 h-4" />
                 </div>
-
-                <span className="absolute -bottom-2 bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-200 border border-indigo-300 dark:border-indigo-600/70 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs flex items-center gap-1">
-                  <span>AI MODERATOR</span>
-                  <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-mono font-semibold">• 🇮🇳 Indian Accent (en-IN)</span>
-                </span>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200">AI Facilitator</span>
+                    {session.isFacilitatorSpeaking ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        Speaking
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-400 font-normal hidden sm:inline">Moderating</span>
+                    )}
+                  </div>
+                </div>
               </div>
-
-              {/* AI Facilitator Speech Bubble */}
-              <div className="mt-3.5 max-w-xl text-center bg-indigo-50/90 dark:bg-slate-950/80 border border-indigo-200 dark:border-indigo-500/30 rounded-2xl px-4 py-2.5 shadow-sm dark:shadow-lg backdrop-blur-sm">
-                <div className="flex items-center justify-center gap-2 text-xs text-indigo-700 dark:text-indigo-300 font-semibold mb-1">
-                  {session.isFacilitatorSpeaking ? (
-                    <div className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-                      <span>Speaking Live</span>
-                    </div>
-                  ) : (
-                    <span>Facilitator Status: Observing & Managing Turns</span>
-                  )}
-                </div>
-                <p className="text-xs sm:text-sm text-slate-800 dark:text-slate-200 font-medium leading-relaxed italic">
-                  "{session.facilitatorSpeech}"
-                </p>
+              <div className="flex-1 text-xs text-slate-600 dark:text-slate-300 italic truncate sm:overflow-visible sm:whitespace-normal">
+                "{session.facilitatorSpeech}"
               </div>
             </div>
 
@@ -954,183 +1034,136 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
             {/* 1. ROUND TABLE LAYOUT */}
             {currentLayout === 'round_table' && (
-              <div className="relative z-10 my-4 flex-1 flex items-center justify-center overflow-x-auto py-16 sm:py-20 px-3 sm:px-6 scrollbar-thin">
-                <div className={`h-64 sm:h-72 rounded-[48px] sm:rounded-[64px] bg-gradient-to-b from-slate-100 via-slate-200 to-slate-300 dark:from-slate-800/90 dark:via-slate-850 dark:to-slate-900 border-4 border-slate-300 dark:border-slate-700/80 shadow-lg dark:shadow-2xl relative flex items-center justify-center p-4 transition-all duration-300 ${
-                  session.students.length > 8
-                    ? 'min-w-[760px] sm:min-w-[960px] w-full max-w-5xl'
-                    : 'w-full max-w-2xl'
-                }`}>
-                  
-                  {/* Table Surface Inset */}
-                  <div className="w-full h-full rounded-[36px] sm:rounded-[52px] bg-white/80 dark:bg-slate-950/60 border border-slate-300/80 dark:border-slate-700/50 flex flex-col items-center justify-center p-3 relative overflow-hidden shadow-inner">
-                    
-                    {/* Center Topic on Table */}
-                    <div className="text-center p-2 z-10">
-                      <span className="text-[10px] uppercase font-mono tracking-widest text-slate-500 dark:text-slate-400 font-semibold">
-                        Round Table Conference ({session.students.length} Participants)
-                      </span>
-                      <p className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5 line-clamp-2 max-w-md">
-                        {session.topic}
-                      </p>
-                      
-                      {/* Live Turn & Flow indicator */}
-                      <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-900/80 border border-slate-300 dark:border-slate-700 text-[11px] text-slate-700 dark:text-slate-300">
-                        <Radio className="w-3 h-3 text-emerald-500 dark:text-emerald-400 animate-pulse" />
-                        <span>
-                          {session.currentSpeakerId 
-                            ? `Floor: ${session.students.find(s => s.id === session.currentSpeakerId)?.name}` 
-                            : 'Floor: Open Discussion'}
-                        </span>
-                      </div>
-                    </div>
+              <div className="relative z-10 my-2 flex-1 flex flex-col items-center justify-center gap-3 w-full">
+                {/* Top Row of Participants */}
+                <div className="w-full flex items-center justify-center gap-2 sm:gap-3 flex-wrap py-1">
+                  {session.students.slice(0, Math.ceil(session.students.length / 2)).map((student) => (
+                    <StudentPodCard 
+                      key={student.id} 
+                      student={student} 
+                      isCurrentSpeaker={session.currentSpeakerId === student.id}
+                      position="top"
+                      isUserCameraOn={isCameraOn}
+                      videoStream={videoStream}
+                      audioLevel={audioLevel}
+                      isListeningMic={isListeningMic}
+                      isFaculty={isFaculty}
+                    />
+                  ))}
+                </div>
 
-                    {/* Clean decorative table ring without overlapping text collisions */}
-                    <div className="absolute inset-8 rounded-full border border-indigo-200/50 dark:border-indigo-900/40 pointer-events-none" />
+                {/* Center Table Surface */}
+                <div className="w-full max-w-xl py-3 px-6 rounded-2xl bg-slate-100/90 dark:bg-slate-850/80 border border-slate-200/90 dark:border-slate-800 shadow-inner flex flex-col items-center justify-center text-center">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-[10px] uppercase font-mono font-semibold tracking-wider text-slate-500 dark:text-slate-400">
+                      Conference Table • {session.students.length} Participants
+                    </span>
                   </div>
-
-                  {/* Seating Pods: TOP ROW */}
-                  <div className="absolute -top-12 sm:-top-14 inset-x-2 sm:inset-x-6 flex justify-between gap-1 sm:gap-2">
-                    {session.students.slice(0, Math.ceil(session.students.length / 2)).map((student) => (
-                      <StudentPodCard 
-                        key={student.id} 
-                        student={student} 
-                        isCurrentSpeaker={session.currentSpeakerId === student.id}
-                        position="top"
-                        isUserCameraOn={isCameraOn}
-                        videoStream={videoStream}
-                        audioLevel={audioLevel}
-                        isListeningMic={isListeningMic}
-                        isFaculty={isFaculty}
-                      />
-                    ))}
+                  <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-200 line-clamp-1 max-w-md">
+                    {session.topic}
+                  </p>
+                  <div className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] text-slate-700 dark:text-slate-300">
+                    <Radio className="w-3 h-3 text-emerald-500 animate-pulse" />
+                    <span>
+                      {session.currentSpeakerId 
+                        ? `Floor: ${session.students.find(s => s.id === session.currentSpeakerId)?.name}` 
+                        : 'Floor: Open Discussion'}
+                    </span>
                   </div>
+                </div>
 
-                  {/* Seating Pods: BOTTOM ROW */}
-                  <div className="absolute -bottom-12 sm:-bottom-14 inset-x-2 sm:inset-x-6 flex justify-between gap-1 sm:gap-2">
-                    {session.students.slice(Math.ceil(session.students.length / 2)).map((student) => (
-                      <StudentPodCard 
-                        key={student.id} 
-                        student={student} 
-                        isCurrentSpeaker={session.currentSpeakerId === student.id}
-                        position="bottom"
-                        isUserCameraOn={isCameraOn}
-                        videoStream={videoStream}
-                        audioLevel={audioLevel}
-                        isListeningMic={isListeningMic}
-                        isFaculty={isFaculty}
-                      />
-                    ))}
-                  </div>
-
+                {/* Bottom Row of Participants */}
+                <div className="w-full flex items-center justify-center gap-2 sm:gap-3 flex-wrap py-1">
+                  {session.students.slice(Math.ceil(session.students.length / 2)).map((student) => (
+                    <StudentPodCard 
+                      key={student.id} 
+                      student={student} 
+                      isCurrentSpeaker={session.currentSpeakerId === student.id}
+                      position="bottom"
+                      isUserCameraOn={isCameraOn}
+                      videoStream={videoStream}
+                      audioLevel={audioLevel}
+                      isListeningMic={isListeningMic}
+                      isFaculty={isFaculty}
+                    />
+                  ))}
                 </div>
               </div>
             )}
 
             {/* 2. SPEAKER IN MIDDLE OF ROUND TABLE LAYOUT */}
             {currentLayout === 'speaker_center' && (
-              <div className="relative z-10 my-4 flex-1 flex items-center justify-center overflow-x-auto py-16 sm:py-20 px-3 sm:px-6 scrollbar-thin">
-                <div className={`min-h-[320px] sm:min-h-[360px] rounded-[56px] sm:rounded-[72px] bg-gradient-to-b from-slate-100 via-slate-200 to-slate-300 dark:from-slate-800/90 dark:via-slate-850 dark:to-slate-900 border-4 border-slate-300 dark:border-slate-700/80 shadow-xl dark:shadow-2xl relative flex items-center justify-center p-4 transition-all duration-300 ${
-                  session.students.length > 8 ? 'min-w-[780px] sm:min-w-[980px] w-full max-w-5xl' : 'w-full max-w-2xl'
-                }`}>
-                  
-                  {/* Table Surface with Inset Ambient Ring */}
-                  <div className="w-full h-full rounded-[44px] sm:rounded-[60px] bg-white/85 dark:bg-slate-950/70 border border-slate-300/80 dark:border-slate-700/50 flex flex-col items-center justify-center p-4 relative overflow-hidden shadow-inner py-8">
-                    
-                    {/* Concentric round table perimeter accent */}
-                    <div className="absolute inset-4 rounded-full border border-dashed border-indigo-300/40 dark:border-indigo-600/30 pointer-events-none" />
+              <div className="relative z-10 my-2 flex-1 flex flex-col items-center justify-center gap-3 w-full">
+                {/* Top Row of Participants */}
+                <div className="w-full flex items-center justify-center gap-2 sm:gap-3 flex-wrap py-1">
+                  {session.students.slice(0, Math.ceil(session.students.length / 2)).map((student) => (
+                    <StudentPodCard 
+                      key={student.id} 
+                      student={student} 
+                      isCurrentSpeaker={student.id === currentSpeakerStudent?.id}
+                      position="top"
+                      isUserCameraOn={isCameraOn}
+                      videoStream={videoStream}
+                      audioLevel={audioLevel}
+                      isListeningMic={isListeningMic}
+                      isFaculty={isFaculty}
+                    />
+                  ))}
+                </div>
 
-                    {/* CENTER STAGE: The Person Speaking in Middle of Round Table */}
-                    <div className="relative z-20 flex flex-col items-center max-w-md text-center p-3 sm:p-4 rounded-2xl bg-white/95 dark:bg-slate-900/95 border-2 border-indigo-500/60 dark:border-indigo-400/60 shadow-2xl backdrop-blur-md transition-all duration-300">
-                      
-                      {/* Animated Soundwave Aura for Active Speaker */}
-                      <div className="relative">
-                        {isSpeakingLive && (
-                          <div className="absolute -inset-3 rounded-full bg-indigo-500/25 animate-ping pointer-events-none" />
-                        )}
-                        <div className="w-18 h-18 sm:w-22 sm:h-22 rounded-2xl overflow-hidden border-3 border-indigo-500 dark:border-indigo-400 ring-4 ring-indigo-500/30 shadow-xl relative bg-slate-900">
-                          <StudentVideoFrame
-                            student={currentSpeakerStudent || session.students[0]}
-                            isCurrentSpeaker={isSpeakingLive}
-                            isUserCameraOn={isCameraOn}
-                            videoStream={videoStream}
-                            audioLevel={audioLevel}
-                            isListeningMic={isListeningMic}
-                            size="large"
-                            isFaculty={isFaculty}
-                          />
-                        </div>
-
-                        <span className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md border border-indigo-300/40 z-20">
-                          🎙️ IN CENTER • SPEAKING
-                        </span>
-                      </div>
-
-                      {/* Speaker Details */}
-                      <div className="mt-3">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate max-w-[200px]">
-                            {currentSpeakerStudent?.name}
-                          </h4>
-                          <span className="px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 text-[10px] font-mono font-bold">
-                            Seat {currentSpeakerStudent?.seatNumber}
-                          </span>
-                        </div>
-                        
-                        <div className="flex items-center justify-center gap-2 mt-1 text-[11px] text-slate-500 dark:text-slate-400 font-medium">
-                          <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
-                            <Radio className="w-3 h-3 animate-pulse" />
-                            {isSpeakingLive ? 'Actively Addressing Group' : 'Floor Spotlight'}
-                          </span>
-                          <span>•</span>
-                          <span>{currentSpeakerStudent?.speakingTurns || 0} turns</span>
-                        </div>
-
-                        {/* Speech Quote from the center */}
-                        <div className="mt-2 px-3 py-1.5 rounded-xl bg-slate-100/90 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 max-w-sm">
-                          <p className="text-[11px] text-slate-700 dark:text-slate-300 font-medium italic line-clamp-2">
-                            "{latestSpeakerTranscript?.text || (currentSpeakerStudent?.isSpeaking ? 'Addressing all peers around the round table...' : 'Leading this turn in the center of the discussion.')}"
-                          </p>
-                        </div>
-                      </div>
-
+                {/* Spotlight Active Speaker */}
+                <div className="w-full max-w-md p-3 sm:p-4 rounded-2xl bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 shadow-sm flex items-center gap-3.5">
+                  <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 shrink-0 bg-slate-900">
+                    <StudentVideoFrame
+                      student={currentSpeakerStudent || session.students[0]}
+                      isCurrentSpeaker={isSpeakingLive}
+                      isUserCameraOn={isCameraOn}
+                      videoStream={videoStream}
+                      audioLevel={audioLevel}
+                      isListeningMic={isListeningMic}
+                      size="large"
+                      isFaculty={isFaculty}
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                        {currentSpeakerStudent?.name}
+                      </span>
+                      <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold">
+                        Seat {currentSpeakerStudent?.seatNumber}
+                      </span>
                     </div>
-
+                    <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500">
+                      <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
+                        <Radio className="w-3 h-3 animate-pulse" />
+                        {isSpeakingLive ? 'Speaking Live' : 'Spotlight'}
+                      </span>
+                      <span>•</span>
+                      <span>{currentSpeakerStudent?.speakingTurns || 0} turns</span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 dark:text-slate-300 italic line-clamp-2 mt-1">
+                      "{latestSpeakerTranscript?.text || (currentSpeakerStudent?.isSpeaking ? 'Addressing all participants...' : 'Leading this turn in the discussion.')}"
+                    </p>
                   </div>
+                </div>
 
-                  {/* Outer Ring Seating: TOP ROW */}
-                  <div className="absolute -top-12 sm:-top-14 inset-x-2 sm:inset-x-6 flex justify-between gap-1 sm:gap-2">
-                    {session.students.slice(0, Math.ceil(session.students.length / 2)).map((student) => (
-                      <StudentPodCard 
-                        key={student.id} 
-                        student={student} 
-                        isCurrentSpeaker={student.id === currentSpeakerStudent?.id}
-                        position="top"
-                        isUserCameraOn={isCameraOn}
-                        videoStream={videoStream}
-                        audioLevel={audioLevel}
-                        isListeningMic={isListeningMic}
-                        isFaculty={isFaculty}
-                      />
-                    ))}
-                  </div>
-
-                  {/* Outer Ring Seating: BOTTOM ROW */}
-                  <div className="absolute -bottom-12 sm:-bottom-14 inset-x-2 sm:inset-x-6 flex justify-between gap-1 sm:gap-2">
-                    {session.students.slice(Math.ceil(session.students.length / 2)).map((student) => (
-                      <StudentPodCard 
-                        key={student.id} 
-                        student={student} 
-                        isCurrentSpeaker={student.id === currentSpeakerStudent?.id}
-                        position="bottom"
-                        isUserCameraOn={isCameraOn}
-                        videoStream={videoStream}
-                        audioLevel={audioLevel}
-                        isListeningMic={isListeningMic}
-                        isFaculty={isFaculty}
-                      />
-                    ))}
-                  </div>
-
+                {/* Bottom Row of Participants */}
+                <div className="w-full flex items-center justify-center gap-2 sm:gap-3 flex-wrap py-1">
+                  {session.students.slice(Math.ceil(session.students.length / 2)).map((student) => (
+                    <StudentPodCard 
+                      key={student.id} 
+                      student={student} 
+                      isCurrentSpeaker={student.id === currentSpeakerStudent?.id}
+                      position="bottom"
+                      isUserCameraOn={isCameraOn}
+                      videoStream={videoStream}
+                      audioLevel={audioLevel}
+                      isListeningMic={isListeningMic}
+                      isFaculty={isFaculty}
+                    />
+                  ))}
                 </div>
               </div>
             )}
@@ -1140,7 +1173,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               <div className="relative z-10 my-3 flex-1 flex flex-col items-center justify-center w-full space-y-4">
                 
                 {/* Front of Classroom: Presentation Board & Podium */}
-                <div className="w-full max-w-4xl bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 border-2 border-indigo-500/40 rounded-2xl p-3 sm:p-4 shadow-xl text-white relative overflow-hidden">
+                <div className="w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-lg text-white relative overflow-hidden">
                   
                   <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
 
@@ -1192,7 +1225,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                           isFaculty={isFaculty}
                         />
                       </div>
-                      <span className="absolute -bottom-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white text-[9px] font-bold px-2 py-0.5 rounded-full shadow border border-indigo-300/40 whitespace-nowrap z-20">
+                      <span className="absolute -bottom-2 bg-indigo-600 text-white text-[9px] font-bold px-2 py-0.5 rounded-full shadow-xs border border-indigo-400/40 whitespace-nowrap z-20">
                         🎙️ PRESENTER AT PODIUM
                       </span>
                     </div>
@@ -1530,7 +1563,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               {/* Live Voice Broadcast Console (No Send Option - Direct Voice Broadcast) */}
               <div className="w-full">
                 {isListeningMic ? (
-                  <div className="w-full rounded-2xl bg-gradient-to-r from-emerald-950/80 via-slate-900 to-indigo-950/80 border-2 border-emerald-500/80 p-3 sm:p-3.5 shadow-lg shadow-emerald-950/40 transition-all animate-fadeIn">
+                  <div className="w-full rounded-2xl bg-emerald-950/40 border border-emerald-500/40 p-3 sm:p-3.5 shadow-sm transition-all animate-fadeIn">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <span className="relative flex h-2.5 w-2.5">
@@ -1670,18 +1703,18 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
         {/* RIGHT: Live Discussion Stream & Multi-Tab Hub (Right 4-5 cols) */}
         <div className="lg:col-span-4 space-y-4">
-          <div className="bg-white/95 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 rounded-3xl p-4 sm:p-5 shadow-md dark:shadow-2xl flex flex-col h-[580px] transition-colors duration-200">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col h-[580px] transition-colors duration-200">
             
             {/* Sidebar Tabs */}
-            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3 mb-3">
-              <div className="flex items-center gap-1">
+            <div className="flex items-center justify-between border-b border-slate-200/80 dark:border-slate-800 pb-2.5 mb-3">
+              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200/80 dark:border-slate-700/80">
                 <button
                   id="tab-transcript-sub"
                   onClick={() => setActiveTab('transcript')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
                     activeTab === 'transcript'
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
                   Transcript ({transcripts.length})
@@ -1689,10 +1722,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 <button
                   id="tab-rules-sub"
                   onClick={() => setActiveTab('rules')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
                     activeTab === 'rules'
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
                   Rules
@@ -1700,10 +1733,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 <button
                   id="tab-analytics-sub"
                   onClick={() => setActiveTab('analytics')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
                     activeTab === 'analytics'
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
                   Turn Meter
@@ -1711,10 +1744,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 <button
                   id="tab-breakout-sub"
                   onClick={() => setActiveTab('breakout')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
                     activeTab === 'breakout'
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
                   Rooms
@@ -1724,32 +1757,32 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
             {/* TAB 1: Live Timestamped Transcript Stream */}
             {activeTab === 'transcript' && (
-              <div className="flex-1 overflow-y-auto pr-1 space-y-3">
+              <div className="flex-1 overflow-y-auto pr-1 space-y-2.5">
                 {transcripts.map((entry) => (
                   <div
                     key={entry.id}
-                    className={`p-3 rounded-xl border text-xs leading-relaxed transition-all ${
+                    className={`p-2.5 rounded-xl border text-xs leading-relaxed transition-all ${
                       entry.isFacilitator
-                        ? 'bg-indigo-50/80 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800/50 text-indigo-950 dark:text-indigo-100'
+                        ? 'bg-slate-50 dark:bg-slate-850/80 border-l-2 border-l-indigo-500 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100'
                         : entry.speakerId === 's1'
-                        ? 'bg-blue-50/80 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50 text-blue-950 dark:text-slate-100'
-                        : 'bg-slate-50 dark:bg-slate-950/60 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-300'
+                        ? 'bg-indigo-50/50 dark:bg-indigo-950/30 border-l-2 border-l-indigo-400 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100'
+                        : 'bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-300'
                     }`}
                   >
                     <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 mb-1 font-mono-code">
                       <div className="flex items-center gap-1.5">
-                        <span className={`font-bold ${entry.isFacilitator ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-800 dark:text-slate-200'}`}>
+                        <span className={`font-semibold ${entry.isFacilitator ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-800 dark:text-slate-200'}`}>
                           {entry.speakerName}
                         </span>
                         {entry.seatNumber && (
-                          <span className="px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 font-semibold">
+                          <span className="px-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[9px] font-medium">
                             Seat {entry.seatNumber}
                           </span>
                         )}
                       </div>
                       <span className="text-slate-400 dark:text-slate-500">{entry.timestamp}</span>
                     </div>
-                    <p className="font-normal">{entry.text}</p>
+                    <p className="font-normal text-slate-700 dark:text-slate-300">{entry.text}</p>
                   </div>
                 ))}
                 <div ref={transcriptEndRef} />
@@ -2037,7 +2070,7 @@ export const StudentVideoFrame: React.FC<{
 const StudentPodCard: React.FC<{
   student: Student;
   isCurrentSpeaker: boolean;
-  position: 'top' | 'bottom';
+  position?: 'top' | 'bottom';
   isUserCameraOn?: boolean;
   videoStream?: MediaStream | null;
   audioLevel?: number;
@@ -2046,7 +2079,6 @@ const StudentPodCard: React.FC<{
 }> = ({
   student,
   isCurrentSpeaker,
-  position,
   isUserCameraOn = false,
   videoStream = null,
   audioLevel = 0,
@@ -2056,60 +2088,46 @@ const StudentPodCard: React.FC<{
   const isUser = !isFaculty && !!student.isUser;
 
   return (
-    <div className={`flex flex-col items-center group transition-all duration-300 ${
-      isCurrentSpeaker ? 'scale-110 z-20' : 'z-10'
+    <div className={`flex flex-col items-center transition-all duration-200 ${
+      isCurrentSpeaker ? 'scale-105 z-10' : 'opacity-90 hover:opacity-100'
     }`}>
-      
-      {/* 1. Realistic Numbered Seat Placard (Pinned cleanly at top, in natural flex flow) */}
-      <div className={`mb-1 whitespace-nowrap px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] font-bold font-mono shadow-xs uppercase tracking-wider transition-colors ${
-        isUser 
-          ? 'bg-indigo-600 text-white border border-indigo-400 shadow-indigo-500/20 ring-1 ring-indigo-400' 
-          : isCurrentSpeaker
-          ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700'
-          : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700'
+      {/* Student Video / Avatar Frame */}
+      <div className={`w-14 h-14 sm:w-16 sm:h-16 rounded-xl overflow-hidden border transition-all relative bg-slate-900 ${
+        isCurrentSpeaker 
+          ? 'border-emerald-500 ring-2 ring-emerald-500/40 shadow-sm animate-speaking' 
+          : isUser 
+          ? 'border-indigo-500 ring-1 ring-indigo-500/30' 
+          : 'border-slate-200 dark:border-slate-700/80 shadow-2xs'
       }`}>
-        Seat {student.seatNumber}
+        <StudentVideoFrame
+          student={student}
+          isCurrentSpeaker={isCurrentSpeaker}
+          isUserCameraOn={isUserCameraOn}
+          videoStream={videoStream}
+          audioLevel={audioLevel}
+          isListeningMic={isListeningMic}
+          size="normal"
+          isFaculty={isFaculty}
+        />
       </div>
 
-      {/* 2. Student Video / Avatar Bubble */}
-      <div className="relative">
-        {/* Speaking Voice Waves Aura */}
-        {isCurrentSpeaker && (
-          <div className="absolute -inset-1.5 rounded-2xl bg-indigo-500/40 animate-pulse pointer-events-none" />
-        )}
-
-        <div className={`w-11 h-11 sm:w-13 sm:h-13 rounded-2xl overflow-hidden border-2 transition-all shadow-md relative bg-slate-900 ${
-          isCurrentSpeaker 
-            ? 'border-indigo-500 dark:border-indigo-400 ring-2 ring-indigo-500/50 shadow-indigo-500/30' 
-            : isUser 
-            ? 'border-blue-500 dark:border-blue-500/80 ring-2 ring-blue-500/30' 
-            : 'border-slate-300 dark:border-slate-700'
-        }`}>
-          <StudentVideoFrame
-            student={student}
-            isCurrentSpeaker={isCurrentSpeaker}
-            isUserCameraOn={isUserCameraOn}
-            videoStream={videoStream}
-            audioLevel={audioLevel}
-            isListeningMic={isListeningMic}
-            size="normal"
-            isFaculty={isFaculty}
-          />
+      {/* Student Name & Seat */}
+      <div className="text-center mt-1 max-w-[70px] sm:max-w-[85px]">
+        <div className="flex items-center justify-center gap-1">
+          <span className={`text-[9px] font-mono px-1 rounded ${
+            isUser 
+              ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold' 
+              : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+          }`}>
+            S{student.seatNumber}
+          </span>
+          <p className={`text-[11px] font-medium truncate leading-tight ${
+            isUser ? 'text-indigo-600 dark:text-indigo-400 font-semibold' : 'text-slate-700 dark:text-slate-300'
+          }`}>
+            {student.name.split(' ')[0]}
+          </p>
         </div>
       </div>
-
-      {/* 3. Student Name & Turns (Positioned cleanly below avatar with zero overlap) */}
-      <div className="text-center mt-1.5 max-w-[68px] sm:max-w-[85px]">
-        <p className={`text-[11px] sm:text-xs font-semibold truncate leading-tight ${
-          isUser ? 'text-indigo-700 dark:text-indigo-300 font-bold' : 'text-slate-800 dark:text-slate-200'
-        }`}>
-          {student.name.split(' ')[0]}
-        </p>
-        <span className="text-[9px] text-slate-500 dark:text-slate-400 font-mono block mt-0.5">
-          {student.speakingTurns} turns
-        </span>
-      </div>
-
     </div>
   );
 };

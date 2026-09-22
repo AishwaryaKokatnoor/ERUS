@@ -23,6 +23,7 @@ import {
 import { facilitatorVoice } from './utils/speechSynthesis';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { getNextUniqueFacilitatorPrompt, sessionQuestionTracker } from './utils/facilitatorQuestionEngine';
+import { getSocket } from './utils/socket';
 
 function GDAppContent() {
   // Authentication State
@@ -35,13 +36,13 @@ function GDAppContent() {
     }
   });
 
-  const STORAGE_KEY = 'erus_available_slots_v4';
+  const STORAGE_KEY = 'erus_available_slots_v5';
 
-  // Safely load and validate slots, purging stale legacy storage where all slots were full
+  // Safely load and validate slots, purging stale legacy storage
   const loadInitialSlots = (): GDSession[] => {
     try {
       // Purge older legacy cache keys
-      ['erus_available_slots', 'erus_available_slots_v1', 'erus_available_slots_v2', 'erus_available_slots_v3'].forEach((k) => {
+      ['erus_available_slots', 'erus_available_slots_v1', 'erus_available_slots_v2', 'erus_available_slots_v3', 'erus_available_slots_v4'].forEach((k) => {
         localStorage.removeItem(k);
       });
 
@@ -114,6 +115,117 @@ function GDAppContent() {
     setSession(INITIAL_SLOTS[0]);
   };
 
+  // Socket.IO Real-Time Room & Users Synchronization
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const socket = getSocket();
+    const currentRoomId = session.id || 'slot-morning-1';
+
+    const joinCurrentRoom = () => {
+      socket.emit('join_room', {
+        roomId: currentRoomId,
+        user: {
+          id: currentUser.id,
+          name: currentUser.name,
+          college: currentUser.college,
+          course: currentUser.course,
+          batch: currentUser.batch,
+          role: currentUser.role,
+        },
+      });
+    };
+
+    if (socket.connected) {
+      joinCurrentRoom();
+    } else {
+      socket.connect();
+    }
+
+    socket.on('connect', joinCurrentRoom);
+
+    // Synchronize real-time participants (NO DUMMY USERS)
+    const handleRoomUsers = (participants: any[]) => {
+      if (!Array.isArray(participants)) return;
+      console.log(`[Socket.IO Room] Live users in room "${currentRoomId}":`, participants);
+
+      const realStudents: Student[] = participants
+        .filter((p) => p.role !== 'faculty')
+        .map((p, idx) => {
+          const isUser = currentUser.role !== 'faculty' && (
+            (currentUser.id && p.userId === currentUser.id) ||
+            (socket.id && p.socketId === socket.id) ||
+            p.name === currentUser.name
+          );
+
+          return {
+            id: p.userId || p.socketId,
+            name: p.name,
+            seatNumber: p.seatNumber || (idx + 1),
+            college: p.college || 'Engineering Institute',
+            course: p.course || 'B.Tech',
+            batch: p.batch || '2022-2026',
+            avatar: p.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(p.name)}`,
+            isUser,
+            micActive: !!p.micActive,
+            isSpeaking: !!p.isSpeaking,
+            hasRaisedHand: !!p.hasRaisedHand,
+            cameraActive: !!p.cameraActive,
+            speakingDurationSeconds: p.speakingDurationSeconds || 0,
+            speakingTurns: p.speakingTurns || 0,
+            interruptionCount: p.interruptionCount || 0,
+            questionsAnswered: p.questionsAnswered || 0,
+            questionsInitiated: p.questionsInitiated || 0,
+            sentiment: 'positive',
+          };
+        });
+
+      setSession((prev) => ({
+        ...prev,
+        students: realStudents,
+        enrolledCount: realStudents.length,
+      }));
+
+      // Update current slot enrolled count in availableSlots
+      setAvailableSlots((prevSlots) =>
+        prevSlots.map((slot) =>
+          slot.id === currentRoomId
+            ? { ...slot, enrolledCount: realStudents.length, students: realStudents }
+            : slot
+        )
+      );
+    };
+
+    // Synchronize incoming live transcripts from peers or AI
+    const handleNewTranscript = (entry: TranscriptEntry) => {
+      if (!entry) return;
+      setTranscripts((prev) => {
+        if (prev.some((t) => t.id === entry.id)) return prev;
+        return [...prev, entry];
+      });
+    };
+
+    // Synchronize current speaker
+    const handleSpeakerActive = ({ speakerId }: { speakerId: string | null }) => {
+      setSession((prev) => ({
+        ...prev,
+        currentSpeakerId: speakerId,
+      }));
+    };
+
+    socket.on('room_users', handleRoomUsers);
+    socket.on('new_transcript', handleNewTranscript);
+    socket.on('speaker_active', handleSpeakerActive);
+
+    return () => {
+      socket.off('connect', joinCurrentRoom);
+      socket.off('room_users', handleRoomUsers);
+      socket.off('new_transcript', handleNewTranscript);
+      socket.off('speaker_active', handleSpeakerActive);
+      socket.emit('leave_room', { roomId: currentRoomId });
+    };
+  }, [currentUser, session.id]);
+
   // Handle Login Event
   const handleLogin = (user: AuthUser) => {
     setCurrentUser(user);
@@ -123,47 +235,33 @@ function GDAppContent() {
 
     if (user.role === 'student') {
       setViewingStudentId(null);
-      const activeSlotId = session.id;
       const studentUserObj: Student = {
-        ...INITIAL_SESSION.students[0],
         id: user.id || 'slot-stu-1',
         name: user.name,
-        college: user.college,
-        course: user.course,
-        batch: user.batch,
+        college: user.college || 'Engineering Institute',
+        course: user.course || 'B.Tech CSE',
+        batch: user.batch || '2022-2026',
+        avatar: user.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(user.name)}`,
+        seatNumber: 1,
         isUser: true,
+        micActive: false,
+        isSpeaking: false,
+        hasRaisedHand: false,
+        cameraActive: false,
+        speakingDurationSeconds: 0,
+        speakingTurns: 0,
+        interruptionCount: 0,
+        questionsAnswered: 0,
+        questionsInitiated: 0,
+        sentiment: 'positive',
       };
       setActiveReport(generateStudentReport(studentUserObj, session.topic, session.durationMinutes));
 
-      setAvailableSlots((prevSlots) =>
-        prevSlots.map((slot) => {
-          const isCurrentSlot = slot.id === activeSlotId;
-          return {
-            ...slot,
-            students: slot.students.map((s, idx) => {
-              const shouldBeUser = isCurrentSlot && (idx === 0 || s.id === user.id || s.seatNumber === user.seatNumber);
-              return {
-                ...s,
-                isUser: shouldBeUser,
-                name: shouldBeUser ? user.name : s.name,
-                college: shouldBeUser ? user.college : s.college,
-                course: shouldBeUser ? user.course : s.course,
-                batch: shouldBeUser ? user.batch : s.batch,
-              };
-            }),
-          };
-        })
-      );
+      // Put the current user in students; Socket.IO will sync all real users on join
       setSession((prev) => ({
         ...prev,
-        students: prev.students.map((s, idx) => ({
-          ...s,
-          isUser: idx === 0 || s.id === user.id || s.seatNumber === user.seatNumber,
-          name: (idx === 0 || s.id === user.id || s.seatNumber === user.seatNumber) ? user.name : s.name,
-          college: (idx === 0 || s.id === user.id || s.seatNumber === user.seatNumber) ? user.college : s.college,
-          course: (idx === 0 || s.id === user.id || s.seatNumber === user.seatNumber) ? user.course : s.course,
-          batch: (idx === 0 || s.id === user.id || s.seatNumber === user.seatNumber) ? user.batch : s.batch,
-        })),
+        students: [studentUserObj],
+        enrolledCount: 1,
       }));
       setCurrentTab('room');
     } else {
@@ -172,18 +270,16 @@ function GDAppContent() {
         ...prev,
         students: prev.students.map((s) => ({ ...s, isUser: false })),
       }));
-      setAvailableSlots((prevSlots) =>
-        prevSlots.map((slot) => ({
-          ...slot,
-          students: slot.students.map((s) => ({ ...s, isUser: false })),
-        }))
-      );
       setCurrentTab('faculty');
     }
   };
 
   // Handle Logout Event
   const handleLogout = () => {
+    try {
+      const socket = getSocket();
+      socket.emit('leave_room', { roomId: session.id });
+    } catch {}
     setCurrentUser(null);
     try {
       localStorage.removeItem('erus_auth_user');
@@ -316,32 +412,31 @@ function GDAppContent() {
 
     const previousSlotId = session.id;
 
-    // Build updated student roster for target slot with user at Seat 1
-    const targetStudents = targetSlot.students || [];
-    let updatedTargetStudents: Student[];
+    // Prepare student roster for target slot without dummy users
+    let updatedTargetStudents: Student[] = [];
 
     if (currentUser && currentUser.role === 'student') {
-      if (targetStudents.length > 0) {
-        updatedTargetStudents = targetStudents.map((s, idx) => ({
-          ...s,
-          isUser: idx === 0 || s.id === currentUser.id,
-          name: (idx === 0 || s.id === currentUser.id) ? currentUser.name : s.name,
-          college: (idx === 0 || s.id === currentUser.id) ? currentUser.college : s.college,
-          course: (idx === 0 || s.id === currentUser.id) ? currentUser.course : s.course,
-          batch: (idx === 0 || s.id === currentUser.id) ? currentUser.batch : s.batch,
-        }));
-      } else {
-        updatedTargetStudents = generateSlotParticipants(targetCurrentEnrolled + 1).map((s, idx) => ({
-          ...s,
-          isUser: idx === 0,
-          name: idx === 0 ? currentUser.name : s.name,
-          college: idx === 0 ? currentUser.college : s.college,
-          course: idx === 0 ? currentUser.course : s.course,
-          batch: idx === 0 ? currentUser.batch : s.batch,
-        }));
-      }
-    } else {
-      updatedTargetStudents = targetStudents.map((s) => ({ ...s, isUser: false }));
+      const studentUserObj: Student = {
+        id: currentUser.id || 'slot-stu-1',
+        name: currentUser.name,
+        college: currentUser.college || 'Engineering Institute',
+        course: currentUser.course || 'B.Tech CSE',
+        batch: currentUser.batch || '2022-2026',
+        avatar: currentUser.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(currentUser.name)}`,
+        seatNumber: 1,
+        isUser: true,
+        micActive: false,
+        isSpeaking: false,
+        hasRaisedHand: false,
+        cameraActive: false,
+        speakingDurationSeconds: 0,
+        speakingTurns: 0,
+        interruptionCount: 0,
+        questionsAnswered: 0,
+        questionsInitiated: 0,
+        sentiment: 'positive',
+      };
+      updatedTargetStudents = [studentUserObj];
     }
 
     const isStudentUser = currentUser && currentUser.role === 'student';
@@ -443,7 +538,7 @@ function GDAppContent() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100/70 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col selection:bg-indigo-500 selection:text-white transition-colors duration-200">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col selection:bg-indigo-500 selection:text-white transition-colors duration-200">
       
       {/* Top Main Navigation Header */}
       <Header
@@ -459,7 +554,7 @@ function GDAppContent() {
       />
 
       {/* Main Responsive Application Viewport */}
-      <main className="flex-1 pb-10 px-2 sm:px-4 max-w-7xl mx-auto w-full">
+      <main className="flex-1 py-4 sm:py-6 px-3 sm:px-6 max-w-7xl mx-auto w-full">
         {currentTab === 'room' && (
           <RealisticGDRoom
             session={session}
