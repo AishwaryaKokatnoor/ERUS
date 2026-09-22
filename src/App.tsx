@@ -36,13 +36,13 @@ function GDAppContent() {
     }
   });
 
-  const STORAGE_KEY = 'erus_available_slots_v5';
+  const STORAGE_KEY = 'erus_available_slots_v6';
 
   // Safely load and validate slots, purging stale legacy storage
   const loadInitialSlots = (): GDSession[] => {
     try {
       // Purge older legacy cache keys
-      ['erus_available_slots', 'erus_available_slots_v1', 'erus_available_slots_v2', 'erus_available_slots_v3', 'erus_available_slots_v4'].forEach((k) => {
+      ['erus_available_slots', 'erus_available_slots_v1', 'erus_available_slots_v2', 'erus_available_slots_v3', 'erus_available_slots_v4', 'erus_available_slots_v5'].forEach((k) => {
         localStorage.removeItem(k);
       });
 
@@ -71,11 +71,11 @@ function GDAppContent() {
     const slots = loadInitialSlots();
     return slots[0] || INITIAL_SESSION;
   });
-  const [transcripts, setTranscripts] = useState<TranscriptEntry[]>(INITIAL_TRANSCRIPTS);
+  const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
   const [activeReport, setActiveReport] = useState<StudentAssessmentReport>(SAMPLE_REPORT_RAHUL);
   const [viewingStudentId, setViewingStudentId] = useState<string | null>(null);
   const [voiceMuted, setVoiceMuted] = useState<boolean>(false);
-  const [elapsedSeconds, setElapsedSeconds] = useState<number>(315); // Starts at 5:15 in demo
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
   const { theme } = useTheme();
 
@@ -107,12 +107,14 @@ function GDAppContent() {
   const handleResetSlots = () => {
     try {
       localStorage.removeItem(STORAGE_KEY);
-      ['erus_available_slots', 'erus_available_slots_v1', 'erus_available_slots_v2', 'erus_available_slots_v3'].forEach((k) => {
+      ['erus_available_slots', 'erus_available_slots_v1', 'erus_available_slots_v2', 'erus_available_slots_v3', 'erus_available_slots_v4', 'erus_available_slots_v5'].forEach((k) => {
         localStorage.removeItem(k);
       });
     } catch {}
     setAvailableSlots(INITIAL_SLOTS);
     setSession(INITIAL_SLOTS[0]);
+    setTranscripts([]);
+    setElapsedSeconds(0);
   };
 
   // Socket.IO Real-Time Room & Users Synchronization

@@ -108,15 +108,8 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
     const baseTimestamp = Date.now();
     const createdSessions: GDSession[] = slots.map((slot, index) => {
       const maxCap = Math.max(15, slot.participantCount);
-      // Initialize with ~40% occupancy (e.g. 6 out of 15) so plenty of open seats remain for students to join
-      const initialEnrolled = Math.min(6, Math.max(0, maxCap - 9));
-      const seatedStudents: Student[] = generateSlotParticipants(initialEnrolled);
-
-      // Divide participants into 3 balanced breakout pods
-      const podSize = Math.ceil(seatedStudents.length / 3);
-      const podAlphaIds = seatedStudents.slice(0, podSize).map((s) => s.id);
-      const podBetaIds = seatedStudents.slice(podSize, podSize * 2).map((s) => s.id);
-      const podGammaIds = seatedStudents.slice(podSize * 2).map((s) => s.id);
+      const initialEnrolled = 0;
+      const seatedStudents: Student[] = [];
 
       const slotTimingStr = `${slot.startTime} - ${slot.endTime}`;
       const slotNameStr = slot.slotName.trim() || `Slot ${index + 1}`;
@@ -127,7 +120,7 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
         slotTiming: slotTimingStr,
         slotDate: slot.slotDate || 'Today',
         maxCapacity: maxCap,
-        enrolledCount: initialEnrolled,
+        enrolledCount: 0,
         roomLayout: roomLayout,
         topic: topic.trim(),
         description: description.trim(),
@@ -137,34 +130,12 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
         status: index === 0 ? 'active' : 'scheduled',
         students: seatedStudents,
         currentPhase: 'intro',
-        facilitatorSpeech: `Good morning participants of ${slotNameStr}. Today's discussion topic is: "${topic}". There are ${initialEnrolled} participants in this slot scheduled for ${slotTimingStr}. Everyone will get an opportunity to speak. The floor will be open shortly.`,
-        facilitatorAction: `Slot scheduled for ${slotTimingStr} (${initialEnrolled}/${maxCap} students)`,
+        facilitatorSpeech: `Good morning participants of ${slotNameStr}. Today's discussion topic is: "${topic}". Everyone will get an opportunity to speak. The floor will be open shortly.`,
+        facilitatorAction: `Slot scheduled for ${slotTimingStr}`,
         isFacilitatorSpeaking: false,
         silenceTimerSeconds: 0,
         currentSpeakerId: null,
-        breakoutRooms: [
-          {
-            id: `br-1-${baseTimestamp}-${index}`,
-            name: 'Breakout Pod Alpha',
-            topic: `${topic} - Foundational Analysis`,
-            studentIds: podAlphaIds,
-            status: 'active',
-          },
-          {
-            id: `br-2-${baseTimestamp}-${index}`,
-            name: 'Breakout Pod Beta',
-            topic: `${topic} - Practical Implementation`,
-            studentIds: podBetaIds,
-            status: 'active',
-          },
-          {
-            id: `br-3-${baseTimestamp}-${index}`,
-            name: 'Breakout Pod Gamma',
-            topic: `${topic} - Governance & Future Outlook`,
-            studentIds: podGammaIds,
-            status: 'active',
-          },
-        ],
+        breakoutRooms: [],
         createdAt: new Date().toISOString(),
         startedAt: Date.now(),
       };

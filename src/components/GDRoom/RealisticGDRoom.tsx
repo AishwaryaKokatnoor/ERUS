@@ -78,7 +78,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   const [isListeningMic, setIsListeningMic] = useState(false);
   const [interruptionWarning, setInterruptionWarning] = useState<string | null>(null);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
-  const [autoSimulatePeers, setAutoSimulatePeers] = useState(true);
+  const [autoSimulatePeers, setAutoSimulatePeers] = useState(false);
   const [isSlotModalOpen, setIsSlotModalOpen] = useState(false);
   const [currentLayout, setCurrentLayout] = useState<GDRoomLayoutType>(session.roomLayout || 'round_table');
 
@@ -665,12 +665,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
       // Fallback local simulation if offline
       const candidates = isFaculty ? session.students : session.students.filter((s) => !s.isUser);
+      if (!candidates || candidates.length === 0) return;
       const chosen = candidates[Math.floor(Math.random() * candidates.length)];
       studentTurnsSinceIntervention.current += 1;
       
       const peerArguments: Record<string, string[]> = {
         'Should Artificial Intelligence replace teachers?': [
-          'Building on Rahul’s thought, AI personalized tutoring can identify learning gaps in real-time, allowing teachers to spend more quality time on one-on-one emotional mentorship.',
+          'Building on the previous thought, AI personalized tutoring can identify learning gaps in real-time, allowing teachers to spend more quality time on one-on-one emotional mentorship.',
           'I would like to offer a counterpoint. What about the digital divide in rural schools? If we rely heavily on AI, students without high-speed access will fall further behind.',
           'Looking at the assessment aspect, AI eliminates subjective bias in grading essays and STEM assignments, making competitive evaluations fairer.',
           'However, the ability to inspire curiosity and cultivate moral ethics is uniquely human. An algorithm cannot teach empathy through life experience.',
