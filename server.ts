@@ -15,15 +15,24 @@ app.use(express.json());
 
 // Initialize Gemini Client safely
 let ai: GoogleGenAI | null = null;
-if (process.env.GEMINI_API_KEY) {
-  ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
+if (
+  process.env.GEMINI_API_KEY &&
+  process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY' &&
+  process.env.GEMINI_API_KEY.trim() !== ''
+) {
+  try {
+    ai = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
       },
-    },
-  });
+    });
+  } catch (err) {
+    console.warn('Gemini client initialization error:', err);
+    ai = null;
+  }
 }
 
 // Real-Time Socket.IO Room Participant Store
@@ -276,12 +285,15 @@ Language, Accent & Tone Guidelines:
 - Use natural collegiate phrasing such as: "Building upon what [Peer] pointed out...", "If we look at the ground reality in our context...", "I would like to offer a counter-perspective here...", "From a practical standpoint...", "We must also consider the grassroots implications...".
 - Length: 2 to 3 concise, intelligent sentences. Avoid American slang or idioms. Speak strictly in natural Indian collegiate English.`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.7-flash',
-        contents: prompt,
-      });
-
-      peerStatement = response.text?.trim() || '';
+      try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3.7-flash',
+          contents: prompt,
+        });
+        peerStatement = response.text?.trim() || '';
+      } catch (geminiErr) {
+        console.warn('Gemini simulate-peer error, falling back to heuristic engine:', geminiErr);
+      }
     }
 
     if (!peerStatement) {
@@ -404,35 +416,39 @@ Generate your response in JSON format with:
 - targetStudentName: Name of the student being addressed directly (if any)
 - isProbingQuestion: Boolean`;
 
-      const geminiResponse = await ai.models.generateContent({
-        model: 'gemini-3.7-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              speech: { type: Type.STRING },
-              actionType: { type: Type.STRING },
-              targetStudentName: { type: Type.STRING },
-              isProbingQuestion: { type: Type.BOOLEAN },
+      try {
+        const geminiResponse = await ai.models.generateContent({
+          model: 'gemini-3.7-flash',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                speech: { type: Type.STRING },
+                actionType: { type: Type.STRING },
+                targetStudentName: { type: Type.STRING },
+                isProbingQuestion: { type: Type.BOOLEAN },
+              },
+              required: ['speech', 'actionType', 'isProbingQuestion'],
             },
-            required: ['speech', 'actionType', 'isProbingQuestion'],
           },
-        },
-      });
+        });
 
-      const parsed = JSON.parse(geminiResponse.text?.trim() || '{}');
-      const speech = parsed.speech || 'Thank you for your valuable perspective. Who would like to build on this point?';
-      serverAskedQuestions.add(speech);
+        const parsed = JSON.parse(geminiResponse.text?.trim() || '{}');
+        const speech = parsed.speech || 'Thank you for your valuable perspective. Who would like to build on this point?';
+        serverAskedQuestions.add(speech);
 
-      return res.json({
-        success: true,
-        speech,
-        actionType: parsed.actionType || 'probing_question',
-        targetStudentName: parsed.targetStudentName || null,
-        isProbingQuestion: !!parsed.isProbingQuestion,
-      });
+        return res.json({
+          success: true,
+          speech,
+          actionType: parsed.actionType || 'probing_question',
+          targetStudentName: parsed.targetStudentName || null,
+          isProbingQuestion: !!parsed.isProbingQuestion,
+        });
+      } catch (geminiErr) {
+        console.warn('Gemini moderate error, falling through to heuristic engine:', geminiErr);
+      }
     }
 
     // Extensive Multi-category Heuristic Fallback Engine with Deduplication
@@ -552,7 +568,8 @@ Provide JSON with:
 - aiRecommendations: Array of 3 actionable practice recommendations
 - aiSummary: 2-3 sentences overview`;
 
-      const evaluationRes = await ai.models.generateContent({
+      try {
+        const evaluationRes = await ai.models.generateContent({
         model: 'gemini-3.7-flash',
         contents: evaluationPrompt,
         config: {
@@ -690,7 +707,10 @@ Provide JSON with:
         generatedAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
       };
 
-      return res.json({ success: true, report });
+        return res.json({ success: true, report });
+      } catch (geminiErr) {
+        console.warn('Gemini evaluation error, falling back to heuristic engine:', geminiErr);
+      }
     }
 
     // Default High-Fidelity Heuristic Evaluation
