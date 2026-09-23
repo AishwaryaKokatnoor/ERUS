@@ -30,6 +30,7 @@ export function generateSlotParticipants(
       interruptionCount: 0,
       questionsAnswered: 0,
       questionsInitiated: 0,
+      sentiment: 'neutral',
     });
   }
 
@@ -173,23 +174,25 @@ export function computeOverallScore(skills: {
   return Math.min(100, Math.max(0, Math.round(total)));
 }
 
-export function generateStudentReport(
-  student: Student,
-  topic: string,
-  durationMinutes: number = 20,
-  baseReport?: StudentAssessmentReport
+export function createDefaultAssessmentReport(
+  student?: Partial<Student>,
+  topic: string = 'Group Discussion',
+  durationMinutes: number = 20
 ): StudentAssessmentReport {
-  const base = baseReport || SAMPLE_REPORT_RAHUL;
-  const turns = student.speakingTurns || 4;
-  const durationSec = student.speakingDurationSeconds || 180;
+  const name = student?.name || 'Participant';
+  const turns = student?.speakingTurns ?? 0;
+  const durationSec = student?.speakingDurationSeconds ?? 0;
+  const interruptions = student?.interruptionCount ?? 0;
+  const questionsAnswered = student?.questionsAnswered ?? 0;
+  const questionsInitiated = student?.questionsInitiated ?? 0;
 
-  const english = Math.min(20, Math.max(14, Math.round(16 + (turns % 3))));
-  const fluency = Math.min(20, Math.max(13, Math.round(15 + ((durationSec / 45) % 4))));
-  const clarity = Math.min(15, Math.max(10, Math.round(12 + ((student.questionsAnswered || 2) % 3))));
-  const confidence = Math.min(15, Math.max(11, Math.round(13 + ((student.questionsInitiated || 1) % 3))));
-  const content = Math.min(15, Math.max(10, Math.round(12 + ((turns * 2) % 3))));
-  const collaboration = Math.min(10, Math.max(7, Math.round(8 - (student.interruptionCount || 0))));
-  const leadership = Math.min(5, Math.max(3, Math.round(4 + ((student.questionsInitiated || 0) > 0 ? 1 : 0))));
+  const english = turns > 0 ? Math.min(20, Math.max(12, Math.round(15 + (turns % 4)))) : 15;
+  const fluency = durationSec > 0 ? Math.min(20, Math.max(12, Math.round(14 + Math.min(6, durationSec / 60)))) : 15;
+  const clarity = turns > 0 ? Math.min(15, Math.max(9, Math.round(11 + (questionsAnswered % 3)))) : 11;
+  const confidence = turns > 0 ? Math.min(15, Math.max(10, Math.round(12 + (questionsInitiated % 3)))) : 12;
+  const content = turns > 0 ? Math.min(15, Math.max(9, Math.round(11 + ((turns * 2) % 4)))) : 11;
+  const collaboration = Math.min(10, Math.max(6, Math.round(8 - interruptions)));
+  const leadership = Math.min(5, Math.max(2, Math.round(3 + (questionsInitiated > 0 ? 1 : 0))));
 
   const overall = computeOverallScore({
     english,
@@ -202,128 +205,115 @@ export function generateStudentReport(
   });
 
   return {
-    ...base,
-    id: `rep-${student.id}-${Date.now()}`,
+    id: `rep-${student?.id || 'gen'}-${Date.now()}`,
     sessionId: 'session-001',
-    studentId: student.id,
-    studentName: student.name,
-    college: student.college || 'Engineering Institute',
+    studentId: student?.id || 'stu-1',
+    studentName: name,
+    college: student?.college || 'Academic Institution',
     topic,
     durationMinutes,
     speakingTimeFormatted: `${Math.floor(durationSec / 60)} min ${durationSec % 60} sec`,
     speakingTimeSeconds: durationSec,
     speakingTurns: turns,
-    interruptions: student.interruptionCount || 0,
-    questionsAnswered: student.questionsAnswered || 3,
-    questionsInitiated: student.questionsInitiated || 1,
+    interruptions,
+    questionsAnswered,
+    questionsInitiated,
     skills: {
-      english: { ...base.skills.english, score: english },
-      fluency: { ...base.skills.fluency, score: fluency },
-      clarity: { ...base.skills.clarity, score: clarity },
-      confidence: { ...base.skills.confidence, score: confidence },
-      contentQuality: { ...base.skills.contentQuality, score: content },
-      collaboration: { ...base.skills.collaboration, score: collaboration },
-      leadership: { ...base.skills.leadership, score: leadership },
+      english: {
+        parameter: 'Speaking in English',
+        weightagePercent: 20,
+        score: english,
+        maxScore: 20,
+        subPoints: ['Grammar usage', 'Vocabulary choice', 'Sentence structure', 'Clarity of articulation'],
+        feedback: turns > 0 ? 'Clear vocabulary and grammatically sound sentence construction.' : 'No active speech recorded yet.',
+      },
+      fluency: {
+        parameter: 'Fluency',
+        weightagePercent: 20,
+        score: fluency,
+        maxScore: 20,
+        subPoints: ['Continuous speaking', 'Pacing and flow', 'Controlled pauses', 'Natural rhythm'],
+        feedback: turns > 0 ? 'Consistent cadence with appropriate breathing intervals.' : 'No active speech recorded yet.',
+      },
+      clarity: {
+        parameter: 'Communication Clarity',
+        weightagePercent: 15,
+        score: clarity,
+        maxScore: 15,
+        subPoints: ['Core point expression', 'Logical progression', 'Intelligibility'],
+        feedback: turns > 0 ? 'Arguments presented in structured order.' : 'Pending participation data.',
+      },
+      confidence: {
+        parameter: 'Confidence',
+        weightagePercent: 15,
+        score: confidence,
+        maxScore: 15,
+        subPoints: ['Tone assertiveness', 'Poise under questioning', 'Initiative'],
+        feedback: turns > 0 ? 'Engaged peer questions with steady conviction.' : 'Pending participation data.',
+      },
+      contentQuality: {
+        parameter: 'Content Quality',
+        weightagePercent: 15,
+        score: content,
+        maxScore: 15,
+        subPoints: ['Subject relevance', 'Supporting points', 'Fact coherence'],
+        feedback: turns > 0 ? 'Addressed the central theme with relevant examples.' : 'Pending participation data.',
+      },
+      collaboration: {
+        parameter: 'Collaboration',
+        weightagePercent: 10,
+        score: collaboration,
+        maxScore: 10,
+        subPoints: ['Respectful turn-taking', 'Active listening', 'Peer acknowledgment'],
+        feedback: interruptions === 0 ? 'Maintained room etiquette without unprompted interruptions.' : `Recorded ${interruptions} interruption(s).`,
+      },
+      leadership: {
+        parameter: 'Leadership',
+        weightagePercent: 5,
+        score: leadership,
+        maxScore: 5,
+        subPoints: ['Discussion direction', 'Conflict moderation', 'Summarization'],
+        feedback: questionsInitiated > 0 ? 'Prompted exploratory queries to engage the room.' : 'Contributed to peer discussion.',
+      },
     },
     overallScore: overall,
     grade: calculateGrade(overall),
-    aiSummary: `${student.name} contributed actively to the group discussion on "${topic}", demonstrating constructive dialogue and structured reasoning.`,
+    strengths: turns > 0 ? [
+      'Contributed constructive points aligned with the central topic',
+      'Followed room turn-taking protocol and respectful dialogue',
+      'Exhibited articulate delivery and active listening',
+    ] : ['Ready to begin group discussion participation'],
+    areasForImprovement: [
+      'Expand domain-specific terminology during rebuttals',
+      'Cite verifiable empirical evidence or industry benchmarks',
+      'Practice seamless transitional phrases when introducing new perspectives',
+    ],
+    aiRecommendations: [
+      'Practice framing an opening statement within 60 seconds with 2 supporting pillars',
+      'Incorporate acknowledging phrases before transitioning to counter-arguments',
+      'Consistently track session time to deliver concise, high-impact contributions',
+    ],
+    aiSummary: turns > 0
+      ? `${name} engaged constructively in the discussion on "${topic}", contributing ${Math.floor(durationSec / 60)}m ${durationSec % 60}s of speaking time across ${turns} turn(s).`
+      : `${name} is enrolled in the session for "${topic}". Assessment will update dynamically as participation begins.`,
     generatedAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
   };
 }
 
-export const SAMPLE_REPORT_RAHUL: StudentAssessmentReport = {
-  id: 'rep-001',
-  sessionId: 'session-001',
-  studentId: 's1',
-  studentName: 'Rahul Kumar',
-  college: 'Delhi Institute of Technology',
-  topic: 'Should Artificial Intelligence replace teachers?',
-  durationMinutes: 20,
-  speakingTimeFormatted: '4 min 30 sec',
-  speakingTimeSeconds: 270,
-  speakingTurns: 6,
-  interruptions: 0,
-  questionsAnswered: 4,
-  questionsInitiated: 2,
-  skills: {
-    english: {
-      parameter: 'Speaking in English',
-      weightagePercent: 20,
-      score: 17,
-      maxScore: 20,
-      subPoints: ['Use of English', 'Sentence formation', 'Grammar usage', 'Vocabulary'],
-      feedback: 'Fluent and structured syntax with articulate choice of technical descriptors.',
-    },
-    fluency: {
-      parameter: 'Fluency',
-      weightagePercent: 20,
-      score: 16,
-      maxScore: 20,
-      subPoints: ['Continuous speaking', 'Reduced hesitation', 'Reduced fillers', 'Natural flow'],
-      feedback: 'Maintained steady pacing with minimal vocal pauses throughout opening and rebuttals.',
-    },
-    clarity: {
-      parameter: 'Communication Clarity',
-      weightagePercent: 15,
-      score: 12,
-      maxScore: 15,
-      subPoints: ['Clear ideas', 'Proper explanations', 'Understandable speech'],
-      feedback: 'Constructed cohesive arguments connecting AI classroom assistance to teacher burnout relief.',
-    },
-    confidence: {
-      parameter: 'Confidence',
-      weightagePercent: 15,
-      score: 13,
-      maxScore: 15,
-      subPoints: ['Initiating discussion', 'Responding confidently', 'Handling questions'],
-      feedback: 'Successfully initiated the opening premise and answered peer inquiries without hesitation.',
-    },
-    contentQuality: {
-      parameter: 'Content Quality',
-      weightagePercent: 15,
-      score: 12,
-      maxScore: 15,
-      subPoints: ['Relevance', 'Logical reasoning', 'Examples', 'Supporting arguments'],
-      feedback: 'Provided concrete case studies on automated grading algorithms and hybrid mentorship models.',
-    },
-    collaboration: {
-      parameter: 'Collaboration',
-      weightagePercent: 10,
-      score: 8,
-      maxScore: 10,
-      subPoints: ['Respect for others', 'Listening skills', 'Encouraging others', 'Team behavior'],
-      feedback: 'Active listener who acknowledged Priya and Ramesh’s arguments before transitioning.',
-    },
-    leadership: {
-      parameter: 'Leadership',
-      weightagePercent: 5,
-      score: 4,
-      maxScore: 5,
-      subPoints: ['Guiding discussion', 'Summarizing points', 'Conflict management'],
-      feedback: 'Helped steer the room when the topic began drifting towards general robotics.',
-    },
-  },
-  overallScore: 82,
-  grade: 'Very Good',
-  strengths: [
-    'Spoke confidently with steady vocal modulation',
-    'Used relevant, real-world pedagogical examples',
-    'Encouraged quiet peers to share their perspectives',
-  ],
-  areasForImprovement: [
-    'Improve topic-specific vocabulary in academic policy',
-    'Provide stronger data-backed supporting arguments',
-    'Reduce pauses when formulating spontaneous rebuttals',
-  ],
-  aiRecommendations: [
-    'Practice speaking for 2 minutes continuously without conversational fillers',
-    'Giving concrete statistics and comparative examples while expressing opinions',
-    'Learning topic-specific vocabulary to enrich nuanced critical points',
-  ],
-  aiSummary: 'Rahul demonstrated strong communicative presence, initiating the discussion effectively with 4m 30s of high-quality speaking time and exemplary etiquette.',
-  generatedAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-};
+export function generateStudentReport(
+  student: Student,
+  topic: string,
+  durationMinutes: number = 20,
+  baseReport?: StudentAssessmentReport
+): StudentAssessmentReport {
+  return createDefaultAssessmentReport(student, topic, durationMinutes);
+}
+
+export const SAMPLE_REPORT_RAHUL: StudentAssessmentReport = createDefaultAssessmentReport(
+  { id: 'sample-1', name: 'Participant' },
+  'Artificial Intelligence in Education',
+  20
+);
 
 export const TOPIC_PRESETS = [
   {

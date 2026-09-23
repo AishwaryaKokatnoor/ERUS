@@ -41,9 +41,10 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
   onBackToRoom,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [aiSummary, setAiSummary] = useState<string>(
-    'The discussion examined both opportunities and challenges of AI in modern education. Strong consensus emerged that while AI can significantly streamline administrative grading and adaptive personal tutoring, human empathy, creative mentorship, and moral ethics remain strictly irreplaceable. Active turn balancing by the AI moderator maintained high engagement across all 8 participants.'
-  );
+  const defaultSummary = transcripts.length > 0
+    ? `The group discussion on "${session.topic}" recorded ${transcripts.length} dialogue turns across ${session.students.length} participant(s). Automated analysis indicates structured participation in accordance with the 7-parameter rubric.`
+    : `Session has been initiated for "${session.topic}". Automated evaluation and AI insights will populate dynamically as participants speak.`;
+  const [aiSummary, setAiSummary] = useState<string>(defaultSummary);
 
   // Compute student rankings and scores
   const studentStats = session.students.map((s, idx) => {
@@ -56,7 +57,7 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
     const collaboration = Math.min(10, Math.max(6, 8 - s.interruptionCount));
     const leadership = Math.min(5, Math.max(3, 4 + (s.questionsInitiated > 0 ? 1 : 0)));
 
-    const score = s.isUser ? 82 : english + fluency + clarity + confidence + content + collaboration + leadership;
+    const score = english + fluency + clarity + confidence + content + collaboration + leadership;
     let grade = 'Very Good';
     if (score >= 90) grade = 'Excellent';
     else if (score >= 75) grade = 'Very Good';
@@ -72,9 +73,9 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
     };
   }).sort((a, b) => b.calculatedScore - a.calculatedScore);
 
-  const averageScore = Math.round(
-    studentStats.reduce((acc, curr) => acc + curr.calculatedScore, 0) / studentStats.length
-  );
+  const averageScore = studentStats.length > 0
+    ? Math.round(studentStats.reduce((acc, curr) => acc + curr.calculatedScore, 0) / studentStats.length)
+    : 0;
 
   // Data for Speaking Time Chart
   const chartData = session.students.map((s) => ({
@@ -86,14 +87,30 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
     score: studentStats.find((st) => st.id === s.id)?.calculatedScore || 75,
   }));
 
-  // Heat map simulation data across minutes
-  const heatMapTimeline = [
-    { minute: '0-4m', activeSeats: [1, 2, 3] },
-    { minute: '4-8m', activeSeats: [4, 1, 5] },
-    { minute: '8-12m', activeSeats: [6, 2, 7] },
-    { minute: '12-16m', activeSeats: [8, 3, 1] },
-    { minute: '16-20m', activeSeats: [2, 4, 5, 8] },
-  ];
+  // Dynamic heat map timeline data derived from actual transcripts
+  const heatMapTimeline = React.useMemo(() => {
+    const intervals = [
+      { label: '0-4m', startSec: 0, endSec: 240 },
+      { label: '4-8m', startSec: 240, endSec: 480 },
+      { label: '8-12m', startSec: 480, endSec: 720 },
+      { label: '12-16m', startSec: 720, endSec: 960 },
+      { label: '16-20m', startSec: 960, endSec: 1200 },
+    ];
+
+    return intervals.map((interval) => {
+      const activeSeatsInInterval = new Set<number>();
+      transcripts.forEach((t) => {
+        const sec = t.timestampSeconds ?? 0;
+        if (sec >= interval.startSec && sec < interval.endSec && t.seatNumber) {
+          activeSeatsInInterval.add(t.seatNumber);
+        }
+      });
+      return {
+        minute: interval.label,
+        activeSeats: Array.from(activeSeatsInInterval),
+      };
+    });
+  }, [transcripts]);
 
   const handleExportTranscript = () => {
     const textContent = transcripts

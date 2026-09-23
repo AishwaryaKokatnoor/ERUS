@@ -16,7 +16,7 @@ import {
   INITIAL_SESSION, 
   INITIAL_SLOTS, 
   INITIAL_TRANSCRIPTS, 
-  SAMPLE_REPORT_RAHUL,
+  createDefaultAssessmentReport,
   generateStudentReport,
   generateSlotParticipants 
 } from './data/mockGDData';
@@ -72,7 +72,9 @@ function GDAppContent() {
     return slots[0] || INITIAL_SESSION;
   });
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
-  const [activeReport, setActiveReport] = useState<StudentAssessmentReport>(SAMPLE_REPORT_RAHUL);
+  const [activeReport, setActiveReport] = useState<StudentAssessmentReport>(() =>
+    createDefaultAssessmentReport()
+  );
   const [viewingStudentId, setViewingStudentId] = useState<string | null>(null);
   const [voiceMuted, setVoiceMuted] = useState<boolean>(false);
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
@@ -531,6 +533,11 @@ function GDAppContent() {
   };
 
   const handleViewStudentReport = (studentId: string) => {
+    setViewingStudentId(studentId);
+    const target = session.students.find((s) => s.id === studentId);
+    if (target) {
+      setActiveReport(generateStudentReport(target, session.topic, session.durationMinutes));
+    }
     setCurrentTab('report');
   };
 

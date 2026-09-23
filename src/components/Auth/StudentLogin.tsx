@@ -7,7 +7,6 @@ import {
   AlertCircle, 
   Eye, 
   EyeOff, 
-  UserCheck,
   UserPlus,
   Building,
   BookOpen,
@@ -15,7 +14,7 @@ import {
   CheckCircle2
 } from 'lucide-react';
 import { StudentUser } from '../../types/auth';
-import { MOCK_STUDENTS, authenticateUser, registerNewUser } from '../../data/mockAuthData';
+import { authenticateUser, registerNewUser } from '../../data/mockAuthData';
 
 interface StudentLoginProps {
   onLogin: (user: StudentUser) => void;
@@ -113,13 +112,6 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
     }, 400);
   };
 
-  const handleQuickLogin = (student: typeof MOCK_STUDENTS[0]) => {
-    setIdentifier(student.email);
-    setPassword(student.password);
-    setError(null);
-    const { password: _, ...user } = student;
-    onLogin(user);
-  };
 
   return (
     <div className="w-full max-w-lg mx-auto bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 p-6 sm:p-8 rounded-2xl shadow-sm dark:shadow-xl transition-all">
@@ -263,45 +255,7 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
             </button>
           </form>
 
-          {/* 1-Click Quick Demo Presets */}
-          <div className="mt-6 pt-5 border-t border-slate-100 dark:border-slate-800">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-semibold text-slate-600 dark:text-slate-400 flex items-center gap-1.5">
-                <UserCheck className="w-3.5 h-3.5 text-indigo-500" />
-                <span>1-Click Test Student Profiles:</span>
-              </span>
-              <span className="text-[10px] text-slate-400 font-mono">Password: password123</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {MOCK_STUDENTS.map((student) => (
-                <button
-                  key={student.id}
-                  type="button"
-                  onClick={() => handleQuickLogin(student)}
-                  className="flex items-center gap-2.5 p-2 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 hover:border-indigo-400 dark:hover:border-indigo-600 hover:bg-indigo-50/30 dark:hover:bg-indigo-950/30 text-left transition-all group cursor-pointer"
-                >
-                  <img
-                    src={student.avatar}
-                    alt={student.name}
-                    className="w-8 h-8 rounded-full object-cover ring-1 ring-slate-200 dark:ring-slate-700 shrink-0"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400">
-                        {student.name}
-                      </p>
-                      <span className="text-[9px] font-mono px-1 rounded bg-slate-200/60 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                        Seat {student.seatNumber}
-                      </span>
-                    </div>
-                    <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                      {student.course}
-                    </p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
+
         </>
       ) : (
         /* 2. REGISTRATION FORM */

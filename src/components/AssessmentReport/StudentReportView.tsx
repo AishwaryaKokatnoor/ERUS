@@ -24,7 +24,7 @@ import {
   SkillScore 
 } from '../../types/gd';
 import { AuthUser } from '../../types/auth';
-import { SAMPLE_REPORT_RAHUL, generateStudentReport } from '../../data/mockGDData';
+import { createDefaultAssessmentReport, generateStudentReport } from '../../data/mockGDData';
 import confetti from 'canvas-confetti';
 
 interface StudentReportViewProps {
@@ -47,31 +47,50 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
   const isStudent = currentUser?.role === 'student';
   const isFaculty = currentUser?.role === 'faculty';
 
+  const fallbackUserStudent: Student = {
+    id: currentUser?.id || 'stu-user',
+    name: currentUser?.name || 'Participant',
+    seatNumber: 1,
+    college: (currentUser && 'college' in currentUser ? (currentUser as any).college : '') || 'Academic Institution',
+    course: (currentUser && 'course' in currentUser ? (currentUser as any).course : '') || 'Degree Program',
+    batch: '2022-2026',
+    avatar: currentUser?.avatar || 'https://api.dicebear.com/7.x/avataaars/svg?seed=stu-user',
+    isUser: true,
+    micActive: false,
+    isSpeaking: false,
+    hasRaisedHand: false,
+    speakingDurationSeconds: 0,
+    speakingTurns: 0,
+    interruptionCount: 0,
+    questionsAnswered: 0,
+    questionsInitiated: 0,
+    sentiment: 'neutral',
+  };
+
   // Find the active student for this user
   const userStudent = session.students.find(
     (s) => s.isUser || (currentUser && (s.id === currentUser.id || s.name === currentUser.name))
-  ) || session.students[0];
+  ) || session.students[0] || fallbackUserStudent;
 
   // For students, selectedStudentId is strictly their own ID.
   // For faculty, it's targetStudentId or initialReport's studentId or first student
   const effectiveInitialStudentId = isStudent
     ? userStudent.id
-    : (targetStudentId || initialReport?.studentId || session.students[0]?.id || 's1');
+    : (targetStudentId || initialReport?.studentId || session.students[0]?.id || userStudent.id);
 
   const [selectedStudentId, setSelectedStudentId] = useState<string>(effectiveInitialStudentId);
 
-  // Initialize report personalized for the active student if they are a student
+  // Initialize report personalized for the active student
   const [currentReport, setCurrentReport] = useState<StudentAssessmentReport>(() => {
-    if (isStudent) {
-      if (
-        initialReport &&
-        (initialReport.studentId === userStudent.id || initialReport.studentName === currentUser?.name)
-      ) {
+    if (initialReport) {
+      if (isStudent && (initialReport.studentId === userStudent.id || initialReport.studentName === currentUser?.name)) {
         return initialReport;
       }
-      return generateStudentReport(userStudent, session.topic, session.durationMinutes, initialReport);
+      if (!isStudent) {
+        return initialReport;
+      }
     }
-    return initialReport || SAMPLE_REPORT_RAHUL;
+    return generateStudentReport(userStudent, session.topic, session.durationMinutes);
   });
 
   const [isLoading, setIsLoading] = useState(false);
