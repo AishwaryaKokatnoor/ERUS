@@ -23,6 +23,7 @@ interface SlotSelectionModalProps {
   currentSlotId: string;
   onSelectSlot: (slotId: string) => void;
   onResetSlots?: () => void;
+  initialTopic?: string;
 }
 
 export const SlotSelectionModal: React.FC<SlotSelectionModalProps> = ({
@@ -32,6 +33,7 @@ export const SlotSelectionModal: React.FC<SlotSelectionModalProps> = ({
   currentSlotId,
   onSelectSlot,
   onResetSlots,
+  initialTopic,
 }) => {
   if (!isOpen) return null;
 
@@ -40,8 +42,14 @@ export const SlotSelectionModal: React.FC<SlotSelectionModalProps> = ({
   const currentSlot = availableSlots.find((s) => s.id === currentSlotId);
   
   const [selectedTopic, setSelectedTopic] = useState<string>(() => {
-    return currentSlot?.topic || uniqueTopics[0] || 'Group Discussion Topic';
+    return initialTopic || currentSlot?.topic || uniqueTopics[0] || 'Group Discussion Topic';
   });
+
+  React.useEffect(() => {
+    if (initialTopic) {
+      setSelectedTopic(initialTopic);
+    }
+  }, [initialTopic]);
 
   // Filter slots for the active topic
   const slotsForTopic = availableSlots.filter((s) => s.topic === selectedTopic);

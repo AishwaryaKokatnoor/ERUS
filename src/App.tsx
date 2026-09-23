@@ -6,6 +6,8 @@
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
 import { RealisticGDRoom } from './components/GDRoom/RealisticGDRoom';
+import { StudentPortalView } from './components/StudentPortal/StudentPortalView';
+import { SlotSelectionModal } from './components/GDRoom/SlotSelectionModal';
 import { StudentReportView } from './components/AssessmentReport/StudentReportView';
 import { FacultyDashboardView } from './components/FacultyDashboard/FacultyDashboardView';
 import { SessionCreationModal } from './components/SessionManager/SessionCreationModal';
@@ -65,7 +67,17 @@ function GDAppContent() {
     return INITIAL_SLOTS;
   };
 
-  const [currentTab, setCurrentTab] = useState<'room' | 'report' | 'faculty' | 'manager'>('room');
+  const [currentTab, setCurrentTab] = useState<'topics' | 'room' | 'report' | 'faculty' | 'manager'>(() => {
+    try {
+      const saved = localStorage.getItem('erus_auth_user');
+      const user = saved ? JSON.parse(saved) : null;
+      if (user?.role === 'student') return 'topics';
+      if (user?.role === 'faculty') return 'faculty';
+    } catch {}
+    return 'topics';
+  });
+  const [isSlotModalOpen, setIsSlotModalOpen] = useState<boolean>(false);
+  const [selectedPortalTopic, setSelectedPortalTopic] = useState<string | undefined>(undefined);
   const [availableSlots, setAvailableSlots] = useState<GDSession[]>(loadInitialSlots);
   const [session, setSession] = useState<GDSession>(() => {
     const slots = loadInitialSlots();
@@ -84,7 +96,7 @@ function GDAppContent() {
   // Guard: Students are strictly restricted to their own portal and cannot view Faculty Analytics
   useEffect(() => {
     if (currentUser?.role === 'student' && currentTab === 'faculty') {
-      setCurrentTab('room');
+      setCurrentTab('topics');
     }
   }, [currentUser, currentTab]);
 
@@ -267,7 +279,7 @@ function GDAppContent() {
         students: [studentUserObj],
         enrolledCount: 1,
       }));
-      setCurrentTab('room');
+      setCurrentTab('topics');
     } else {
       // Faculty evaluator starts at the Faculty Analytics dashboard and observes sessions
       setSession((prev) => ({
@@ -499,6 +511,7 @@ function GDAppContent() {
       },
     ]);
     setElapsedSeconds(0);
+    setCurrentTab('room');
   };
 
   const handleCreateSessions = (newSessions: GDSession[]) => {
@@ -564,6 +577,24 @@ function GDAppContent() {
 
       {/* Main Responsive Application Viewport */}
       <main className="flex-1 py-4 sm:py-6 px-3 sm:px-6 max-w-7xl mx-auto w-full">
+        {currentTab === 'topics' && (
+          <StudentPortalView
+            currentUser={currentUser}
+            availableSlots={availableSlots}
+            onExploreSlots={(topic) => {
+              setSelectedPortalTopic(topic);
+              setIsSlotModalOpen(true);
+            }}
+            onSelectSlot={(slotId) => {
+              handleSelectSlot(slotId);
+              setIsSlotModalOpen(false);
+              setCurrentTab('room');
+            }}
+            onEnterActiveRoom={() => setCurrentTab('room')}
+            activeSession={session}
+          />
+        )}
+
         {currentTab === 'room' && (
           <RealisticGDRoom
             session={session}
@@ -613,6 +644,21 @@ function GDAppContent() {
         onClose={() => setIsCreateModalOpen(false)}
         onCreateSessions={handleCreateSessions}
         onCreateSession={handleCreateSession}
+      />
+
+      {/* Slot Selection Modal from Student Topics Portal */}
+      <SlotSelectionModal
+        isOpen={isSlotModalOpen}
+        onClose={() => setIsSlotModalOpen(false)}
+        availableSlots={availableSlots}
+        currentSlotId={session.id}
+        onSelectSlot={(slotId) => {
+          handleSelectSlot(slotId);
+          setIsSlotModalOpen(false);
+          setCurrentTab('room');
+        }}
+        onResetSlots={handleResetSlots}
+        initialTopic={selectedPortalTopic}
       />
 
     </div>
