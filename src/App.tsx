@@ -39,29 +39,16 @@ function GDAppContent() {
     }
   });
 
-  const STORAGE_KEY = 'erus_available_slots_v6';
-
-  // Safely load and validate slots, purging stale legacy storage
+  // Purge all stale local cache keys so every device displays the exact same synchronized topics
   const loadInitialSlots = (): GDSession[] => {
     try {
-      // Purge older legacy cache keys
-      ['erus_available_slots', 'erus_available_slots_v1', 'erus_available_slots_v2', 'erus_available_slots_v3', 'erus_available_slots_v4', 'erus_available_slots_v5'].forEach((k) => {
+      ['erus_available_slots', 'erus_available_slots_v1', 'erus_available_slots_v2', 'erus_available_slots_v3', 'erus_available_slots_v4', 'erus_available_slots_v5', 'erus_available_slots_v6', 'erus_available_slots_v7'].forEach((k) => {
         localStorage.removeItem(k);
       });
-
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          // Check if every slot in storage is marked full (15/15) - if so, discard stale cache
-          const allFull = parsed.every((s: GDSession) => {
-            const maxCap = s.maxCapacity || 15;
-            const enrolled = s.enrolledCount ?? s.students?.length ?? 15;
-            return enrolled >= maxCap;
-          });
-          if (!allFull) {
-            return parsed;
-          }
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('erus_available_slots')) {
+          localStorage.removeItem(key);
         }
       }
     } catch {}
@@ -111,21 +98,20 @@ function GDAppContent() {
     }
   }, [currentUser]);
 
-  // Keep availableSlots persisted to localStorage
+  // Fetch canonical slots from backend server on initial load
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(availableSlots));
-    } catch {}
-  }, [availableSlots]);
+    fetch('/api/slots')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.slots) && data.slots.length > 0) {
+          setAvailableSlots(data.slots);
+        }
+      })
+      .catch((err) => console.warn('Could not fetch server slots:', err));
+  }, []);
 
-  // Reset slots back to clean demo defaults
+  // Reset slots back to clean defaults
   const handleResetSlots = () => {
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-      ['erus_available_slots', 'erus_available_slots_v1', 'erus_available_slots_v2', 'erus_available_slots_v3', 'erus_available_slots_v4', 'erus_available_slots_v5'].forEach((k) => {
-        localStorage.removeItem(k);
-      });
-    } catch {}
     setAvailableSlots(INITIAL_SLOTS);
     setSession(INITIAL_SLOTS[0]);
     setTranscripts([]);
@@ -247,15 +233,24 @@ function GDAppContent() {
       }));
     };
 
+    // Synchronize canonical discussion slots broadcast from server
+    const handleSlotsUpdated = (updatedSlots: GDSession[]) => {
+      if (Array.isArray(updatedSlots) && updatedSlots.length > 0) {
+        setAvailableSlots(updatedSlots);
+      }
+    };
+
     socket.on('room_users', handleRoomUsers);
     socket.on('new_transcript', handleNewTranscript);
     socket.on('speaker_active', handleSpeakerActive);
+    socket.on('slots_updated', handleSlotsUpdated);
 
     return () => {
       socket.off('connect', joinCurrentRoom);
       socket.off('room_users', handleRoomUsers);
       socket.off('new_transcript', handleNewTranscript);
       socket.off('speaker_active', handleSpeakerActive);
+      socket.off('slots_updated', handleSlotsUpdated);
       socket.emit('leave_room', { roomId: currentRoomId });
       webrtcAudio.cleanup();
     };
@@ -540,6 +535,11 @@ function GDAppContent() {
 
     sessionQuestionTracker.clear();
     setAvailableSlots((prev) => [...newSessions, ...prev]);
+
+    try {
+      const socket = getSocket();
+      socket.emit('create_sessions', { slots: newSessions });
+    } catch {}
 
     const activeNewSession = { ...newSessions[0], status: 'active' as const };
     setSession(activeNewSession);

@@ -136,16 +136,126 @@ interface BackendSession {
 
 const DEFAULT_STUDENTS: BackendStudent[] = [];
 
+const DEFAULT_SERVER_SLOTS = [
+  {
+    id: 'slot-genai-1',
+    slotName: 'Slot 1 - Morning Batch',
+    slotTiming: '10:00 AM - 10:30 AM',
+    slotDate: 'Today',
+    enrolledCount: 3,
+    maxCapacity: 15,
+    roomLayout: 'round_table',
+    topic: 'Impact of Generative AI on Tech Hiring & Software Engineering',
+    description: 'Autonomous AI evaluation of technical argumentation, structured thinking, and empathy.',
+    allottedFaculty: 'Dr. Sunita Rao (Department)',
+    durationMinutes: 25,
+    difficulty: 'Intermediate',
+    assessmentRubric: 'Standard Academic 7-Parameter Rubric (English, Fluency, Clarity, Confidence, Content, Collaboration, Leadership)',
+    status: 'active',
+    students: [],
+    currentPhase: 'intro',
+    facilitatorSpeech: 'Welcome participants. Today we analyze how generative AI is shifting tech talent evaluation from syntax memorization to architectural thinking. The floor is open.',
+    facilitatorAction: 'Monitoring participation balance and encouraging critical examples.',
+    isFacilitatorSpeaking: false,
+    silenceTimerSeconds: 0,
+    currentSpeakerId: null,
+    breakoutRooms: [],
+    createdAt: new Date().toISOString(),
+    startedAt: Date.now(),
+  },
+  {
+    id: 'slot-genai-2',
+    slotName: 'Slot 2 - Afternoon Batch',
+    slotTiming: '02:30 PM - 03:00 PM',
+    slotDate: 'Today',
+    enrolledCount: 4,
+    maxCapacity: 15,
+    roomLayout: 'round_table',
+    topic: 'Impact of Generative AI on Tech Hiring & Software Engineering',
+    description: 'Autonomous AI evaluation of technical argumentation, structured thinking, and empathy.',
+    allottedFaculty: 'Dr. Sunita Rao (Department)',
+    durationMinutes: 25,
+    difficulty: 'Intermediate',
+    assessmentRubric: 'Standard Academic 7-Parameter Rubric',
+    status: 'scheduled',
+    students: [],
+    currentPhase: 'intro',
+    facilitatorSpeech: 'Welcome to Slot 2. We will begin our discussion momentarily.',
+    facilitatorAction: 'Session scheduled for afternoon batch',
+    isFacilitatorSpeaking: false,
+    silenceTimerSeconds: 0,
+    currentSpeakerId: null,
+    breakoutRooms: [],
+    createdAt: new Date().toISOString(),
+    startedAt: Date.now(),
+  },
+  {
+    id: 'slot-teachers-1',
+    slotName: 'Slot 1 - Morning Batch',
+    slotTiming: '11:30 AM - 12:00 PM',
+    slotDate: 'Today',
+    enrolledCount: 2,
+    maxCapacity: 15,
+    roomLayout: 'round_table',
+    topic: 'Should Artificial Intelligence replace teachers in Higher Education?',
+    description: 'Debating cognitive personalization algorithms versus empathetic educator mentoring in higher technical education.',
+    allottedFaculty: 'Prof. Rajesh Verma (Department)',
+    durationMinutes: 25,
+    difficulty: 'Intermediate',
+    assessmentRubric: 'Standard Academic 7-Parameter Rubric',
+    status: 'scheduled',
+    students: [],
+    currentPhase: 'intro',
+    facilitatorSpeech: 'Good morning participants. Today we debate whether AI can substitute teachers in higher education. Please maintain decorum.',
+    facilitatorAction: 'Waiting for room start',
+    isFacilitatorSpeaking: false,
+    silenceTimerSeconds: 0,
+    currentSpeakerId: null,
+    breakoutRooms: [],
+    createdAt: new Date().toISOString(),
+    startedAt: Date.now(),
+  },
+  {
+    id: 'slot-ev-1',
+    slotName: 'Slot 1 - Evening Batch',
+    slotTiming: '04:30 PM - 05:00 PM',
+    slotDate: 'Today',
+    enrolledCount: 1,
+    maxCapacity: 15,
+    roomLayout: 'round_table',
+    topic: 'Electric Vehicles vs Hydrogen Fuel Cells: The Future of Mobility',
+    description: 'Analyzing battery infrastructure, environmental life-cycle emissions, and commercial feasibility in Indian logistics.',
+    allottedFaculty: 'Dr. Ananya Sen (Department)',
+    durationMinutes: 25,
+    difficulty: 'Advanced',
+    assessmentRubric: 'Standard Academic 7-Parameter Rubric',
+    status: 'scheduled',
+    students: [],
+    currentPhase: 'intro',
+    facilitatorSpeech: 'Welcome to the Future of Mobility debate. Which powertrain offers the most viable path to zero emissions?',
+    facilitatorAction: 'Session scheduled for evening batch',
+    isFacilitatorSpeaking: false,
+    silenceTimerSeconds: 0,
+    currentSpeakerId: null,
+    breakoutRooms: [],
+    createdAt: new Date().toISOString(),
+    startedAt: Date.now(),
+  },
+];
+
+let serverSlots: any[] = [...DEFAULT_SERVER_SLOTS];
+let ioInstance: any = null;
+
 let currentLiveSession: BackendSession = {
   id: 'session-101',
-  topic: 'Should Artificial Intelligence replace teachers in higher education?',
-  description: 'Evaluating adaptive AI tutoring algorithms vs. human mentorship, critical thinking pedagogy, and ethical holistic development.',
-  durationMinutes: 20,
+  topic: 'Impact of Generative AI on Tech Hiring & Software Engineering',
+  description: 'Autonomous AI evaluation of technical argumentation, structured thinking, and empathy.',
+  durationMinutes: 25,
   difficulty: 'Intermediate',
   assessmentRubric: 'Standard Academic 7-Parameter Rubric',
   status: 'active',
   currentPhase: 'active_discussion',
-  facilitatorSpeech: 'Welcome everyone. We are debating whether AI should replace teachers in higher education. Please maintain decorum and support points with facts.',
+  facilitatorSpeech: 'Welcome participants. Today we analyze how generative AI is shifting tech talent evaluation from syntax memorization to architectural thinking. The floor is open.',
   facilitatorAction: 'Moderating discussion flow',
   isFacilitatorSpeaking: false,
   silenceTimerSeconds: 0,
@@ -166,6 +276,31 @@ app.get('/api/health', (req, res) => {
     hasGeminiKey: !!process.env.GEMINI_API_KEY,
     activeSessionId: currentLiveSession.id,
     participants: currentLiveSession.students.length,
+  });
+});
+
+// Endpoint: GET All Available Slots (Canonical Source of Truth for all devices)
+app.get('/api/slots', (req, res) => {
+  res.json({
+    success: true,
+    count: serverSlots.length,
+    slots: serverSlots,
+  });
+});
+
+// Endpoint: POST Create / Add New Slots
+app.post('/api/slots', (req, res) => {
+  const { newSlots } = req.body;
+  if (Array.isArray(newSlots) && newSlots.length > 0) {
+    serverSlots = [...newSlots, ...serverSlots];
+    if (ioInstance) {
+      ioInstance.emit('slots_updated', serverSlots);
+    }
+  }
+  res.json({
+    success: true,
+    count: serverSlots.length,
+    slots: serverSlots,
   });
 });
 
@@ -904,9 +1039,21 @@ async function setupVite() {
       methods: ['GET', 'POST'],
     },
   });
+  ioInstance = io;
 
   io.on('connection', (socket) => {
     console.log(`[Socket.IO] Client connected: ${socket.id}`);
+
+    // Synchronize available slots with the newly connected client
+    socket.emit('slots_updated', serverSlots);
+
+    // Faculty session creation sync across entire institution
+    socket.on('create_sessions', (data: { slots: any[] }) => {
+      if (data && Array.isArray(data.slots) && data.slots.length > 0) {
+        serverSlots = [...data.slots, ...serverSlots];
+        io.emit('slots_updated', serverSlots);
+      }
+    });
 
     // 1. Join Room: Ensure all users join the exact SAME room
     const handleJoin = (data: { roomId?: string; user?: any }) => {
