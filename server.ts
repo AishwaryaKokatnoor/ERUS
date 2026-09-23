@@ -1062,6 +1062,16 @@ async function setupVite() {
       }
     });
 
+    // 6b. WebRTC Peer-to-Peer Audio Signaling Relay
+    socket.on('webrtc_signal', (data: { targetSocketId: string; signal: any; type: string }) => {
+      if (!data || !data.targetSocketId) return;
+      io.to(data.targetSocketId).emit('webrtc_signal', {
+        senderSocketId: socket.id,
+        signal: data.signal,
+        type: data.type,
+      });
+    });
+
     // 7. Facilitator Speech Broadcast
     socket.on('facilitator_speak', (data: { roomId: string; transcript: any; speech: string; actionType?: string; phase?: string }) => {
       const roomId = normalizeRoomId(data?.roomId);

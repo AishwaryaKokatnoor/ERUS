@@ -22,7 +22,8 @@ import {
   generateStudentReport,
   generateSlotParticipants 
 } from './data/mockGDData';
-import { facilitatorVoice } from './utils/speechSynthesis';
+import { facilitatorVoice, roomVoice } from './utils/speechSynthesis';
+import { webrtcAudio } from './utils/webrtcAudio';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { getNextUniqueFacilitatorPrompt, sessionQuestionTracker } from './utils/facilitatorQuestionEngine';
 import { getSocket } from './utils/socket';
@@ -150,6 +151,7 @@ function GDAppContent() {
           role: currentUser.role,
         },
       });
+      webrtcAudio.initialize(socket, currentRoomId, currentUser.id);
     };
 
     if (socket.connected) {
@@ -164,6 +166,7 @@ function GDAppContent() {
     const handleRoomUsers = (participants: any[]) => {
       if (!Array.isArray(participants)) return;
       console.log(`[Socket.IO Room] Live users in room "${currentRoomId}":`, participants);
+      webrtcAudio.syncRoomParticipants(participants);
 
       const realStudents: Student[] = participants
         .filter((p) => p.role !== 'faculty')
@@ -219,6 +222,21 @@ function GDAppContent() {
         if (prev.some((t) => t.id === entry.id)) return prev;
         return [...prev, entry];
       });
+
+      // Voice incoming peer transcript if live WebRTC audio is not already playing for this peer
+      if (!entry.isFacilitator && entry.speakerId && entry.speakerId !== currentUser?.id) {
+        if (!webrtcAudio.isPeerAudioActive(entry.speakerId)) {
+          setSession((prev) => {
+            const peerStudent = prev.students.find(
+              (s) => s.id === entry.speakerId || s.name === entry.speakerName
+            );
+            if (peerStudent) {
+              roomVoice.speakAsStudent(peerStudent, entry.text);
+            }
+            return prev;
+          });
+        }
+      }
     };
 
     // Synchronize current speaker
@@ -239,6 +257,7 @@ function GDAppContent() {
       socket.off('new_transcript', handleNewTranscript);
       socket.off('speaker_active', handleSpeakerActive);
       socket.emit('leave_room', { roomId: currentRoomId });
+      webrtcAudio.cleanup();
     };
   }, [currentUser, session.id]);
 
@@ -305,6 +324,8 @@ function GDAppContent() {
   // Sync voice engine mute state
   useEffect(() => {
     facilitatorVoice.setMuted(voiceMuted);
+    roomVoice.setMuted(voiceMuted);
+    webrtcAudio.setMuted(voiceMuted);
   }, [voiceMuted]);
 
   // Main session elapsed timer & silence deadlock tracker

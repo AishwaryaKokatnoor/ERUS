@@ -39,6 +39,7 @@ import { useUserMedia } from '../../utils/useUserMedia';
 import { getNextUniqueFacilitatorPrompt, sessionQuestionTracker } from '../../utils/facilitatorQuestionEngine';
 import { SlotSelectionModal } from './SlotSelectionModal';
 import { getSocket } from '../../utils/socket';
+import { webrtcAudio } from '../../utils/webrtcAudio';
 
 interface RealisticGDRoomProps {
   session: GDSession;
@@ -246,13 +247,22 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
           // Mark speaker active on floor
           if (!isFaculty) {
+            const userStudentObj = session.students.find((s) => s.isUser);
+            const currentUserId = userStudentObj?.id || 's1';
             setSession((prev) => ({
               ...prev,
-              currentSpeakerId: prev.students.find((s) => s.isUser)?.id || 's1',
+              currentSpeakerId: currentUserId,
               students: prev.students.map((s) =>
                 s.isUser ? { ...s, isSpeaking: true, micActive: true } : s
               ),
             }));
+            try {
+              const socket = getSocket();
+              socket.emit('speaker_active', {
+                roomId: session.id,
+                speakerId: currentUserId,
+              });
+            } catch {}
           }
 
           // Reset silence pause timer on each spoken token
@@ -276,6 +286,15 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           setIsListeningMic(false);
           isListeningMicRef.current = false;
           stopAudioAnalyser();
+          webrtcAudio.disableMicrophone();
+          try {
+            const socket = getSocket();
+            socket.emit('media_toggle', {
+              roomId: session.id,
+              studentId: session.students.find((s) => s.isUser)?.id || 's1',
+              micActive: false,
+            });
+          } catch {}
           if (!isFaculty) {
             setSession((prev) => ({
               ...prev,
@@ -297,6 +316,15 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           setIsListeningMic(false);
           isListeningMicRef.current = false;
           stopAudioAnalyser();
+          webrtcAudio.disableMicrophone();
+          try {
+            const socket = getSocket();
+            socket.emit('media_toggle', {
+              roomId: session.id,
+              studentId: session.students.find((s) => s.isUser)?.id || 's1',
+              micActive: false,
+            });
+          } catch {}
           if (!isFaculty) {
             setSession((prev) => ({
               ...prev,
@@ -306,6 +334,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         };
 
         recognitionRef.current = recognition;
+
+        return () => {
+          try {
+            recognition.stop();
+          } catch {}
+          webrtcAudio.disableMicrophone();
+        };
       }
     }
   }, [isFaculty, stopAudioAnalyser]);
@@ -335,6 +370,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       }
       setIsListeningMic(false);
       stopAudioAnalyser();
+      webrtcAudio.disableMicrophone();
+
+      try {
+        const socket = getSocket();
+        socket.emit('media_toggle', {
+          roomId: session.id,
+          studentId: session.students.find((s) => s.isUser)?.id || 's1',
+          micActive: false,
+        });
+      } catch {}
+
       if (!isFaculty) {
         setSession((prev) => ({
           ...prev,
@@ -349,6 +395,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         recognitionRef.current.start();
         setIsListeningMic(true);
         startAudioAnalyser();
+        webrtcAudio.enableMicrophone().catch(console.warn);
+
+        try {
+          const socket = getSocket();
+          socket.emit('media_toggle', {
+            roomId: session.id,
+            studentId: session.students.find((s) => s.isUser)?.id || 's1',
+            micActive: true,
+          });
+        } catch {}
+
         if (!isFaculty) {
           setSession((prev) => ({
             ...prev,
