@@ -3,6 +3,9 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// Disable automatic index building globally to prevent WiredTiger disk space threshold errors (code 14031) on limited-volume deployments
+mongoose.set('autoIndex', false);
+
 // =========================================================================
 // MONGODB CONNECTION
 // =========================================================================
@@ -93,7 +96,7 @@ const CollegeSchema = new Schema<ICollege>(
     adminEmail: { type: String, default: '' },
     adminName: { type: String, default: '' },
   },
-  { timestamps: true, collection: 'colleges' }
+  { timestamps: true, collection: 'colleges', autoIndex: false }
 );
 
 export const CollegeModel: Model<ICollege> =
@@ -165,7 +168,7 @@ const UserSchema = new Schema<IUser>(
       department: { type: String, default: 'Academic Administration' },
     },
   },
-  { timestamps: true, collection: 'users' }
+  { timestamps: true, collection: 'users', autoIndex: false }
 );
 
 export const UserModel: Model<IUser> =
@@ -236,7 +239,7 @@ const GDSessionSchema = new Schema<IGDSession>(
     currentSpeakerId: { type: String, default: null },
     startedAt: { type: Number, default: Date.now },
   },
-  { timestamps: true, collection: 'gd_sessions' }
+  { timestamps: true, collection: 'gd_sessions', autoIndex: false }
 );
 
 export const GDSessionModel: Model<IGDSession> =
@@ -274,11 +277,8 @@ const TranscriptEntrySchema = new Schema<ITranscriptEntry>(
     type: { type: String, default: 'statement' },
     sentiment: { type: String, default: 'neutral' },
   },
-  { timestamps: true, collection: 'gd_transcripts' }
+  { timestamps: true, collection: 'gd_transcripts', autoIndex: false }
 );
-
-// Compound index for fast sub-table lookups by session and timestamp
-TranscriptEntrySchema.index({ sessionId: 1, timestampSeconds: 1 });
 
 export const TranscriptEntryModel: Model<ITranscriptEntry> =
   mongoose.models.TranscriptEntry ||
@@ -313,11 +313,8 @@ const AssessmentReportSchema = new Schema<IAssessmentReport>(
     strengths: { type: [String], default: [] },
     improvements: { type: [String], default: [] },
   },
-  { timestamps: true, collection: 'assessment_reports' }
+  { timestamps: true, collection: 'assessment_reports', autoIndex: false }
 );
-
-// Compound unique index: one report per student per session
-AssessmentReportSchema.index({ sessionId: 1, studentId: 1 }, { unique: true });
 
 export const AssessmentReportModel: Model<IAssessmentReport> =
   mongoose.models.AssessmentReport ||
@@ -351,11 +348,8 @@ const GDBookingSchema = new Schema<IGDBooking>(
     },
     bookedAt: { type: Date, default: Date.now },
   },
-  { timestamps: true, collection: 'gd_bookings' }
+  { timestamps: true, collection: 'gd_bookings', autoIndex: false }
 );
-
-// Compound unique index: student can book a session once
-GDBookingSchema.index({ sessionId: 1, studentId: 1 }, { unique: true });
 
 export const GDBookingModel: Model<IGDBooking> =
   mongoose.models.GDBooking || mongoose.model<IGDBooking>('GDBooking', GDBookingSchema);
@@ -381,15 +375,7 @@ export async function initMongoDBTablesAndSubTables(): Promise<void> {
   console.log('[MongoDB] ==========================================\n');
 
   try {
-    // 1. Ensure Collections & Indexes Exist (non-blocking)
-    await CollegeModel.createIndexes().catch(() => null);
-    await UserModel.createIndexes().catch(() => null);
-    await GDSessionModel.createIndexes().catch(() => null);
-    await TranscriptEntryModel.createIndexes().catch(() => null);
-    await AssessmentReportModel.createIndexes().catch(() => null);
-    await GDBookingModel.createIndexes().catch(() => null);
-
-    // 2. Seed Default Colleges (Parent Table)
+    // 1. Seed Default Colleges (Parent Table)
     const collegeCount = await CollegeModel.countDocuments();
     if (collegeCount === 0) {
       console.log('[MongoDB] Seeding Primary Table: colleges...');
