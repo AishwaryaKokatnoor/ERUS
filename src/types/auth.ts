@@ -1,4 +1,4 @@
-export type UserRole = 'student' | 'faculty';
+export type UserRole = 'student' | 'faculty' | 'college_admin' | 'super_admin';
 
 export interface BaseUser {
   id: string;
@@ -7,6 +7,8 @@ export interface BaseUser {
   role: UserRole;
   avatar?: string;
   college: string;
+  collegeId?: string;
+  collegeCode?: string;
 }
 
 export interface StudentUser extends BaseUser {
@@ -15,6 +17,7 @@ export interface StudentUser extends BaseUser {
   course: string;
   batch: string;
   seatNumber: number;
+  bookedSlotId?: string;
 }
 
 export interface FacultyUser extends BaseUser {
@@ -24,4 +27,33 @@ export interface FacultyUser extends BaseUser {
   designation: string;
 }
 
-export type AuthUser = StudentUser | FacultyUser;
+export interface CollegeAdminUser extends BaseUser {
+  role: 'college_admin';
+  adminId: string;
+  department: string;
+  collegeCode: string;
+}
+
+export interface SuperAdminUser extends BaseUser {
+  role: 'super_admin';
+  accessLevel: 'root';
+}
+
+export type AuthUser = StudentUser | FacultyUser | CollegeAdminUser | SuperAdminUser;
+
+export interface CollegeInfo {
+  id: string;
+  name: string;
+  code: string;
+  contactEmail: string;
+  phone?: string;
+  address?: string;
+  status: 'active' | 'trial' | 'suspended';
+  studentCount?: number;
+  facultyCount?: number;
+  slotCount?: number;
+  adminEmail?: string;
+  adminName?: string;
+  createdAt: string;
+}
+

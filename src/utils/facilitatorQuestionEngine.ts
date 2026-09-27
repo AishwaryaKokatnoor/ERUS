@@ -246,3 +246,265 @@ export function getNextUniqueFacilitatorPrompt(
     actionType: 'probing_question',
   };
 }
+
+// ==========================================
+// CANDIDATE PREVIOUS PRESENTATION MAPPINGS & INITIATION ENGINE
+// ==========================================
+
+export interface PreviousPresentationData {
+  topic: string;
+  keyInsight: string;
+}
+
+export const KNOWN_PREVIOUS_PRESENTATIONS: Record<string, PreviousPresentationData> = {
+  'rahul kumar': {
+    topic: 'Sustainable Cloud Computing and Green Datacenters',
+    keyInsight: 'balancing computational scalability with energy efficiency and algorithmic ethics',
+  },
+  'priya sharma': {
+    topic: 'Enterprise Data Privacy and Zero-Trust Distributed Systems',
+    keyInsight: 'safeguarding consumer confidentiality in cloud-native microservices',
+  },
+  'ramesh patel': {
+    topic: 'IoT Sensor Networks and Edge Hardware Acceleration',
+    keyInsight: 'practical hardware deployment constraints in semi-urban and industrial networks',
+  },
+  'sneha reddy': {
+    topic: 'Predictive Machine Learning and Algorithmic Bias Mitigation',
+    keyInsight: 'demographic parity and representation in automated training datasets',
+  },
+  'vikram joshi': {
+    topic: 'Industrial Robotics and Automated Operational Safety Standards',
+    keyInsight: 'risk-managed physical deployment and regulatory compliance in automated environments',
+  },
+  'ananya verma': {
+    topic: 'Large Language Models and Multilingual Natural Language Processing',
+    keyInsight: 'bridging vernacular linguistic divides through generative NLP',
+  },
+  'rohan gupta': {
+    topic: 'Next-Gen Cybersecurity and Autonomous Threat Detection',
+    keyInsight: 'adversarial robustness and proactive perimeter monitoring',
+  },
+  'meera iyer': {
+    topic: 'Bioinformatics and Ethical Governance in Healthcare Technology',
+    keyInsight: 'patient data sovereignty and clinical precision diagnostics',
+  },
+  'kavita nair': {
+    topic: 'Smart Urban Infrastructure and Sustainable Lifecycle Architecture',
+    keyInsight: 'environmental resiliency and civic technology adoption',
+  },
+  'divya balaji': {
+    topic: 'Decentralized Consensus Protocols and FinTech Trust Networks',
+    keyInsight: 'transactional integrity and automated audit transparency',
+  },
+  'tanmay kulkarni': {
+    topic: 'Thermodynamics Modeling and Computational Fluid Dynamics',
+    keyInsight: 'computational simulations versus physical empirical verification',
+  },
+  'ritu sengupta': {
+    topic: 'User Experience Optimization in Mission-Critical Systems',
+    keyInsight: 'intuitive interface ergonomics and error reduction in high-stress workflows',
+  },
+  'varun mehta': {
+    topic: 'Autonomous Drone Navigation and Sensor Fusion',
+    keyInsight: 'real-time edge decision making under adverse network latency',
+  },
+  'pooja chawla': {
+    topic: 'Automated CI/CD Pipelines and Enterprise Software Quality Assurance',
+    keyInsight: 'continuous automated validation without compromising deployment agility',
+  },
+  'siddharth menon': {
+    topic: 'Quantum Computing Foundations and Post-Quantum Cryptography',
+    keyInsight: 'future-proofing secure encryption against next-generation compute paradigms',
+  },
+};
+
+/**
+ * Returns previous presentation data for any student, using known mapping or intelligent heuristic based on academic discipline
+ */
+export function getStudentPreviousPresentation(student: Student): PreviousPresentationData {
+  const nameKey = (student.name || '').toLowerCase().trim();
+  if (KNOWN_PREVIOUS_PRESENTATIONS[nameKey]) {
+    return KNOWN_PREVIOUS_PRESENTATIONS[nameKey];
+  }
+
+  // Fallback heuristic based on course/department or academic background
+  const course = (student.course || '').toLowerCase();
+  if (course.includes('data') || course.includes('ai') || course.includes('ml')) {
+    return {
+      topic: 'Predictive Analytics and Responsible Machine Learning',
+      keyInsight: 'model transparency, bias reduction, and algorithmic fairness',
+    };
+  }
+  if (course.includes('ece') || course.includes('electronics') || course.includes('hardware')) {
+    return {
+      topic: 'Edge Intelligence and Embedded Hardware Architectures',
+      keyInsight: 'processing constraints and real-time connectivity',
+    };
+  }
+  if (course.includes('it') || course.includes('cse') || course.includes('software')) {
+    return {
+      topic: 'Distributed Systems and Scalable Software Architectures',
+      keyInsight: 'system reliability, user data security, and latency optimization',
+    };
+  }
+  if (course.includes('mech') || course.includes('mechatronics')) {
+    return {
+      topic: 'Automated Robotics and Precision Engineering Frameworks',
+      keyInsight: 'physical feasibility and real-world industrial testing',
+    };
+  }
+  if (course.includes('bio') || course.includes('chem')) {
+    return {
+      topic: 'Biomedical Informatics and Healthcare Data Governance',
+      keyInsight: 'rigorous clinical validation and patient privacy ethics',
+    };
+  }
+  return {
+    topic: 'Emerging Technological Paradigms and Institutional Adaptation',
+    keyInsight: 'societal impact, economic feasibility, and structured implementation',
+  };
+}
+
+/**
+ * Generates an initiation prompt inviting a specific student based on their previous presentation when no one speaks after start
+ */
+export function generateInitiationPrompt(student: Student, sessionTopic: string): string {
+  const prev = getStudentPreviousPresentation(student);
+  const firstName = student.name.split(' ')[0];
+  const templates = [
+    `Since no one has opened the floor yet, let us invite ${student.name} from Seat ${student.seatNumber}. ${firstName}, based on your previous presentation on "${prev.topic}", could you kick off today's discussion on "${sessionTopic}" with your opening thoughts?`,
+    `As the floor is currently quiet, I would like to call upon ${student.name} at Seat ${student.seatNumber}. ${firstName}, drawing from your previous work regarding ${prev.keyInsight}, what are your opening thoughts on "${sessionTopic}"?`,
+    `Let us get the discussion underway. ${student.name} (Seat ${student.seatNumber}), considering your previous presentation examining "${prev.topic}", would you like to set the stage and initiate our perspectives today?`,
+  ];
+  return templates[Math.floor(Math.random() * templates.length)];
+}
+
+/**
+ * Generates a targeted question explicitly mentioning the candidate by name during mid-discussion pauses
+ */
+export function generateTargetedQuestionForStudent(
+  student: Student,
+  sessionTopic: string,
+  lastTranscript?: TranscriptEntry
+): string {
+  const firstName = student.name.split(' ')[0];
+  const prev = getStudentPreviousPresentation(student);
+
+  // Pick question bank based on topic keywords
+  const isAITopic = /ai|artificial intelligence|machine learning|teacher|education/i.test(sessionTopic);
+  const bank = isAITopic ? TOPIC_QUESTION_BANKS.ai_education : TOPIC_QUESTION_BANKS.general;
+
+  const sampleQuestions = [
+    ...bank.ethical,
+    ...bank.economic,
+    ...bank.humanExperience,
+    ...bank.implementation,
+    ...bank.devilAdvocate,
+  ];
+  const q = sampleQuestions[Math.floor(Math.random() * sampleQuestions.length)];
+
+  if (lastTranscript && !lastTranscript.isFacilitator) {
+    const templates = [
+      `${student.name} from Seat ${student.seatNumber}, building on what ${lastTranscript.speakerName} highlighted, how do you evaluate this? Specifically, ${q.replace(/^Let's examine |^How do we |^What happens to /, '')}`,
+      `${firstName}, we haven't heard your viewpoint on this angle yet. In light of ${lastTranscript.speakerName}'s remarks, ${q}`,
+      `${student.name}, as someone with research background in ${prev.keyInsight}, what is your take on this? ${q}`,
+    ];
+    return templates[Math.floor(Math.random() * templates.length)];
+  }
+
+  const templates = [
+    `${student.name} from Seat ${student.seatNumber}, we would like to hear your perspective on this. ${q}`,
+    `${firstName}, looking at this challenge through the lens of ${prev.topic}, how would you approach this?`,
+    `${student.name}, you haven't shared your perspective yet—what is your assessment regarding ${q.replace(/^Let's examine /, '')}?`,
+  ];
+  return templates[Math.floor(Math.random() * templates.length)];
+}
+
+/**
+ * Turn-taking logic: shifts to the candidate who hasn't spoken yet (speakingTurns === 0),
+ * or shifts to the next person in sequence with the lowest turn count.
+ */
+export function getNextTurnSpeaker(
+  students: Student[],
+  currentSpeakerId?: string | null
+): Student | undefined {
+  // Exclude current speaker and empty seats
+  const candidates = students.filter(
+    (s) => s.id !== currentSpeakerId && !s.isEmptySeat
+  );
+
+  if (candidates.length === 0) return undefined;
+
+  // 1. Priority: Find candidates who haven't spoken yet (speakingTurns === 0)
+  const unspoken = candidates.filter((s) => (s.speakingTurns || 0) === 0);
+  if (unspoken.length > 0) {
+    // Sort by seat number to maintain an orderly flow around the table
+    return unspoken.sort((a, b) => a.seatNumber - b.seatNumber)[0];
+  }
+
+  // 2. If all have spoken at least once: pick the student who spoke least
+  const sortedByTurns = candidates.slice().sort((a, b) => {
+    if (a.speakingTurns !== b.speakingTurns) {
+      return a.speakingTurns - b.speakingTurns;
+    }
+    return (a.speakingDurationSeconds || 0) - (b.speakingDurationSeconds || 0);
+  });
+
+  // If there are candidates tied for lowest turns, try to pick the next sequential seat after current speaker
+  const currentSpeaker = students.find((s) => s.id === currentSpeakerId);
+  if (currentSpeaker) {
+    const currentSeat = currentSpeaker.seatNumber || 1;
+    const nextInSequence = candidates
+      .filter((s) => s.seatNumber > currentSeat)
+      .sort((a, b) => a.seatNumber - b.seatNumber)[0];
+    if (nextInSequence && nextInSequence.speakingTurns <= sortedByTurns[0].speakingTurns + 1) {
+      return nextInSequence;
+    }
+  }
+
+  return sortedByTurns[0];
+}
+
+/**
+ * Generates initial opening statement for the student who was initiated by the AI facilitator
+ */
+export function generateStudentOpeningStatement(student: Student, sessionTopic: string): string {
+  const prev = getStudentPreviousPresentation(student);
+  const templates = [
+    `Thank you, Facilitator. To open today's discussion on "${sessionTopic}", drawing from my previous research on ${prev.topic}, I believe we must evaluate this through both technological feasibility and human accountability. In my previous work, I found that ${prev.keyInsight}, and that exact principle directly applies here.`,
+    `Thank you for giving me the floor to initiate. When examining "${sessionTopic}", my immediate perspective—informed by my previous presentation on ${prev.topic}—is that we cannot treat this as an all-or-nothing proposition. Instead, ${prev.keyInsight} must guide our implementation framework.`,
+    `I appreciate the opportunity to start off our group discussion. In my previous project on ${prev.topic}, we analyzed how ${prev.keyInsight}. Applying that to "${sessionTopic}", I would argue that our primary focus should be on practical sustainability and equitable access before scaling further.`,
+  ];
+  return templates[Math.floor(Math.random() * templates.length)];
+}
+
+/**
+ * Generates follow-up arguments or answers to targeted facilitator questions for subsequent speaking turns
+ */
+export function generateStudentFollowUpStatement(
+  student: Student,
+  sessionTopic: string,
+  previousSpeaker?: { name: string; text?: string },
+  questionAsked?: string
+): string {
+  const prev = getStudentPreviousPresentation(student);
+  const prevName = previousSpeaker?.name ? previousSpeaker.name.split(' ')[0] : 'the previous speaker';
+
+  if (questionAsked) {
+    const templates = [
+      `Addressing the facilitator's question directly: regarding ${prev.keyInsight}, I strongly believe we need clear benchmark criteria. While ${prevName} made valid points, we must ensure safeguards and quality checks are in place from day one.`,
+      `Thank you for that targeted question. Looking at this through the lens of ${prev.topic}, my perspective is that balancing cost, ethics, and scalability requires a structured multi-phase rollout rather than rushed deployment.`,
+      `In response to that question, I would emphasize that ${prev.keyInsight}. If we overlook the ground realities and operational hurdles, the entire initiative risks losing trust and efficacy.`,
+    ];
+    return templates[Math.floor(Math.random() * templates.length)];
+  }
+
+  const templates = [
+    `Building on what ${prevName} just articulated, I agree with that viewpoint, but I would like to introduce another critical dimension: ${prev.keyInsight}. In my previous analysis of ${prev.topic}, we saw that failing to account for this led to major bottlenecks.`,
+    `I would like to offer a constructive counter-perspective to ${prevName}'s argument. While that rationale works in ideal conditions, real-world deployment reveals that ${prev.keyInsight}. We must address these systemic constraints.`,
+    `Adding to the points discussed by ${prevName}, from my experience analyzing ${prev.topic}, the solution lies in combining automation with rigorous human oversight. That way, we maintain high standards without compromising ethical responsibility.`,
+    `I appreciate ${prevName}'s thoughts. From a practical standpoint, we must also consider how this impacts frontline practitioners. In my previous presentation on ${prev.topic}, evidence demonstrated that ${prev.keyInsight}.`,
+  ];
+  return templates[Math.floor(Math.random() * templates.length)];
+}

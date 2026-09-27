@@ -226,15 +226,18 @@ class RoomVoiceEngine {
 
       utterance.onend = () => {
         this.currentUtterance = null;
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('erus-ai-voice-end'));
         if (onEnd) onEnd();
       };
 
       utterance.onerror = () => {
         this.currentUtterance = null;
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('erus-ai-voice-end'));
         if (onEnd) onEnd();
       };
 
       this.currentUtterance = utterance;
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('erus-ai-voice-start'));
       window.speechSynthesis.speak(utterance);
     } catch (e) {
       console.warn('Facilitator voice synthesis error:', e);
@@ -275,35 +278,54 @@ class RoomVoiceEngine {
 
       const seatNum = student.seatNumber || (parseInt(student.id.replace(/\D/g, ''), 10) || 1);
 
-      if (isFemale) {
+      // Give every AI seat a stable, distinct voice when the browser exposes
+      // multiple English voices. The voice is derived from the seat, so the
+      // same participant keeps the same identity throughout the GD.
+      const indianVoices = this.getAvailableIndianVoices().filter((v) =>
+        (v.lang || '').toLowerCase().startsWith('en-in') ||
+        (v.lang || '').toLowerCase().startsWith('en')
+      );
+      const allEnglishVoices = this.getVoices().filter((v) =>
+        (v.lang || '').toLowerCase().startsWith('en')
+      );
+      const voicePool = indianVoices.length >= 2 ? indianVoices : allEnglishVoices;
+      if (voicePool.length > 0) {
+        utterance.voice = voicePool[(seatNum - 1) % voicePool.length];
+      } else if (isFemale) {
         const femaleVoice = this.getIndianFemaleVoice();
-        if (femaleVoice) {
-          utterance.voice = femaleVoice;
-        }
-        // Subtle pitch & rate modulation for varied Indian female student personas
-        utterance.pitch = 1.10 + ((seatNum % 3) * 0.05);
-        utterance.rate = 0.96 + ((seatNum % 2) * 0.03);
+        if (femaleVoice) utterance.voice = femaleVoice;
       } else {
         const maleVoice = this.getIndianMaleVoice();
-        if (maleVoice) {
-          utterance.voice = maleVoice;
-        }
-        // Subtle pitch & rate modulation for varied Indian male student personas
-        utterance.pitch = 0.88 + ((seatNum % 3) * 0.04);
-        utterance.rate = 0.95 + ((seatNum % 2) * 0.03);
+        if (maleVoice) utterance.voice = maleVoice;
+      }
+
+      // Keep each seat recognisable even when the OS provides only one voice.
+      // Pitch/rate differences are intentionally subtle so speech remains natural.
+      if (isFemale) {
+        utterance.pitch = 1.02 + ((seatNum % 4) * 0.08);
+        utterance.rate = 0.93 + ((seatNum % 3) * 0.025);
+      } else {
+        utterance.pitch = 0.82 + ((seatNum % 4) * 0.07);
+        utterance.rate = 0.92 + ((seatNum % 3) * 0.025);
       }
 
       utterance.onend = () => {
         this.currentUtterance = null;
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('erus-ai-voice-end'));
         if (onEnd) onEnd();
       };
 
       utterance.onerror = () => {
         this.currentUtterance = null;
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('erus-ai-voice-end'));
         if (onEnd) onEnd();
       };
 
       this.currentUtterance = utterance;
+      // Tell the live GD room that an AI participant is now audible. This is
+      // required to pause human speech recognition and prevent AI audio from
+      // being captured as a human statement.
+      window.dispatchEvent(new CustomEvent('erus-ai-voice-start'));
       window.speechSynthesis.speak(utterance);
     } catch (e) {
       console.warn('Student voice synthesis error:', e);

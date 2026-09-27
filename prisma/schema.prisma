@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model College {
+  id           String      @id @default(cuid())
+  name         String
+  code         String      @unique // e.g. "DIT", "IITB"
+  contactEmail String
+  phone        String?
+  address      String?
+  status       String      @default("active") // "active" | "trial" | "suspended"
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  users        User[]
+  sessions     GDSession[]
+}
+
+model User {
+  id           String          @id @default(cuid())
+  email        String          @unique
+  passwordHash String
+  name         String
+  role         String          // "super_admin" | "college_admin" | "faculty" | "student"
+  college      String
+  collegeId    String?
+  avatar       String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  collegeOrg   College?        @relation(fields: [collegeId], references: [id], onDelete: SetNull)
+
+  studentProfile      StudentProfile?
+  facultyProfile      FacultyProfile?
+  collegeAdminProfile CollegeAdminProfile?
+  gdBookings          GDBooking[]
+}
+
+model CollegeAdminProfile {
+  id          String   @id @default(cuid())
+  adminId     String   @unique // e.g. CADM-DIT-001
+  department  String?  @default("Academic Administration")
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+}
+
+model StudentProfile {
+  id          String   @id @default(cuid())
+  studentId   String   @unique // e.g. STU-2022-041
+  course      String
+  batch       String
+  seatNumber  Int      @default(1)
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+}
+
+model FacultyProfile {
+  id          String   @id @default(cuid())
+  facultyId   String   @unique // e.g. FAC-CSE-102
+  department  String
+  designation String
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+}
+
+model GDSession {
+  id                  String            @id @default(cuid())
+  topic               String
+  description         String?
+  durationMinutes     Int               @default(15)
+  difficulty          String            @default("Intermediate")
+  status              String            @default("active") // "scheduled" | "active" | "completed"
+  scheduledTime       String?
+  slotTiming          String?
+  slotName            String?
+  maxCapacity         Int               @default(15)
+  enrolledCount       Int               @default(0)
+  assignedFacultyId   String?
+  assignedFacultyName String?
+  collegeId           String?
+  college             College?          @relation(fields: [collegeId], references: [id], onDelete: SetNull)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  transcripts         TranscriptEntry[]
+  reports             AssessmentReport[]
+  bookings            GDBooking[]
+}
+
+model TranscriptEntry {
+  id               String    @id @default(cuid())
+  sessionId        String
+  speakerId        String
+  speakerName      String
+  seatNumber       Int?
+  isFacilitator    Boolean   @default(false)
+  timestamp        String
+  timestampSeconds Int       @default(0)
+  text             String
+  type             String    @default("statement")
+  sentiment        String    @default("positive")
+  createdAt        DateTime  @default(now())
+
+  session          GDSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
+model AssessmentReport {
+  id             String    @id @default(cuid())
+  sessionId      String
+  studentId      String
+  overallScore   Int       @default(80)
+  rubricJson     String
+  feedback       String
+  strengths      String?
+  improvements   String?
+  createdAt      DateTime  @default(now())
+
+  session        GDSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
+
+model GDBooking {
+  id          String    @id @default(cuid())
+  sessionId   String
+  studentId   String
+  status      String    @default("BOOKED") // BOOKED | LIVE | COMPLETED | CANCELLED
+  bookedAt    DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  session     GDSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student     User      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, studentId])
+  @@index([studentId])
+  @@index([sessionId])
+}
