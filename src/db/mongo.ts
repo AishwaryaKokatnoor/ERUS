@@ -25,6 +25,7 @@ export async function connectMongoDB(): Promise<boolean> {
     await mongoose.connect(MONGODB_URI, {
       serverSelectionTimeoutMS: 5000,
       connectTimeoutMS: 10000,
+      autoIndex: false,
     });
     isConnected = true;
     console.log(`[MongoDB] Successfully connected to MongoDB (database: ${mongoose.connection.name || 'erus'})`);
@@ -380,13 +381,13 @@ export async function initMongoDBTablesAndSubTables(): Promise<void> {
   console.log('[MongoDB] ==========================================\n');
 
   try {
-    // 1. Ensure Collections & Indexes Exist
-    await CollegeModel.createIndexes();
-    await UserModel.createIndexes();
-    await GDSessionModel.createIndexes();
-    await TranscriptEntryModel.createIndexes();
-    await AssessmentReportModel.createIndexes();
-    await GDBookingModel.createIndexes();
+    // 1. Ensure Collections & Indexes Exist (non-blocking)
+    await CollegeModel.createIndexes().catch(() => null);
+    await UserModel.createIndexes().catch(() => null);
+    await GDSessionModel.createIndexes().catch(() => null);
+    await TranscriptEntryModel.createIndexes().catch(() => null);
+    await AssessmentReportModel.createIndexes().catch(() => null);
+    await GDBookingModel.createIndexes().catch(() => null);
 
     // 2. Seed Default Colleges (Parent Table)
     const collegeCount = await CollegeModel.countDocuments();
