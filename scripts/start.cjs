@@ -4,8 +4,10 @@ const path = require('path');
 
 console.log('[Startup] Checking database configuration...');
 
-if (process.env.MONGODB_URI) {
-  console.log('[Startup] MONGODB_URI detected:', process.env.MONGODB_URI);
+const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URL || process.env.MONGODB_URL;
+if (mongoUri) {
+  const masked = mongoUri.includes('@') ? mongoUri.replace(/:([^:@]+)@/, ':****@') : mongoUri;
+  console.log('[Startup] MongoDB connection string detected:', masked);
 } else if (process.env.DATABASE_URL) {
   console.log('[Startup] DATABASE_URL detected. Synchronizing Prisma schema with PostgreSQL...');
   try {

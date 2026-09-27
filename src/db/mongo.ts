@@ -6,7 +6,11 @@ dotenv.config();
 // =========================================================================
 // MONGODB CONNECTION
 // =========================================================================
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/erus';
+const MONGODB_URI =
+  process.env.MONGODB_URI ||
+  process.env.MONGO_URL ||
+  process.env.MONGODB_URL ||
+  'mongodb://127.0.0.1:27017/erus';
 
 let isConnected = false;
 
@@ -14,26 +18,35 @@ export async function connectMongoDB(): Promise<boolean> {
   if (isConnected) return true;
 
   try {
-    console.log(`[MongoDB] Connecting to database at ${MONGODB_URI}...`);
+    const maskedUri = MONGODB_URI.includes('@')
+      ? MONGODB_URI.replace(/:([^:@]+)@/, ':****@')
+      : MONGODB_URI;
+    console.log(`[MongoDB] Connecting to database at ${maskedUri}...`);
     await mongoose.connect(MONGODB_URI, {
       serverSelectionTimeoutMS: 5000,
       connectTimeoutMS: 10000,
     });
     isConnected = true;
-    console.log(`[MongoDB] Successfully connected to MongoDB on localhost:27017 (database: erus)`);
+    console.log(`[MongoDB] Successfully connected to MongoDB (database: ${mongoose.connection.name || 'erus'})`);
     return true;
   } catch (err: any) {
-    console.warn(`[MongoDB] Connection warning (${err.message}). Attempting fallback to 127.0.0.1...`);
-    try {
-      const fallbackUri = 'mongodb://127.0.0.1:27017/erus';
-      await mongoose.connect(fallbackUri, {
-        serverSelectionTimeoutMS: 5000,
-      });
-      isConnected = true;
-      console.log(`[MongoDB] Successfully connected to MongoDB via 127.0.0.1:27017`);
-      return true;
-    } catch (fallbackErr: any) {
-      console.error(`[MongoDB] Could not connect to MongoDB: ${fallbackErr.message}`);
+    if (MONGODB_URI.includes('localhost') || MONGODB_URI.includes('127.0.0.1')) {
+      console.warn(`[MongoDB] Local connection warning (${err.message}). Attempting fallback to 127.0.0.1...`);
+      try {
+        const fallbackUri = 'mongodb://127.0.0.1:27017/erus';
+        await mongoose.connect(fallbackUri, {
+          serverSelectionTimeoutMS: 5000,
+        });
+        isConnected = true;
+        console.log(`[MongoDB] Successfully connected to MongoDB via 127.0.0.1:27017`);
+        return true;
+      } catch (fallbackErr: any) {
+        console.warn(`[MongoDB] Could not connect to local MongoDB: ${fallbackErr.message}`);
+        isConnected = false;
+        return false;
+      }
+    } else {
+      console.warn(`[MongoDB] Remote MongoDB connection error: ${err.message}. Server will continue in resilient fallback mode.`);
       isConnected = false;
       return false;
     }
