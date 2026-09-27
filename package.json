@@ -14,7 +14,10 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test:backend": "node test-backend.mjs"
+    "test:backend": "node test-backend.mjs",
+    "test:mongo": "node scripts/test-mongo.mjs",
+    "seed:mongo": "tsx -e \"import { initMongoDBTablesAndSubTables } from './src/db/mongo.ts'; initMongoDBTablesAndSubTables().then(() => process.exit(0));\"",
+    "verify:mongo": "tsx scripts/verify-mongo-backend.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

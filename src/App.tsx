@@ -19,7 +19,7 @@ import {
   INITIAL_SESSION, 
   INITIAL_SLOTS, 
   INITIAL_TRANSCRIPTS, 
-  createDefaultAssessmentReport,
+  SAMPLE_REPORT_RAHUL,
   generateStudentReport,
   generateSlotParticipants 
 } from './data/mockGDData';
@@ -99,10 +99,8 @@ function GDAppContent() {
     const slots = loadInitialSlots();
     return slots[0] || INITIAL_SESSION;
   });
-  const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
-  const [activeReport, setActiveReport] = useState<StudentAssessmentReport>(() =>
-    createDefaultAssessmentReport()
-  );
+  const [transcripts, setTranscripts] = useState<TranscriptEntry[]>(INITIAL_TRANSCRIPTS);
+  const [activeReport, setActiveReport] = useState<StudentAssessmentReport>(SAMPLE_REPORT_RAHUL);
   const [viewingStudentId, setViewingStudentId] = useState<string | null>(null);
   const [voiceMuted, setVoiceMuted] = useState<boolean>(false);
   const [studentBookedSlotsByTopic, setStudentBookedSlotsByTopic] = useState<Record<string, string>>(() => {
@@ -157,17 +155,12 @@ function GDAppContent() {
     }
   }, [currentUser]);
 
-  // Fetch canonical slots from backend server on initial load
+  // Keep availableSlots persisted to localStorage
   useEffect(() => {
-    fetch('/api/slots')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && Array.isArray(data.slots) && data.slots.length > 0) {
-          setAvailableSlots(data.slots);
-        }
-      })
-      .catch((err) => console.warn('Could not fetch server slots:', err));
-  }, []);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(availableSlots));
+    } catch {}
+  }, [availableSlots]);
 
   // Keep live faculty observation notes synchronized into availableSlots
   useEffect(() => {
@@ -218,144 +211,6 @@ function GDAppContent() {
     setSession(INITIAL_SLOTS[0]);
     setElapsedSeconds(0);
   };
-
-  // Socket.IO Real-Time Room & Users Synchronization
-  useEffect(() => {
-    if (!currentUser) return;
-
-    const socket = getSocket();
-    const currentRoomId = session.id || 'slot-morning-1';
-
-    const joinCurrentRoom = () => {
-      socket.emit('join_room', {
-        roomId: currentRoomId,
-        user: {
-          id: currentUser.id,
-          name: currentUser.name,
-          college: currentUser.college,
-          course: currentUser.course,
-          batch: currentUser.batch,
-          role: currentUser.role,
-        },
-      });
-      webrtcAudio.initialize(socket, currentRoomId, currentUser.id);
-    };
-
-    if (socket.connected) {
-      joinCurrentRoom();
-    } else {
-      socket.connect();
-    }
-
-    socket.on('connect', joinCurrentRoom);
-
-    // Synchronize real-time participants (NO DUMMY USERS)
-    const handleRoomUsers = (participants: any[]) => {
-      if (!Array.isArray(participants)) return;
-      console.log(`[Socket.IO Room] Live users in room "${currentRoomId}":`, participants);
-      webrtcAudio.syncRoomParticipants(participants);
-
-      const realStudents: Student[] = participants
-        .filter((p) => p.role !== 'faculty')
-        .map((p, idx) => {
-          const isUser = currentUser.role !== 'faculty' && (
-            (currentUser.id && p.userId === currentUser.id) ||
-            (socket.id && p.socketId === socket.id) ||
-            p.name === currentUser.name
-          );
-
-          return {
-            id: p.userId || p.socketId,
-            name: p.name,
-            seatNumber: p.seatNumber || (idx + 1),
-            college: p.college || 'Engineering Institute',
-            course: p.course || 'B.Tech',
-            batch: p.batch || '2022-2026',
-            avatar: p.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(p.name)}`,
-            isUser,
-            micActive: !!p.micActive,
-            isSpeaking: !!p.isSpeaking,
-            hasRaisedHand: !!p.hasRaisedHand,
-            cameraActive: !!p.cameraActive,
-            speakingDurationSeconds: p.speakingDurationSeconds || 0,
-            speakingTurns: p.speakingTurns || 0,
-            interruptionCount: p.interruptionCount || 0,
-            questionsAnswered: p.questionsAnswered || 0,
-            questionsInitiated: p.questionsInitiated || 0,
-            sentiment: 'positive',
-          };
-        });
-
-      setSession((prev) => ({
-        ...prev,
-        students: realStudents,
-        enrolledCount: realStudents.length,
-      }));
-
-      // Update current slot enrolled count in availableSlots
-      setAvailableSlots((prevSlots) =>
-        prevSlots.map((slot) =>
-          slot.id === currentRoomId
-            ? { ...slot, enrolledCount: realStudents.length, students: realStudents }
-            : slot
-        )
-      );
-    };
-
-    // Synchronize incoming live transcripts from peers or AI
-    const handleNewTranscript = (entry: TranscriptEntry) => {
-      if (!entry) return;
-      setTranscripts((prev) => {
-        if (prev.some((t) => t.id === entry.id)) return prev;
-        return [...prev, entry];
-      });
-
-      // Voice incoming peer transcript if live WebRTC audio is not already playing for this peer
-      if (!entry.isFacilitator && entry.speakerId && entry.speakerId !== currentUser?.id) {
-        if (!webrtcAudio.isPeerAudioActive(entry.speakerId)) {
-          setSession((prev) => {
-            const peerStudent = prev.students.find(
-              (s) => s.id === entry.speakerId || s.name === entry.speakerName
-            );
-            if (peerStudent) {
-              roomVoice.speakAsStudent(peerStudent, entry.text);
-            }
-            return prev;
-          });
-        }
-      }
-    };
-
-    // Synchronize current speaker
-    const handleSpeakerActive = ({ speakerId }: { speakerId: string | null }) => {
-      setSession((prev) => ({
-        ...prev,
-        currentSpeakerId: speakerId,
-      }));
-    };
-
-    // Synchronize canonical discussion slots broadcast from server
-    const handleSlotsUpdated = (updatedSlots: GDSession[]) => {
-      if (Array.isArray(updatedSlots) && updatedSlots.length > 0) {
-        setAvailableSlots(updatedSlots);
-      }
-    };
-
-    socket.on('room_users', handleRoomUsers);
-    socket.on('new_transcript', handleNewTranscript);
-    socket.on('speaker_active', handleSpeakerActive);
-    socket.on('slots_updated', handleSlotsUpdated);
-
-    return () => {
-      socket.off('connect', joinCurrentRoom);
-      socket.off('room_users', handleRoomUsers);
-      socket.off('new_transcript', handleNewTranscript);
-      socket.off('speaker_active', handleSpeakerActive);
-      socket.off('slots_updated', handleSlotsUpdated);
-      socket.emit('leave_room', { roomId: currentRoomId });
-      webrtcAudio.cleanup();
-    };
-  }, [currentUser, session.id]);
 
   // Handle Login Event
   const handleLogin = (user: AuthUser) => {
@@ -503,8 +358,6 @@ function GDAppContent() {
   // Sync voice engine mute state
   useEffect(() => {
     facilitatorVoice.setMuted(voiceMuted);
-    roomVoice.setMuted(voiceMuted);
-    webrtcAudio.setMuted(voiceMuted);
   }, [voiceMuted]);
 
   // Stop any active AI speech when outside of the discussion room or when session is not actively ongoing
@@ -841,31 +694,32 @@ function GDAppContent() {
 
     const previousSlotId = session.id;
 
-    // Prepare student roster for target slot without dummy users
-    let updatedTargetStudents: Student[] = [];
+    // Build updated student roster for target slot with user at Seat 1
+    const targetStudents = targetSlot.students || [];
+    let updatedTargetStudents: Student[];
 
     if (currentUser && currentUser.role === 'student') {
-      const studentUserObj: Student = {
-        id: currentUser.id || 'slot-stu-1',
-        name: currentUser.name,
-        college: currentUser.college || 'Engineering Institute',
-        course: currentUser.course || 'B.Tech CSE',
-        batch: currentUser.batch || '2022-2026',
-        avatar: currentUser.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(currentUser.name)}`,
-        seatNumber: 1,
-        isUser: true,
-        micActive: false,
-        isSpeaking: false,
-        hasRaisedHand: false,
-        cameraActive: false,
-        speakingDurationSeconds: 0,
-        speakingTurns: 0,
-        interruptionCount: 0,
-        questionsAnswered: 0,
-        questionsInitiated: 0,
-        sentiment: 'positive',
-      };
-      updatedTargetStudents = [studentUserObj];
+      if (targetStudents.length > 0) {
+        updatedTargetStudents = targetStudents.map((s, idx) => ({
+          ...s,
+          isUser: idx === 0 || s.id === currentUser.id,
+          name: (idx === 0 || s.id === currentUser.id) ? currentUser.name : s.name,
+          college: (idx === 0 || s.id === currentUser.id) ? currentUser.college : s.college,
+          course: (idx === 0 || s.id === currentUser.id) ? currentUser.course : s.course,
+          batch: (idx === 0 || s.id === currentUser.id) ? currentUser.batch : s.batch,
+        }));
+      } else {
+        updatedTargetStudents = generateSlotParticipants(targetCurrentEnrolled + 1).map((s, idx) => ({
+          ...s,
+          isUser: idx === 0,
+          name: idx === 0 ? currentUser.name : s.name,
+          college: idx === 0 ? currentUser.college : s.college,
+          course: idx === 0 ? currentUser.course : s.course,
+          batch: idx === 0 ? currentUser.batch : s.batch,
+        }));
+      }
+    } else {
+      updatedTargetStudents = targetStudents.map((s) => ({ ...s, isUser: false }));
     }
 
     const isStudentUser = currentUser && currentUser.role === 'student';
@@ -930,7 +784,6 @@ function GDAppContent() {
       },
     ]);
     setElapsedSeconds(0);
-    setCurrentTab('room');
   };
 
   const handleCreateSessions = (newSessions: GDSession[]) => {
@@ -1166,7 +1019,7 @@ function GDAppContent() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col selection:bg-indigo-500 selection:text-white transition-colors duration-200">
+    <div className="min-h-screen bg-slate-100/70 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col selection:bg-indigo-500 selection:text-white transition-colors duration-200">
       
       {/* Top Main Navigation Header */}
       <Header
@@ -1303,21 +1156,6 @@ function GDAppContent() {
         onCreateSessions={handleCreateSessions}
         onCreateSession={handleCreateSession}
         collegeCode={currentUser?.role === 'college_admin' ? currentUser.collegeCode : undefined}
-      />
-
-      {/* Slot Selection Modal from Student Topics Portal */}
-      <SlotSelectionModal
-        isOpen={isSlotModalOpen}
-        onClose={() => setIsSlotModalOpen(false)}
-        availableSlots={availableSlots}
-        currentSlotId={session.id}
-        onSelectSlot={(slotId) => {
-          handleSelectSlot(slotId);
-          setIsSlotModalOpen(false);
-          setCurrentTab('room');
-        }}
-        onResetSlots={handleResetSlots}
-        initialTopic={selectedPortalTopic}
       />
 
     </div>

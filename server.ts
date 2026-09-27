@@ -9,6 +9,17 @@ import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import {
+  connectMongoDB,
+  initMongoDBTablesAndSubTables,
+  isMongoConnected,
+  CollegeModel,
+  UserModel,
+  GDSessionModel,
+  TranscriptEntryModel,
+  AssessmentReportModel,
+  GDBookingModel,
+} from './src/db/mongo.ts';
 
 dotenv.config();
 
@@ -320,6 +331,312 @@ function savePersistentState() {
 }
 
 loadPersistentState();
+
+// ==========================================
+// MONGODB CLIENT & TABLE / SUB-TABLE PERSISTENCE
+// ==========================================
+async function syncMongoDBWithPersistentState() {
+  if (!isMongoConnected()) return;
+  try {
+    const collegeCount = await CollegeModel.countDocuments();
+    if (collegeCount === 0) {
+      console.log('[MongoDB] Fresh database detected. Initializing tables & sub-tables...');
+      await initMongoDBTablesAndSubTables();
+    } else {
+      console.log('[MongoDB] Existing MongoDB records found. Hydrating state from MongoDB...');
+      const dbColleges = await CollegeModel.find();
+      if (dbColleges.length > 0) {
+        persistentState.colleges = dbColleges.map((c: any) => ({
+          id: c.id,
+          name: c.name,
+          code: c.code,
+          contactEmail: c.contactEmail,
+          phone: c.phone || '',
+          address: c.address || '',
+          status: c.status || 'active',
+          studentCount: c.studentCount || 0,
+          facultyCount: c.facultyCount || 0,
+          slotCount: c.slotCount || 0,
+          adminEmail: c.adminEmail || c.contactEmail,
+          adminName: c.adminName || `${c.code} Administrator`,
+          createdAt: c.createdAt ? new Date(c.createdAt).toISOString() : new Date().toISOString(),
+        }));
+      }
+
+      const dbUsers = await UserModel.find();
+      if (dbUsers.length > 0) {
+        for (const u of dbUsers) {
+          const existingIdx = persistentState.users.findIndex(
+            (pu) => pu.email.toLowerCase() === u.email.toLowerCase()
+          );
+          const mappedUser: StoredAuthUser = {
+            id: u.id,
+            name: u.name,
+            email: u.email,
+            role: u.role as any,
+            password: u.password,
+            college: u.college,
+            collegeCode: u.collegeCode,
+            avatar: u.avatar,
+            studentId: u.studentProfile?.studentId,
+            course: u.studentProfile?.course,
+            batch: u.studentProfile?.batch,
+            seatNumber: u.studentProfile?.seatNumber,
+            facultyId: u.facultyProfile?.facultyId,
+            department: u.facultyProfile?.department || u.collegeAdminProfile?.department,
+            designation: u.facultyProfile?.designation,
+            adminId: u.collegeAdminProfile?.adminId,
+          };
+          if (existingIdx >= 0) {
+            persistentState.users[existingIdx] = mappedUser;
+          } else {
+            persistentState.users.push(mappedUser);
+          }
+        }
+
+        // Hydrate students and faculty lists per college
+        for (const col of persistentState.colleges) {
+          const colStudents = persistentState.users
+            .filter((u) => u.role === 'student' && (u.collegeCode === col.code || u.college === col.name))
+            .map((u) => ({
+              id: u.id,
+              name: u.name,
+              email: u.email,
+              studentId: u.studentId || 'STU-001',
+              course: u.course || 'B.Tech CSE',
+              batch: u.batch || '2022-2026',
+              seatNumber: u.seatNumber || 1,
+              college: col.name,
+              collegeCode: col.code,
+            }));
+          if (colStudents.length > 0) persistentState.students[col.code] = colStudents;
+
+          const colFaculty = persistentState.users
+            .filter((u) => u.role === 'faculty' && (u.collegeCode === col.code || u.college === col.name))
+            .map((u) => ({
+              id: u.id,
+              name: u.name,
+              email: u.email,
+              facultyId: u.facultyId || 'FAC-001',
+              department: u.department || 'Computer Science & Engineering',
+              designation: u.designation || 'Faculty Member',
+              college: col.name,
+              collegeCode: col.code,
+              assignedSlotsCount: 0,
+            }));
+          if (colFaculty.length > 0) persistentState.faculty[col.code] = colFaculty;
+        }
+      }
+
+      // Hydrate Slots (Parent Table: gd_sessions)
+      const dbSessions = await GDSessionModel.find();
+      if (dbSessions.length > 0) {
+        for (const s of dbSessions) {
+          const colCode = s.collegeCode || 'DIT';
+          if (!persistentState.slots[colCode]) persistentState.slots[colCode] = [];
+          const slotItem: BackendCollegeSlotItem = {
+            id: s.id,
+            slotName: s.slotName,
+            topic: s.topic,
+            description: s.description || '',
+            slotTiming: s.slotTiming || '10:00 AM - 10:30 AM',
+            status: s.status,
+            durationMinutes: s.durationMinutes,
+            enrolledCount: s.enrolledCount,
+            maxCapacity: s.maxCapacity,
+            assignedFacultyId: s.assignedFacultyId,
+            assignedFacultyName: s.assignedFacultyName,
+            assignedFacultyEmail: s.assignedFacultyEmail,
+            assignedFacultyDept: s.assignedFacultyDept,
+            collegeCode: colCode,
+            createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString(),
+          };
+          const existingSlotIdx = persistentState.slots[colCode].findIndex((slot) => slot.id === s.id);
+          if (existingSlotIdx >= 0) {
+            persistentState.slots[colCode][existingSlotIdx] = slotItem;
+          } else {
+            persistentState.slots[colCode].push(slotItem);
+          }
+        }
+      }
+
+      // Hydrate Bookings (Sub-Table: gd_bookings)
+      const dbBookings = await GDBookingModel.find({ status: { $ne: 'CANCELLED' } });
+      for (const b of dbBookings) {
+        persistentState.studentBookings[b.studentId] = b.sessionId;
+      }
+
+      savePersistentState();
+      console.log(
+        `[MongoDB] Hydrated state from MongoDB: ${dbColleges.length} colleges, ${dbUsers.length} users, ${dbSessions.length} slots, ${dbBookings.length} active bookings.`
+      );
+    }
+  } catch (err: any) {
+    console.warn('[MongoDB] State sync warning:', err.message);
+  }
+}
+
+async function persistCollegeToMongoDB(col: BackendCollege) {
+  if (!isMongoConnected()) return;
+  try {
+    await CollegeModel.findOneAndUpdate(
+      { code: col.code },
+      {
+        id: col.id,
+        name: col.name,
+        code: col.code,
+        contactEmail: col.contactEmail,
+        phone: col.phone || '',
+        address: col.address || '',
+        status: col.status || 'active',
+        studentCount: col.studentCount || 0,
+        facultyCount: col.facultyCount || 0,
+        slotCount: col.slotCount || 0,
+        adminEmail: col.adminEmail || '',
+        adminName: col.adminName || '',
+      },
+      { upsert: true, new: true }
+    );
+  } catch (e: any) {
+    console.warn('[MongoDB] Save college error:', e.message);
+  }
+}
+
+async function persistUserToMongoDB(u: StoredAuthUser) {
+  if (!isMongoConnected()) return;
+  try {
+    await UserModel.findOneAndUpdate(
+      { email: u.email.toLowerCase() },
+      {
+        id: u.id,
+        name: u.name,
+        email: u.email.toLowerCase(),
+        password: u.password,
+        role: u.role,
+        college: u.college,
+        collegeCode: u.collegeCode || 'DIT',
+        avatar: u.avatar || '',
+        studentProfile:
+          u.role === 'student'
+            ? {
+                studentId: u.studentId || `STU-${Date.now().toString().slice(-4)}`,
+                course: u.course || 'B.Tech CSE',
+                batch: u.batch || '2022-2026',
+                seatNumber: u.seatNumber || 1,
+              }
+            : undefined,
+        facultyProfile:
+          u.role === 'faculty'
+            ? {
+                facultyId: u.facultyId || `FAC-${Date.now().toString().slice(-4)}`,
+                department: u.department || 'Department of Computer Science & Engineering',
+                designation: u.designation || 'Faculty Member',
+              }
+            : undefined,
+        collegeAdminProfile:
+          u.role === 'college_admin'
+            ? {
+                adminId: u.adminId || `CADM-${u.collegeCode || 'DIT'}-001`,
+                department: u.department || 'Academic Administration',
+              }
+            : undefined,
+      },
+      { upsert: true, new: true }
+    );
+  } catch (e: any) {
+    console.warn('[MongoDB] Save user error:', e.message);
+  }
+}
+
+async function persistSlotToMongoDB(slot: BackendCollegeSlotItem) {
+  if (!isMongoConnected()) return;
+  try {
+    await GDSessionModel.findOneAndUpdate(
+      { id: slot.id },
+      {
+        id: slot.id,
+        slotName: slot.slotName || slot.topic,
+        topic: slot.topic,
+        description: slot.description || '',
+        slotTiming: slot.slotTiming || '10:00 AM - 10:30 AM',
+        status: (slot.status as any) || 'scheduled',
+        durationMinutes: slot.durationMinutes || 25,
+        enrolledCount: slot.enrolledCount || 0,
+        maxCapacity: slot.maxCapacity || 15,
+        collegeCode: slot.collegeCode || 'DIT',
+        assignedFacultyId: slot.assignedFacultyId || '',
+        assignedFacultyName: slot.assignedFacultyName || '',
+        assignedFacultyEmail: slot.assignedFacultyEmail || '',
+        assignedFacultyDept: slot.assignedFacultyDept || '',
+      },
+      { upsert: true, new: true }
+    );
+  } catch (e: any) {
+    console.warn('[MongoDB] Save slot error:', e.message);
+  }
+}
+
+async function deleteSlotFromMongoDB(slotId: string) {
+  if (!isMongoConnected()) return;
+  try {
+    await GDSessionModel.deleteOne({ id: slotId });
+    await GDBookingModel.deleteMany({ sessionId: slotId });
+    await TranscriptEntryModel.deleteMany({ sessionId: slotId });
+    await AssessmentReportModel.deleteMany({ sessionId: slotId });
+  } catch (e: any) {
+    console.warn('[MongoDB] Delete slot error:', e.message);
+  }
+}
+
+async function persistBookingToMongoDB(
+  sessionId: string,
+  studentId: string,
+  status: 'BOOKED' | 'LIVE' | 'COMPLETED' | 'CANCELLED',
+  topic?: string
+) {
+  if (!isMongoConnected()) return;
+  try {
+    await GDBookingModel.findOneAndUpdate(
+      { sessionId, studentId },
+      {
+        id: `bk-${studentId}-${sessionId}`,
+        sessionId,
+        studentId,
+        topic: topic || '',
+        status,
+        bookedAt: new Date(),
+      },
+      { upsert: true, new: true }
+    );
+  } catch (e: any) {
+    console.warn('[MongoDB] Save booking error:', e.message);
+  }
+}
+
+async function persistTranscriptToMongoDB(t: BackendTranscript) {
+  if (!isMongoConnected()) return;
+  try {
+    await TranscriptEntryModel.findOneAndUpdate(
+      { id: t.id },
+      {
+        id: t.id,
+        sessionId: t.sessionId,
+        speakerId: t.speakerId,
+        speakerName: t.speakerName,
+        seatNumber: t.seatNumber ?? null,
+        isFacilitator: t.isFacilitator,
+        timestamp: t.timestamp,
+        timestampSeconds: t.timestampSeconds,
+        text: t.text,
+        type: t.type || 'statement',
+        sentiment: t.sentiment || 'neutral',
+      },
+      { upsert: true, new: true }
+    );
+  } catch (e: any) {
+    console.warn('[MongoDB] Save transcript error:', e.message);
+  }
+}
 
 // ==========================================
 // PRISMA POSTGRESQL CLIENT & DUAL-PERSISTENCE
@@ -651,6 +968,8 @@ app.post('/api/admin/colleges', async (req, res) => {
   persistentState.colleges = [newCol, ...persistentState.colleges.filter((c) => c.code !== cleanCode)];
   persistentState.users = [adminUser, ...persistentState.users.filter((u) => u.email.toLowerCase() !== adminUser.email.toLowerCase())];
   savePersistentState();
+  persistCollegeToMongoDB(newCol);
+  persistUserToMongoDB(adminUser);
 
   if (isDbConnected && prisma) {
     try {
@@ -810,6 +1129,9 @@ app.post('/api/college/students', async (req, res) => {
   });
 
   savePersistentState();
+  for (const st of addedStudents) {
+    persistUserToMongoDB({ ...st, role: 'student', password: 'password123' });
+  }
 
   if (isDbConnected && prisma) {
     try {
@@ -934,6 +1256,7 @@ app.post('/api/college/faculty', async (req, res) => {
   });
 
   savePersistentState();
+  persistUserToMongoDB(persistentState.users[persistentState.users.length - 1]);
 
   if (isDbConnected && prisma) {
     try {
@@ -1094,6 +1417,7 @@ app.post('/api/college/slots', async (req, res) => {
 
   persistentState.slots[code].unshift(newSlot);
   savePersistentState();
+  persistSlotToMongoDB(newSlot);
 
   if (isDbConnected && prisma) {
     try {
@@ -1157,6 +1481,7 @@ app.delete('/api/college/slots/:id', async (req, res) => {
 
   persistentState.slots[code] = (persistentState.slots[code] || []).filter((s) => s.id !== slotId);
   savePersistentState();
+  deleteSlotFromMongoDB(slotId);
 
   if (isDbConnected && prisma) {
     try {
@@ -1231,6 +1556,10 @@ app.post('/api/college/slots/:id/complete', async (req, res) => {
 
   target.status = 'completed';
   savePersistentState();
+  if (isMongoConnected()) {
+    GDSessionModel.updateOne({ id: slotId }, { $set: { status: 'completed' } }).catch(() => null);
+    GDBookingModel.updateMany({ sessionId: slotId, status: { $ne: 'CANCELLED' } }, { $set: { status: 'COMPLETED' } }).catch(() => null);
+  }
   if (isDbConnected && prisma) {
     try {
       await prisma.gDSession.update({ where: { id: slotId }, data: { status: 'completed' } });
@@ -1260,6 +1589,9 @@ app.post('/api/college/slots/:id/start', async (req, res) => {
 
   target.status = 'active';
   savePersistentState();
+  if (isMongoConnected()) {
+    GDSessionModel.updateOne({ id: slotId }, { $set: { status: 'active' } }).catch(() => null);
+  }
   if (isDbConnected && prisma) {
     try {
       await prisma.gDSession.update({ where: { id: slotId }, data: { status: 'active' } });
@@ -1532,6 +1864,10 @@ app.post('/api/student/book-slot', async (req, res) => {
     persistentState.studentBookings[student.id] = slotId;
   }
   savePersistentState();
+  persistBookingToMongoDB(slotId, student.id, 'BOOKED', topicKey);
+  if (isMongoConnected()) {
+    GDSessionModel.updateOne({ id: slotId }, { $set: { enrolledCount: slot.enrolledCount } }).catch(() => null);
+  }
 
   if (isDbConnected && prisma) {
     try {
@@ -1582,6 +1918,12 @@ app.post('/api/student/cancel-slot', async (req, res) => {
     if (slot) slot.enrolledCount = Math.max(0, Number(slot.enrolledCount || 0) - 1);
   }
   savePersistentState();
+  if (slotId) {
+    persistBookingToMongoDB(slotId, studentId, 'CANCELLED');
+    if (isMongoConnected()) {
+      GDSessionModel.updateOne({ id: slotId }, { $inc: { enrolledCount: -1 } }).catch(() => null);
+    }
+  }
 
   if (isDbConnected && prisma && slotId) {
     try {
@@ -1800,7 +2142,22 @@ app.post('/api/auth/register', async (req, res) => {
   };
 
   persistentState.users.push(newUser);
+  if (role === 'student' && newUser.collegeCode) {
+    if (!persistentState.students[newUser.collegeCode]) persistentState.students[newUser.collegeCode] = [];
+    persistentState.students[newUser.collegeCode].push({
+      id: newUser.id,
+      name: newUser.name,
+      email: newUser.email,
+      studentId: newUser.studentId || `STU-${Date.now().toString().slice(-4)}`,
+      course: newUser.course || 'B.Tech Computer Science & Engineering',
+      batch: newUser.batch || '2024-2028',
+      seatNumber: newUser.seatNumber || persistentState.students[newUser.collegeCode].length + 1,
+      college: newUser.college,
+      collegeCode: newUser.collegeCode,
+    });
+  }
   savePersistentState();
+  persistUserToMongoDB(newUser);
 
   if (isDbConnected && prisma) {
     try {
@@ -2499,11 +2856,28 @@ function formatUserResponse(u: any) {
 }
 
 // Health Check (Deployment & Railway liveness probe)
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  const mongoActive = isMongoConnected();
+  let mongoTables: Record<string, number> | null = null;
+  if (mongoActive) {
+    try {
+      mongoTables = {
+        colleges: await CollegeModel.countDocuments(),
+        users: await UserModel.countDocuments(),
+        gd_sessions: await GDSessionModel.countDocuments(),
+        gd_transcripts: await TranscriptEntryModel.countDocuments(),
+        assessment_reports: await AssessmentReportModel.countDocuments(),
+        gd_bookings: await GDBookingModel.countDocuments(),
+      };
+    } catch {}
+  }
+
   res.json({
     status: 'ok',
     service: 'ERUS AI Group Discussion Facilitator (ERUS-AIGDF)',
-    database: isDbConnected ? 'postgresql' : 'in-memory',
+    database: mongoActive ? 'mongodb' : isDbConnected ? 'postgresql' : 'in-memory',
+    mongoConnected: mongoActive,
+    mongoTables,
     hasGeminiKey: !!process.env.GEMINI_API_KEY,
     activeSessionId: currentLiveSession.id,
     participants: currentLiveSession.students.length,
@@ -2586,6 +2960,7 @@ app.post('/api/session/speak', (req, res) => {
   };
 
   liveTranscripts.push(newTranscript);
+  persistTranscriptToMongoDB(newTranscript);
 
   // Update student stats
   student.speakingTurns += 1;
@@ -3075,21 +3450,50 @@ async function generateAssessmentReport(student: any, transcriptHistory: any[], 
 }
 
 async function persistAssessmentReport(report: any) {
-  if (!isDbConnected || !prisma || !report?.sessionId) return;
-  try {
-    const existing = await prisma.assessmentReport.findFirst({ where: { sessionId: report.sessionId, studentId: report.studentId } });
-    const data = {
-      sessionId: report.sessionId, studentId: report.studentId, overallScore: report.overallScore,
-      rubricJson: JSON.stringify(report.skills), feedback: report.aiSummary || '',
-      strengths: (report.strengths || []).join('; '), improvements: (report.areasForImprovement || []).join('; '),
-    };
-    if (existing) {
-      await prisma.assessmentReport.update({ where: { id: existing.id }, data });
-      report.id = existing.id;
-    } else {
-      await prisma.assessmentReport.create({ data: { id: report.id, ...data } });
+  if (!report?.sessionId) return;
+
+  // Persist to MongoDB (Sub-Table: assessment_reports)
+  if (isMongoConnected()) {
+    try {
+      const repId = report.id || `rep-${report.studentId}-${report.sessionId}`;
+      await AssessmentReportModel.findOneAndUpdate(
+        { sessionId: report.sessionId, studentId: report.studentId },
+        {
+          id: repId,
+          sessionId: report.sessionId,
+          studentId: report.studentId,
+          studentName: report.studentName || '',
+          overallScore: report.overallScore || 80,
+          rubricJson: report.skills || {},
+          feedback: report.aiSummary || '',
+          strengths: report.strengths || [],
+          improvements: report.areasForImprovement || [],
+        },
+        { upsert: true, new: true }
+      );
+      report.id = repId;
+    } catch (e: any) {
+      console.warn('[MongoDB] Failed to persist assessment report:', e.message);
     }
-  } catch (e: any) { console.warn('[Database] Failed to persist assessment report:', e.message); }
+  }
+
+  // Dual-persist to PostgreSQL if connected
+  if (isDbConnected && prisma) {
+    try {
+      const existing = await prisma.assessmentReport.findFirst({ where: { sessionId: report.sessionId, studentId: report.studentId } });
+      const data = {
+        sessionId: report.sessionId, studentId: report.studentId, overallScore: report.overallScore,
+        rubricJson: JSON.stringify(report.skills), feedback: report.aiSummary || '',
+        strengths: (report.strengths || []).join('; '), improvements: (report.areasForImprovement || []).join('; '),
+      };
+      if (existing) {
+        await prisma.assessmentReport.update({ where: { id: existing.id }, data });
+        report.id = existing.id;
+      } else {
+        await prisma.assessmentReport.create({ data: { id: report.id, ...data } });
+      }
+    } catch (e: any) { console.warn('[Database] Failed to persist assessment report:', e.message); }
+  }
 }
 
 app.post('/api/facilitator/evaluate', async (req, res) => {
@@ -3117,6 +3521,36 @@ app.get('/api/student/reports', async (req, res) => {
   const studentId = String(req.query.studentId || '').trim();
   const sessionId = String(req.query.sessionId || '').trim();
   if (!studentId) return res.status(400).json({ success: false, error: 'studentId is required' });
+
+  // Query MongoDB Sub-Table: assessment_reports
+  if (isMongoConnected()) {
+    try {
+      const filter: any = { studentId };
+      if (sessionId) filter.sessionId = sessionId;
+      const mongoReports = await AssessmentReportModel.find(filter).sort({ createdAt: -1 });
+      if (mongoReports.length > 0) {
+        return res.json({
+          success: true,
+          reports: mongoReports.map((r) => ({
+            id: r.id,
+            sessionId: r.sessionId,
+            studentId: r.studentId,
+            overallScore: r.overallScore,
+            grade: gradeForScore(r.overallScore),
+            skills: r.rubricJson,
+            aiSummary: r.feedback,
+            strengths: r.strengths || [],
+            areasForImprovement: r.improvements || [],
+            generatedAt: r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString(),
+            facultyEndorsement: { endorsed: false },
+          })),
+        });
+      }
+    } catch (e: any) {
+      console.warn('[Student Reports] MongoDB read failed:', e.message);
+    }
+  }
+
   if (isDbConnected && prisma) {
     try {
       const where: any = { studentId };
@@ -3154,6 +3588,56 @@ app.get('/api/faculty/sessions/:id/reports', async (req, res) => {
   }
   if (!slot || slot.assignedFacultyId !== facultyId) {
     return res.status(403).json({ success: false, error: 'Faculty is not assigned to this session' });
+  }
+
+  // Query MongoDB Sub-Table: assessment_reports
+  if (isMongoConnected()) {
+    try {
+      const mongoReports = await AssessmentReportModel.find({ sessionId }).sort({ createdAt: 1 });
+      const reportStudentIds = mongoReports.map((r) => r.studentId);
+      const mongoUsers = reportStudentIds.length > 0
+        ? await UserModel.find({ id: { $in: reportStudentIds } })
+        : [];
+      const reportNameById = new Map(mongoUsers.map((u) => [u.id, u.name]));
+      const reportsWithStudentNames = mongoReports.map((r) => ({
+        id: r.id,
+        sessionId: r.sessionId,
+        studentId: r.studentId,
+        studentName: reportNameById.get(r.studentId) || r.studentName || r.studentId,
+        overallScore: r.overallScore,
+        rubricJson: typeof r.rubricJson === 'string' ? r.rubricJson : JSON.stringify(r.rubricJson),
+        feedback: r.feedback,
+        strengths: (r.strengths || []).join('; '),
+        improvements: (r.improvements || []).join('; '),
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString(),
+      }));
+
+      const bookings = await GDBookingModel.find({ sessionId, status: { $ne: 'CANCELLED' } });
+      const bookingStudentIds = bookings.map((b) => b.studentId);
+      const bookingUsers = bookingStudentIds.length > 0
+        ? await UserModel.find({ id: { $in: bookingStudentIds } })
+        : [];
+      const userMap = new Map(bookingUsers.map((u) => [u.id, u]));
+
+      return res.json({
+        success: true,
+        sessionId,
+        reports: reportsWithStudentNames,
+        participants: bookings.map((b) => {
+          const user = userMap.get(b.studentId);
+          return {
+            id: b.studentId,
+            name: user?.name || b.studentId,
+            email: user?.email || '',
+            studentId: user?.studentProfile?.studentId || '',
+            seatNumber: user?.studentProfile?.seatNumber || null,
+            bookingStatus: b.status,
+          };
+        }),
+      });
+    } catch (e: any) {
+      console.warn('[Faculty Reports] MongoDB read failed:', e.message);
+    }
   }
 
   if (isDbConnected && prisma) {
@@ -4031,7 +4515,6 @@ io.on('connection', (socket) => {
       silenceTimerSeconds: room.silenceTimerSeconds,
       currentSpeakerId: room.currentSpeakerId,
       status: room.status,
-      simulationMode: room.simulationMode,
     });
 
     // Notify all other peers in the room
@@ -4245,6 +4728,7 @@ io.on('connection', (socket) => {
     };
 
     room.transcripts.push(newTranscript);
+    persistTranscriptToMongoDB(newTranscript);
 
     // Broadcast transcript to all connected students and faculty in room
     io.to(`room-${safeSlotId}`).emit('new-transcript', {
@@ -4290,6 +4774,11 @@ io.on('connection', (socket) => {
 
 // Vite middleware / SPA static serving
 async function setupVite() {
+  // 1. Initialize MongoDB connection, tables and sub-tables
+  await connectMongoDB();
+  await initMongoDBTablesAndSubTables();
+  await syncMongoDBWithPersistentState();
+
   const distPath = path.join(process.cwd(), 'dist');
   const distIndexExists = fs.existsSync(path.join(distPath, 'index.html'));
   const isProd = process.env.NODE_ENV === 'production' || distIndexExists;

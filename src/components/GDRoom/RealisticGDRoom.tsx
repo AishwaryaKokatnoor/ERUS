@@ -201,22 +201,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // Synchronize webcam live state to user's student state (only when currentUser is a student participant)
   useEffect(() => {
     if (isFaculty) return;
-    const userStudent = session.students.find((s) => s.isUser);
-    if (userStudent) {
-      try {
-        const socket = getSocket();
-        socket.emit('media_toggle', {
-          roomId: session.id,
-          studentId: userStudent.id,
-          cameraActive: isCameraOn,
-        });
-      } catch (e) {}
-    }
     setSession((prev) => ({
       ...prev,
       students: prev.students.map((s) => (s.isUser ? { ...s, cameraActive: isCameraOn } : s)),
     }));
-  }, [isCameraOn, isFaculty, setSession, session.id]);
+  }, [isCameraOn, isFaculty, setSession]);
 
   const handleLayoutChange = (newLayout: GDRoomLayoutType) => {
     setCurrentLayout(newLayout);
@@ -224,10 +213,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     if (onUpdateLayout) {
       onUpdateLayout(newLayout);
     }
-    try {
-      const socket = getSocket();
-      socket.emit('layout_change', { roomId: session.id, layout: newLayout });
-    } catch (e) {}
   };
 
   // Real-Time Multi-User WebRTC Audio Mesh & Room Signaling (PDF Page 13 & 14)
@@ -705,22 +690,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
           // Mark speaker active on floor
           if (!isFaculty) {
-            const userStudentObj = session.students.find((s) => s.isUser);
-            const currentUserId = userStudentObj?.id || 's1';
             setSession((prev) => ({
               ...prev,
-              currentSpeakerId: currentUserId,
+              currentSpeakerId: prev.students.find((s) => s.isUser)?.id || 's1',
               students: prev.students.map((s) =>
                 s.isUser ? { ...s, isSpeaking: true, micActive: true } : s
               ),
             }));
-            try {
-              const socket = getSocket();
-              socket.emit('speaker_active', {
-                roomId: session.id,
-                speakerId: currentUserId,
-              });
-            } catch {}
           }
 
           // Reset silence pause timer on each spoken token
@@ -776,13 +752,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         };
 
         recognitionRef.current = recognition;
-
-        return () => {
-          try {
-            recognition.stop();
-          } catch {}
-          webrtcAudio.disableMicrophone();
-        };
       }
     }
   }, [isFaculty, stopAudioAnalyser, rtcSetMicEnabled]);
@@ -882,18 +851,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
     setTranscripts((prev) => [...prev, entry]);
 
-    // Broadcast facilitator prompt to all clients in room
-    try {
-      const socket = getSocket();
-      socket.emit('facilitator_speak', {
-        roomId: session.id,
-        transcript: entry,
-        speech: text,
-        actionType,
-        phase,
-      });
-    } catch (e) {}
-
     facilitatorVoice.speak(text, () => {
       setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
       setIsAiProcessing(false);
@@ -980,16 +937,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
       setTranscripts((prev) => [...prev, facultyEntry]);
       setIsAiProcessing(true);
-
-      try {
-        const socket = getSocket();
-        socket.emit('facilitator_speak', {
-          roomId: session.id,
-          transcript: facultyEntry,
-          speech: text,
-          actionType: 'moderation',
-        });
-      } catch (e) {}
 
       // Vocalize faculty intervention through facilitator voice engine
       facilitatorVoice.speak(text, () => {
@@ -1340,19 +1287,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   const handleRaiseHandToggle = () => {
     const userStudent = session.students.find((s) => s.isUser) || session.students[0];
-    if (userStudent) {
-      try {
-        const socket = getSocket();
-        socket.emit('hand_raise_toggle', {
-          roomId: session.id,
-          studentId: userStudent.id,
-        });
-      } catch (e) {}
-    }
     setSession((prev) => ({
       ...prev,
       students: prev.students.map((s) =>
-        s.id === userStudent?.id ? { ...s, hasRaisedHand: !s.hasRaisedHand } : s
+        s.id === userStudent.id ? { ...s, hasRaisedHand: !s.hasRaisedHand } : s
       ),
     }));
   };
@@ -1371,8 +1309,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     <div className="max-w-7xl mx-auto p-3 sm:p-6 space-y-5">
       
       {/* Session Title & Facilitator Broadcast Banner */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs transition-colors duration-200">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <div className="bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-sm dark:shadow-xl relative overflow-hidden backdrop-blur-md transition-colors duration-200">
+        <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/10 dark:bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
+        
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 relative z-10">
           <div>
             {/* Clean Metadata: Group Discussion Set, Slot Details, and Allotted Faculty */}
             <div className="flex items-center gap-2 flex-wrap mb-2">
@@ -1609,9 +1549,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
         {/* Interruption Warning Alert banner */}
         {interruptionWarning && (
-          <div className="mt-3 bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 px-3 py-1.5 rounded-xl text-xs flex items-center gap-2">
-            <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" />
-            <span>{interruptionWarning}</span>
+          <div className="mt-3.5 bg-amber-50 dark:bg-amber-950/80 border border-amber-300 dark:border-amber-600/60 text-amber-800 dark:text-amber-200 px-3.5 py-2 rounded-xl text-xs flex items-center gap-2.5 animate-bounce">
+            <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+            <span className="font-medium">{interruptionWarning}</span>
           </div>
         )}
       </div>
@@ -1624,93 +1564,101 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           <div className="bg-white/95 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 rounded-3xl p-4 sm:p-6 shadow-md dark:shadow-2xl relative min-h-[580px] flex flex-col justify-between overflow-hidden transition-colors duration-200">
             
             {/* Ambient Lighting & Stage Grid */}
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(99,102,241,0.04),transparent_70%)] dark:bg-[radial-gradient(circle_at_50%_45%,rgba(99,102,241,0.06),transparent_70%)] pointer-events-none" />
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(99,102,241,0.05),transparent_70%)] dark:bg-[radial-gradient(circle_at_50%_45%,rgba(99,102,241,0.08),transparent_70%)] pointer-events-none" />
+            <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-indigo-100/30 dark:from-indigo-950/20 to-transparent pointer-events-none" />
 
             {/* Room Visibility & Layout Selector Toolbar */}
-            <div className="relative z-10 flex flex-wrap items-center justify-between gap-2 pb-2.5 mb-2 border-b border-slate-200/80 dark:border-slate-800">
+            <div className="relative z-10 flex flex-wrap items-center justify-between gap-2 pb-3 mb-2 border-b border-slate-200 dark:border-slate-800">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                  <Eye className="w-3.5 h-3.5 text-indigo-500" />
-                  <span>Room Layout:</span>
-                </span>
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-indigo-50 dark:bg-indigo-950/70 border border-indigo-200 dark:border-indigo-800/80 text-xs font-semibold text-indigo-700 dark:text-indigo-300">
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>Room Visibility:</span>
+                </div>
                 {currentUser?.role === 'faculty' && (
-                  <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                  <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
                     Faculty Control
                   </span>
                 )}
               </div>
 
-              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200/80 dark:border-slate-700/80">
+              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-950 p-1 rounded-xl border border-slate-200 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => handleLayoutChange('round_table')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
                     currentLayout === 'round_table'
-                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-xs border border-slate-200 dark:border-slate-700 font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                   }`}
-                  title="Round Table: Circular discussion table"
+                  title="1. Round Table: Circular conference table with all participants seated around"
                 >
                   <CircleDot className="w-3.5 h-3.5" />
-                  <span>Round Table</span>
+                  <span className="hidden sm:inline">1. Round Table</span>
+                  <span className="sm:hidden">Round</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleLayoutChange('speaker_center')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
                     currentLayout === 'speaker_center'
-                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-xs border border-slate-200 dark:border-slate-700 font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                   }`}
-                  title="Speaker Spotlight: Focus spotlight on active speaker"
+                  title="2. Speaker in Middle: The person speaking is in the middle of the round table"
                 >
                   <Target className="w-3.5 h-3.5" />
-                  <span>Speaker Spotlight</span>
+                  <span className="hidden sm:inline">2. Speaker in Middle</span>
+                  <span className="sm:hidden">Speaker Center</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleLayoutChange('classroom')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
                     currentLayout === 'classroom'
-                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-xs border border-slate-200 dark:border-slate-700 font-semibold'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                   }`}
-                  title="Classroom: Front stage and audience desks"
+                  title="3. Classroom Presentation: The person speaking is at the front like a classroom presentation"
                 >
                   <Presentation className="w-3.5 h-3.5" />
-                  <span>Classroom</span>
+                  <span className="hidden sm:inline">3. Classroom Presentation</span>
+                  <span className="sm:hidden">Classroom</span>
                 </button>
               </div>
             </div>
 
-            {/* Top Stage: AI Facilitator Station */}
-            <div className="relative z-10 flex items-center justify-between gap-3 py-2 px-3 sm:px-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-800 mb-3">
-              <div className="flex items-center gap-2.5 shrink-0">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
+            {/* Top Stage: AI Facilitator Station (At the head of the discussion table) */}
+            <div className="relative z-10 flex flex-col items-center justify-center pt-1 mb-2">
+              <div className="relative flex items-center justify-center">
+                {session.isFacilitatorSpeaking && (
+                  <div className="absolute w-24 h-24 rounded-full bg-indigo-500/30 animate-pulse-ring pointer-events-none" />
+                )}
+                <div className={`w-16 h-16 sm:w-18 sm:h-18 rounded-2xl flex items-center justify-center shadow-md dark:shadow-xl transition-all duration-300 ${
                   session.isFacilitatorSpeaking 
-                    ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-400/40 animate-speaking' 
-                    : 'bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 border border-indigo-200/80 dark:border-indigo-800'
+                    ? 'bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-500 ring-4 ring-indigo-400/50 shadow-indigo-500/40 scale-105' 
+                    : 'bg-slate-100 dark:bg-slate-800 border-2 border-indigo-300 dark:border-indigo-500/40 shadow-slate-200 dark:shadow-slate-950'
                 }`}>
-                  <Sparkles className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200">AI Facilitator</span>
-                    {session.isFacilitatorSpeaking ? (
-                      <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                        Speaking
-                      </span>
-                    ) : (
-                      <span className="text-[10px] text-slate-400 font-normal hidden sm:inline">Moderating</span>
-                    )}
-                  </div>
+                  <Sparkles className={`w-8 h-8 ${session.isFacilitatorSpeaking ? 'text-white animate-spin' : 'text-indigo-600 dark:text-indigo-400'}`} />
                 </div>
               </div>
-              <div className="flex-1 text-xs text-slate-600 dark:text-slate-300 italic truncate sm:overflow-visible sm:whitespace-normal">
-                "{session.facilitatorSpeech}"
+
+              {/* AI Facilitator Speech Bubble */}
+              <div className="mt-3.5 max-w-xl text-center bg-indigo-50/90 dark:bg-slate-950/80 border border-indigo-200 dark:border-indigo-500/30 rounded-2xl px-4 py-2.5 shadow-sm dark:shadow-lg backdrop-blur-sm">
+                <div className="flex items-center justify-center gap-2 text-xs text-indigo-700 dark:text-indigo-300 font-semibold mb-1">
+                  {session.isFacilitatorSpeaking ? (
+                    <div className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                      <span>Speaking Live</span>
+                    </div>
+                  ) : (
+                    <span>Facilitator Status: Observing & Managing Turns</span>
+                  )}
+                </div>
+                <p className="text-xs sm:text-sm text-slate-800 dark:text-slate-200 font-medium leading-relaxed italic">
+                  "{session.facilitatorSpeech}"
+                </p>
               </div>
             </div>
 
@@ -1803,13 +1751,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                       </div>
                     </div>
 
-                {/* Center Table Surface */}
-                <div className="w-full max-w-xl py-3 px-6 rounded-2xl bg-slate-100/90 dark:bg-slate-850/80 border border-slate-200/90 dark:border-slate-800 shadow-inner flex flex-col items-center justify-center text-center">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <span className="text-[10px] uppercase font-mono font-semibold tracking-wider text-slate-500 dark:text-slate-400">
-                      Conference Table • {session.students.length} Participants
-                    </span>
+                    {/* Clean decorative table ring without overlapping text collisions */}
+                    <div className="absolute inset-8 rounded-full border border-indigo-200/50 dark:border-indigo-900/40 pointer-events-none" />
                   </div>
 
                   {/* Seating Pods: TOP ROW (Seats 1 to 8) */}
@@ -1847,23 +1790,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                       />
                     ))}
                   </div>
-                </div>
 
-                {/* Bottom Row of Participants */}
-                <div className="w-full flex items-center justify-center gap-2 sm:gap-3 flex-wrap py-1">
-                  {session.students.slice(Math.ceil(session.students.length / 2)).map((student) => (
-                    <StudentPodCard 
-                      key={student.id} 
-                      student={student} 
-                      isCurrentSpeaker={session.currentSpeakerId === student.id}
-                      position="bottom"
-                      isUserCameraOn={isCameraOn}
-                      videoStream={videoStream}
-                      audioLevel={audioLevel}
-                      isListeningMic={isListeningMic}
-                      isFaculty={isFaculty}
-                    />
-                  ))}
                 </div>
               </div>
             )}
@@ -1935,28 +1862,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                         </div>
                       </div>
 
-                {/* Spotlight Active Speaker */}
-                <div className="w-full max-w-md p-3 sm:p-4 rounded-2xl bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 shadow-sm flex items-center gap-3.5">
-                  <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 shrink-0 bg-slate-900">
-                    <StudentVideoFrame
-                      student={currentSpeakerStudent || session.students[0]}
-                      isCurrentSpeaker={isSpeakingLive}
-                      isUserCameraOn={isCameraOn}
-                      videoStream={videoStream}
-                      audioLevel={audioLevel}
-                      isListeningMic={isListeningMic}
-                      size="large"
-                      isFaculty={isFaculty}
-                    />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                        {currentSpeakerStudent?.name}
-                      </span>
-                      <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold">
-                        Seat {currentSpeakerStudent?.seatNumber}
-                      </span>
                     </div>
 
                   </div>
@@ -1996,23 +1901,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                       />
                     ))}
                   </div>
-                </div>
 
-                {/* Bottom Row of Participants */}
-                <div className="w-full flex items-center justify-center gap-2 sm:gap-3 flex-wrap py-1">
-                  {session.students.slice(Math.ceil(session.students.length / 2)).map((student) => (
-                    <StudentPodCard 
-                      key={student.id} 
-                      student={student} 
-                      isCurrentSpeaker={student.id === currentSpeakerStudent?.id}
-                      position="bottom"
-                      isUserCameraOn={isCameraOn}
-                      videoStream={videoStream}
-                      audioLevel={audioLevel}
-                      isListeningMic={isListeningMic}
-                      isFaculty={isFaculty}
-                    />
-                  ))}
                 </div>
               </div>
             )}
@@ -2022,7 +1911,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               <div className="relative z-10 my-3 flex-1 flex flex-col items-center justify-center w-full space-y-4">
                 
                 {/* Front of Classroom: Presentation Board & Podium */}
-                <div className="w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-lg text-white relative overflow-hidden">
+                <div className="w-full max-w-4xl bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 border-2 border-indigo-500/40 rounded-2xl p-3 sm:p-4 shadow-xl text-white relative overflow-hidden">
                   
                   <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
 
@@ -2074,7 +1963,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                           isFaculty={isFaculty}
                         />
                       </div>
-                      <span className="absolute -bottom-2 bg-indigo-600 text-white text-[9px] font-bold px-2 py-0.5 rounded-full shadow-xs border border-indigo-400/40 whitespace-nowrap z-20">
+                      <span className="absolute -bottom-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white text-[9px] font-bold px-2 py-0.5 rounded-full shadow border border-indigo-300/40 whitespace-nowrap z-20">
                         🎙️ PRESENTER AT PODIUM
                       </span>
                     </div>
@@ -2457,7 +2346,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               {/* Live Voice Broadcast Console (No Send Option - Direct Voice Broadcast) */}
               <div className="w-full">
                 {isListeningMic ? (
-                  <div className="w-full rounded-2xl bg-emerald-950/40 border border-emerald-500/40 p-3 sm:p-3.5 shadow-sm transition-all animate-fadeIn">
+                  <div className="w-full rounded-2xl bg-gradient-to-r from-emerald-950/80 via-slate-900 to-indigo-950/80 border-2 border-emerald-500/80 p-3 sm:p-3.5 shadow-lg shadow-emerald-950/40 transition-all animate-fadeIn">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <span className="relative flex h-2.5 w-2.5">
@@ -2635,18 +2524,18 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
         {/* RIGHT: Live Discussion Stream & Multi-Tab Hub (Right 4-5 cols) */}
         <div className="lg:col-span-4 space-y-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col h-[580px] transition-colors duration-200">
+          <div className="bg-white/95 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 rounded-3xl p-4 sm:p-5 shadow-md dark:shadow-2xl flex flex-col h-[580px] transition-colors duration-200">
             
             {/* Sidebar Tabs */}
-            <div className="flex items-center justify-between border-b border-slate-200/80 dark:border-slate-800 pb-2.5 mb-3">
-              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200/80 dark:border-slate-700/80">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3 mb-3">
+              <div className="flex items-center gap-1">
                 <button
                   id="tab-transcript-sub"
                   onClick={() => setActiveTab('transcript')}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                     activeTab === 'transcript'
-                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                   }`}
                 >
                   Transcript ({transcripts.length})
@@ -2654,10 +2543,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 <button
                   id="tab-rules-sub"
                   onClick={() => setActiveTab('rules')}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                     activeTab === 'rules'
-                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                   }`}
                 >
                   Rules
@@ -2665,10 +2554,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 <button
                   id="tab-analytics-sub"
                   onClick={() => setActiveTab('analytics')}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                     activeTab === 'analytics'
-                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                   }`}
                 >
                   Turn Meter
@@ -2676,10 +2565,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 <button
                   id="tab-breakout-sub"
                   onClick={() => setActiveTab('breakout')}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                     activeTab === 'breakout'
-                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs font-semibold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                   }`}
                 >
                   Rooms
@@ -2689,32 +2578,32 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
             {/* TAB 1: Live Timestamped Transcript Stream */}
             {activeTab === 'transcript' && (
-              <div className="flex-1 overflow-y-auto pr-1 space-y-2.5">
+              <div className="flex-1 overflow-y-auto pr-1 space-y-3">
                 {transcripts.map((entry) => (
                   <div
                     key={entry.id}
-                    className={`p-2.5 rounded-xl border text-xs leading-relaxed transition-all ${
+                    className={`p-3 rounded-xl border text-xs leading-relaxed transition-all ${
                       entry.isFacilitator
-                        ? 'bg-slate-50 dark:bg-slate-850/80 border-l-2 border-l-indigo-500 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100'
+                        ? 'bg-indigo-50/80 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800/50 text-indigo-950 dark:text-indigo-100'
                         : entry.speakerId === 's1'
-                        ? 'bg-indigo-50/50 dark:bg-indigo-950/30 border-l-2 border-l-indigo-400 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100'
-                        : 'bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-300'
+                        ? 'bg-blue-50/80 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50 text-blue-950 dark:text-slate-100'
+                        : 'bg-slate-50 dark:bg-slate-950/60 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-300'
                     }`}
                   >
                     <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 mb-1 font-mono-code">
                       <div className="flex items-center gap-1.5">
-                        <span className={`font-semibold ${entry.isFacilitator ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-800 dark:text-slate-200'}`}>
+                        <span className={`font-bold ${entry.isFacilitator ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-800 dark:text-slate-200'}`}>
                           {entry.speakerName}
                         </span>
                         {entry.seatNumber && (
-                          <span className="px-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[9px] font-medium">
+                          <span className="px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 font-semibold">
                             Seat {entry.seatNumber}
                           </span>
                         )}
                       </div>
                       <span className="text-slate-400 dark:text-slate-500">{entry.timestamp}</span>
                     </div>
-                    <p className="font-normal text-slate-700 dark:text-slate-300">{entry.text}</p>
+                    <p className="font-normal">{entry.text}</p>
                   </div>
                 ))}
                 <div ref={transcriptEndRef} />
@@ -3285,7 +3174,7 @@ export const StudentVideoFrame: React.FC<{
 export const StudentPodCard: React.FC<{
   student: Student;
   isCurrentSpeaker: boolean;
-  position?: 'top' | 'bottom';
+  position: 'top' | 'bottom';
   isUserCameraOn?: boolean;
   videoStream?: MediaStream | null;
   audioLevel?: number;
@@ -3295,6 +3184,7 @@ export const StudentPodCard: React.FC<{
 }> = ({
   student,
   isCurrentSpeaker,
+  position,
   isUserCameraOn = false,
   videoStream = null,
   audioLevel = 0,
@@ -3305,8 +3195,8 @@ export const StudentPodCard: React.FC<{
   const isUser = !isFaculty && !!student.isUser;
 
   return (
-    <div className={`flex flex-col items-center transition-all duration-200 ${
-      isCurrentSpeaker ? 'scale-105 z-10' : 'opacity-90 hover:opacity-100'
+    <div className={`flex flex-col items-center group transition-all duration-300 ${
+      isCurrentSpeaker ? 'scale-110 z-20' : 'z-10'
     }`}>
       
       {/* 1. Realistic Numbered Seat Placard (Pinned cleanly at top, in natural flex flow) */}

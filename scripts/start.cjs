@@ -4,7 +4,9 @@ const path = require('path');
 
 console.log('[Startup] Checking database configuration...');
 
-if (process.env.DATABASE_URL) {
+if (process.env.MONGODB_URI) {
+  console.log('[Startup] MONGODB_URI detected:', process.env.MONGODB_URI);
+} else if (process.env.DATABASE_URL) {
   console.log('[Startup] DATABASE_URL detected. Synchronizing Prisma schema with PostgreSQL...');
   try {
     execSync('npx prisma db push --skip-generate', { stdio: 'inherit' });
@@ -13,7 +15,7 @@ if (process.env.DATABASE_URL) {
     console.warn('[Startup] Prisma db push warning (server will continue):', err.message);
   }
 } else {
-  console.log('[Startup] No DATABASE_URL found. Starting in in-memory fallback mode.');
+  console.log('[Startup] Connecting to default local MongoDB (localhost:27017)...');
 }
 
 console.log('[Startup] Launching ERUS server...');

@@ -183,7 +183,29 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
         isFacilitatorSpeaking: false,
         silenceTimerSeconds: 0,
         currentSpeakerId: null,
-        breakoutRooms: [],
+        breakoutRooms: [
+          {
+            id: `br-1-${baseTimestamp}-${index}`,
+            name: 'Breakout Pod Alpha',
+            topic: `${topic} - Foundational Analysis`,
+            studentIds: podAlphaIds,
+            status: 'active',
+          },
+          {
+            id: `br-2-${baseTimestamp}-${index}`,
+            name: 'Breakout Pod Beta',
+            topic: `${topic} - Practical Implementation`,
+            studentIds: podBetaIds,
+            status: 'active',
+          },
+          {
+            id: `br-3-${baseTimestamp}-${index}`,
+            name: 'Breakout Pod Gamma',
+            topic: `${topic} - Governance & Future Outlook`,
+            studentIds: podGammaIds,
+            status: 'active',
+          },
+        ],
         createdAt: new Date().toISOString(),
         
       };

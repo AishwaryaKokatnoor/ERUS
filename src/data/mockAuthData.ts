@@ -5,9 +5,87 @@ export interface UserCredential {
   user: AuthUser;
 }
 
-// Clean initialization: No dummy or mock accounts
-export const MOCK_STUDENTS: (StudentUser & { password: string })[] = [];
-export const MOCK_FACULTY: (FacultyUser & { password: string })[] = [];
+export const MOCK_STUDENTS: (StudentUser & { password: string })[] = [
+  {
+    id: 's1',
+    name: 'Rahul Kumar',
+    email: 'rahul.kumar@dit.edu.in',
+    role: 'student',
+    studentId: 'STU-2022-041',
+    college: 'Delhi Institute of Technology',
+    course: 'B.Tech CSE',
+    batch: '2022-2026',
+    seatNumber: 1,
+    avatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=256&q=80',
+    password: 'password123',
+  },
+  {
+    id: 's2',
+    name: 'Priya Sharma',
+    email: 'priya.sharma@sxec.edu.in',
+    role: 'student',
+    studentId: 'STU-2022-089',
+    college: 'St. Xavier Engineering College',
+    course: 'B.Tech IT',
+    batch: '2022-2026',
+    seatNumber: 2,
+    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=256&q=80',
+    password: 'password123',
+  },
+  {
+    id: 's3',
+    name: 'Ramesh Patel',
+    email: 'ramesh.patel@nit.edu.in',
+    role: 'student',
+    studentId: 'STU-2022-112',
+    college: 'National Institute of Tech',
+    course: 'B.Tech ECE',
+    batch: '2022-2026',
+    seatNumber: 3,
+    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=256&q=80',
+    password: 'password123',
+  },
+  {
+    id: 's6',
+    name: 'Sneha Reddy',
+    email: 'sneha.reddy@srm.edu.in',
+    role: 'student',
+    studentId: 'STU-2022-178',
+    college: 'SRM Institute Chennai',
+    course: 'B.Tech Data Science',
+    batch: '2022-2026',
+    seatNumber: 6,
+    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80',
+    password: 'password123',
+  },
+];
+
+export const MOCK_FACULTY: (FacultyUser & { password: string })[] = [
+  {
+    id: 'fac-1',
+    name: 'Dr. Sunita Rao',
+    email: 'sunita.rao@dit.edu.in',
+    role: 'faculty',
+    facultyId: 'FAC-CSE-102',
+    college: 'Delhi Institute of Technology',
+    department: 'Department of Computer Science & Engineering',
+    designation: 'Professor & Head of Department',
+    avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=256&q=80',
+    password: 'faculty123',
+  },
+  {
+    id: 'fac-2',
+    name: 'Prof. Rajesh Verma',
+    email: 'rajesh.verma@dit.edu.in',
+    role: 'faculty',
+    facultyId: 'FAC-MGT-205',
+    college: 'Delhi Institute of Technology',
+    department: 'School of Management & Humanities',
+    designation: 'Dean of Academic Affairs',
+    avatar: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&w=256&q=80',
+    password: 'faculty123',
+  },
+];
 
 export const MOCK_COLLEGE_ADMINS: (import('../types/auth').CollegeAdminUser & { password: string })[] = [
   {
@@ -68,7 +146,7 @@ export function authenticateUser(
 ): AuthUser | null {
   const cleanId = identifier.trim().toLowerCase();
   
-  // Authenticate against registered users in persistent storage
+  // 1. First check newly registered accounts in localStorage
   const registeredUsers = getRegisteredUsers();
   const registeredMatch = registeredUsers.find(
     (u) =>

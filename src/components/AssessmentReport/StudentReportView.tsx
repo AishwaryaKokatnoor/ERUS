@@ -73,25 +73,26 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
   // Find the active student for this user
   const userStudent = session.students.find(
     (s) => s.isUser || (currentUser && (s.id === currentUser.id || s.name === currentUser.name))
-  ) || session.students[0] || fallbackUserStudent;
+  ) || session.students[0];
 
   const effectiveInitialStudentId = isStudent
     ? userStudent.id
-    : (targetStudentId || initialReport?.studentId || session.students[0]?.id || userStudent.id);
+    : (targetStudentId || initialReport?.studentId || session.students[0]?.id || 's1');
 
   const [selectedStudentId, setSelectedStudentId] = useState<string>(effectiveInitialStudentId);
 
-  // Initialize report personalized for the active student
+  // Initialize report personalized for the active student if they are a student
   const [currentReport, setCurrentReport] = useState<StudentAssessmentReport>(() => {
-    if (initialReport) {
-      if (isStudent && (initialReport.studentId === userStudent.id || initialReport.studentName === currentUser?.name)) {
+    if (isStudent) {
+      if (
+        initialReport &&
+        (initialReport.studentId === userStudent.id || initialReport.studentName === currentUser?.name)
+      ) {
         return initialReport;
       }
-      if (!isStudent) {
-        return initialReport;
-      }
+      return generateStudentReport(userStudent, session.topic, session.durationMinutes, initialReport);
     }
-    return generateStudentReport(userStudent, session.topic, session.durationMinutes);
+    return initialReport || SAMPLE_REPORT_RAHUL;
   });
 
   const [isLoading, setIsLoading] = useState(false);
@@ -304,15 +305,15 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
   const getGradeBadgeColor = (grade: string) => {
     switch (grade) {
       case 'Excellent':
-        return 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800';
+        return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50';
       case 'Very Good':
-        return 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800';
+        return 'bg-indigo-500/20 text-indigo-300 border-indigo-500/50';
       case 'Good':
-        return 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800';
+        return 'bg-blue-500/20 text-blue-300 border-blue-500/50';
       case 'Average':
-        return 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800';
+        return 'bg-amber-500/20 text-amber-300 border-amber-500/50';
       default:
-        return 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800';
+        return 'bg-rose-500/20 text-rose-300 border-rose-500/50';
     }
   };
 
@@ -613,13 +614,13 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
             </div>
 
             {/* Scorecard Hero Badge */}
-            <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 text-center flex flex-col items-center justify-center min-w-[170px]">
-              <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Overall Score</span>
+            <div className="bg-indigo-50/70 dark:bg-slate-950/80 border border-indigo-100 dark:border-slate-800 rounded-2xl p-4 sm:p-5 text-center flex flex-col items-center justify-center min-w-[170px] shadow-xs dark:shadow-lg">
+              <span className="text-xs text-slate-600 dark:text-slate-400 font-medium">Overall Score</span>
               <div className="flex items-baseline gap-1 my-1">
                 <span className="text-3xl sm:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-teal-500 dark:from-indigo-400 dark:to-teal-300">
                   {isEditingScores ? calculatePreviewScore(editableSkills) : currentReport.overallScore}
                 </span>
-                <span className="text-sm font-semibold font-mono text-slate-400 dark:text-slate-500">/ 100</span>
+                <span className="text-sm font-bold text-slate-400 dark:text-slate-500">/ 100</span>
               </div>
               <span className={`text-xs px-3 py-1 rounded-full font-bold border ${getGradeBadgeColor(currentReport.grade)}`}>
                 Grade: {currentReport.grade}
@@ -890,12 +891,12 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           
           {/* Strengths Card */}
-          <div className="bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/40 rounded-2xl p-4 sm:p-5 space-y-2.5">
+          <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/40 rounded-2xl p-4 sm:p-5 space-y-2.5">
             <h4 className="text-xs font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               Key Strengths Observed
             </h4>
-            <ul className="space-y-1.5 text-xs text-slate-800 dark:text-slate-200">
+            <ul className="space-y-1.5 text-xs text-emerald-950 dark:text-emerald-100">
               {currentReport.strengths.map((str, i) => (
                 <li key={i} className="flex items-start gap-2">
                   <span className="text-emerald-600 dark:text-emerald-400 font-bold">•</span>
@@ -906,12 +907,12 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
           </div>
 
           {/* Areas for Improvement Card */}
-          <div className="bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-2xl p-4 sm:p-5 space-y-2.5">
+          <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-2xl p-4 sm:p-5 space-y-2.5">
             <h4 className="text-xs font-bold text-amber-800 dark:text-amber-300 uppercase tracking-wider flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
               Target Areas for Improvement
             </h4>
-            <ul className="space-y-1.5 text-xs text-slate-800 dark:text-slate-200">
+            <ul className="space-y-1.5 text-xs text-amber-950 dark:text-amber-100">
               {currentReport.areasForImprovement.map((area, i) => (
                 <li key={i} className="flex items-start gap-2">
                   <span className="text-amber-600 dark:text-amber-400 font-bold">•</span>
@@ -977,7 +978,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
         )}
 
         {/* Section 4: AI Recommendations for Practice */}
-        <div className="bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200/80 dark:border-indigo-800/40 rounded-2xl p-4 sm:p-5 space-y-2.5">
+        <div className="bg-indigo-50/80 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/50 rounded-2xl p-4 sm:p-5 space-y-2.5">
           <h4 className="text-xs font-bold text-indigo-800 dark:text-indigo-300 uppercase tracking-wider flex items-center gap-2">
             <Lightbulb className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
             AI Recommendation & Structured Practice Plan

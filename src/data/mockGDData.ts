@@ -376,41 +376,133 @@ export const INITIAL_STUDENTS: Student[] = [
 ];
 
 export function generateSlotParticipants(
-  count: number = 0,
+  count: number = 15,
   userStudent?: { id?: string; name?: string; college?: string; course?: string }
 ): Student[] {
+  // Support exact requested count (default 15)
   const targetCount = Math.max(0, count);
   const result: Student[] = [];
 
   for (let i = 0; i < targetCount; i++) {
+    const template = INITIAL_STUDENTS[i % INITIAL_STUDENTS.length];
     const seatNum = i + 1;
-    const isUser = i === 0;
+    const isUser = i === 0; // Default active user to Seat 1
 
     result.push({
-      id: isUser && userStudent?.id ? userStudent.id : `slot-stu-${seatNum}`,
-      name: isUser && userStudent?.name ? userStudent.name : `Participant ${seatNum}`,
-      college: isUser && userStudent?.college ? userStudent.college : 'Engineering Institute',
-      course: isUser && userStudent?.course ? userStudent.course : 'B.Tech',
-      batch: '2022-2026',
-      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=stu-${seatNum}`,
+      ...template,
+      id: `slot-stu-${seatNum}`,
+      name: isUser && userStudent?.name ? userStudent.name : template.name,
+      college: isUser && userStudent?.college ? userStudent.college : template.college,
+      course: isUser && userStudent?.course ? userStudent.course : template.course,
       seatNumber: seatNum,
       isUser,
       micActive: false,
       isSpeaking: false,
       hasRaisedHand: false,
-      speakingDurationSeconds: 0,
-      speakingTurns: 0,
+      speakingDurationSeconds: Math.floor(60 + Math.random() * 150),
+      speakingTurns: Math.floor(2 + Math.random() * 3),
       interruptionCount: 0,
-      questionsAnswered: 0,
-      questionsInitiated: 0,
-      sentiment: 'neutral',
+      questionsAnswered: Math.floor(1 + Math.random() * 3),
+      questionsInitiated: Math.floor(Math.random() * 2),
     });
   }
 
   return result;
 }
 
-export const INITIAL_TRANSCRIPTS: TranscriptEntry[] = [];
+export const INITIAL_TRANSCRIPTS: TranscriptEntry[] = [
+  {
+    id: 't-1',
+    sessionId: 'session-001',
+    speakerId: 'ai-facilitator',
+    speakerName: 'AI Facilitator (ERUS)',
+    seatNumber: null,
+    isFacilitator: true,
+    timestamp: '00:05',
+    timestampSeconds: 5,
+    text: 'Good morning everyone. Today\'s discussion topic is: "Should Artificial Intelligence replace teachers?" Each participant will get an opportunity to speak. Please respect others\' opinions and avoid interruptions.',
+    type: 'intro',
+    sentiment: 'positive',
+  },
+  {
+    id: 't-2',
+    sessionId: 'session-001',
+    speakerId: 'ai-facilitator',
+    speakerName: 'AI Facilitator (ERUS)',
+    seatNumber: null,
+    isFacilitator: true,
+    timestamp: '00:30',
+    timestampSeconds: 30,
+    text: 'Discussion Rules: 1. Speak only one person at a time. 2. Respect differing opinions. 3. Support arguments with examples. 4. Encourage participation. 5. Stay on topic. Let us begin. Who would like to start the discussion?',
+    type: 'moderation',
+    sentiment: 'neutral',
+  },
+  {
+    id: 't-3',
+    sessionId: 'session-001',
+    speakerId: 's1',
+    speakerName: 'Rahul Kumar',
+    seatNumber: 1,
+    isFacilitator: false,
+    timestamp: '01:10',
+    timestampSeconds: 70,
+    text: 'Thank you moderator. I believe AI can assist teachers significantly with automated grading, adaptive tutoring, and 24/7 student doubt clearance, but it cannot truly replace human empathy, mentorship, and values.',
+    type: 'statement',
+    sentiment: 'positive',
+  },
+  {
+    id: 't-4',
+    sessionId: 'session-001',
+    speakerId: 's2',
+    speakerName: 'Priya Sharma',
+    seatNumber: 2,
+    isFacilitator: false,
+    timestamp: '02:05',
+    timestampSeconds: 125,
+    text: 'I agree with Rahul, but looking at rural and underprivileged sectors, specialized AI educators could democratize world-class curriculum where physical teacher shortages are acute.',
+    type: 'statement',
+    sentiment: 'positive',
+  },
+  {
+    id: 't-5',
+    sessionId: 'session-001',
+    speakerId: 'ai-facilitator',
+    speakerName: 'AI Facilitator (ERUS)',
+    seatNumber: null,
+    isFacilitator: true,
+    timestamp: '03:15',
+    timestampSeconds: 195,
+    text: 'Thank you Priya. Let us hear from Ramesh now. Ramesh, would you like to share your thoughts on the technological constraints?',
+    type: 'probing',
+    sentiment: 'constructive',
+  },
+  {
+    id: 't-6',
+    sessionId: 'session-001',
+    speakerId: 's3',
+    speakerName: 'Ramesh Patel',
+    seatNumber: 3,
+    isFacilitator: false,
+    timestamp: '03:40',
+    timestampSeconds: 220,
+    text: 'Yes moderator. In technical disciplines, practical laboratory supervision and creative problem-solving require real-time human observation. AI might lack the physical adaptability in workshops.',
+    type: 'statement',
+    sentiment: 'neutral',
+  },
+  {
+    id: 't-7',
+    sessionId: 'session-001',
+    speakerId: 's4',
+    speakerName: 'Sneha Reddy',
+    seatNumber: 4,
+    isFacilitator: false,
+    timestamp: '04:31',
+    timestampSeconds: 271,
+    text: 'I believe AI can assist teachers but cannot replace them. Human psychological support during adolescent distress is irreplaceable by algorithms.',
+    type: 'statement',
+    sentiment: 'positive',
+  },
+];
 
 export interface FacultyMemberInfo {
   id: string;
@@ -464,9 +556,9 @@ export const INSTITUTIONAL_FACULTY: FacultyMemberInfo[] = [
 export const INITIAL_SLOTS: GDSession[] = [
   // TOPIC 1: Should Artificial Intelligence replace teachers?
   {
-    id: 'slot-genai-1',
+    id: 'slot-morning-1',
     slotName: 'Slot 1 - Morning Batch',
-    slotTiming: '10:00 AM - 10:30 AM',
+    slotTiming: '09:30 AM - 10:00 AM',
     slotDate: 'Today',
     enrolledCount: 10,
     maxCapacity: 15,
@@ -735,25 +827,23 @@ export function computeOverallScore(skills: {
   return Math.min(100, Math.max(0, Math.round(total)));
 }
 
-export function createDefaultAssessmentReport(
-  student?: Partial<Student>,
-  topic: string = 'Group Discussion',
-  durationMinutes: number = 20
+export function generateStudentReport(
+  student: Student,
+  topic: string,
+  durationMinutes: number = 20,
+  baseReport?: StudentAssessmentReport
 ): StudentAssessmentReport {
-  const name = student?.name || 'Participant';
-  const turns = student?.speakingTurns ?? 0;
-  const durationSec = student?.speakingDurationSeconds ?? 0;
-  const interruptions = student?.interruptionCount ?? 0;
-  const questionsAnswered = student?.questionsAnswered ?? 0;
-  const questionsInitiated = student?.questionsInitiated ?? 0;
+  const base = baseReport || SAMPLE_REPORT_RAHUL;
+  const turns = student.speakingTurns || 4;
+  const durationSec = student.speakingDurationSeconds || 180;
 
-  const english = turns > 0 ? Math.min(20, Math.max(12, Math.round(15 + (turns % 4)))) : 15;
-  const fluency = durationSec > 0 ? Math.min(20, Math.max(12, Math.round(14 + Math.min(6, durationSec / 60)))) : 15;
-  const clarity = turns > 0 ? Math.min(15, Math.max(9, Math.round(11 + (questionsAnswered % 3)))) : 11;
-  const confidence = turns > 0 ? Math.min(15, Math.max(10, Math.round(12 + (questionsInitiated % 3)))) : 12;
-  const content = turns > 0 ? Math.min(15, Math.max(9, Math.round(11 + ((turns * 2) % 4)))) : 11;
-  const collaboration = Math.min(10, Math.max(6, Math.round(8 - interruptions)));
-  const leadership = Math.min(5, Math.max(2, Math.round(3 + (questionsInitiated > 0 ? 1 : 0))));
+  const english = Math.min(20, Math.max(14, Math.round(16 + (turns % 3))));
+  const fluency = Math.min(20, Math.max(13, Math.round(15 + ((durationSec / 45) % 4))));
+  const clarity = Math.min(15, Math.max(10, Math.round(12 + ((student.questionsAnswered || 2) % 3))));
+  const confidence = Math.min(15, Math.max(11, Math.round(13 + ((student.questionsInitiated || 1) % 3))));
+  const content = Math.min(15, Math.max(10, Math.round(12 + ((turns * 2) % 3))));
+  const collaboration = Math.min(10, Math.max(7, Math.round(8 - (student.interruptionCount || 0))));
+  const leadership = Math.min(5, Math.max(3, Math.round(4 + ((student.questionsInitiated || 0) > 0 ? 1 : 0))));
 
   const overall = computeOverallScore({
     english,
@@ -766,11 +856,12 @@ export function createDefaultAssessmentReport(
   });
 
   return {
-    id: `rep-${student?.id || 'gen'}-${Date.now()}`,
+    ...base,
+    id: `rep-${student.id}-${Date.now()}`,
     sessionId: 'session-001',
-    studentId: student?.id || 'stu-1',
-    studentName: name,
-    college: student?.college || 'Academic Institution',
+    studentId: student.id,
+    studentName: student.name,
+    college: student.college || 'Engineering Institute',
     topic,
     durationMinutes,
     speakingTimeFormatted: `${Math.floor(durationSec / 60)} min ${durationSec % 60} sec`,
@@ -789,83 +880,17 @@ export function createDefaultAssessmentReport(
       endorsed: false,
     },
     skills: {
-      english: {
-        parameter: 'Speaking in English',
-        weightagePercent: 20,
-        score: english,
-        maxScore: 20,
-        subPoints: ['Grammar usage', 'Vocabulary choice', 'Sentence structure', 'Clarity of articulation'],
-        feedback: turns > 0 ? 'Clear vocabulary and grammatically sound sentence construction.' : 'No active speech recorded yet.',
-      },
-      fluency: {
-        parameter: 'Fluency',
-        weightagePercent: 20,
-        score: fluency,
-        maxScore: 20,
-        subPoints: ['Continuous speaking', 'Pacing and flow', 'Controlled pauses', 'Natural rhythm'],
-        feedback: turns > 0 ? 'Consistent cadence with appropriate breathing intervals.' : 'No active speech recorded yet.',
-      },
-      clarity: {
-        parameter: 'Communication Clarity',
-        weightagePercent: 15,
-        score: clarity,
-        maxScore: 15,
-        subPoints: ['Core point expression', 'Logical progression', 'Intelligibility'],
-        feedback: turns > 0 ? 'Arguments presented in structured order.' : 'Pending participation data.',
-      },
-      confidence: {
-        parameter: 'Confidence',
-        weightagePercent: 15,
-        score: confidence,
-        maxScore: 15,
-        subPoints: ['Tone assertiveness', 'Poise under questioning', 'Initiative'],
-        feedback: turns > 0 ? 'Engaged peer questions with steady conviction.' : 'Pending participation data.',
-      },
-      contentQuality: {
-        parameter: 'Content Quality',
-        weightagePercent: 15,
-        score: content,
-        maxScore: 15,
-        subPoints: ['Subject relevance', 'Supporting points', 'Fact coherence'],
-        feedback: turns > 0 ? 'Addressed the central theme with relevant examples.' : 'Pending participation data.',
-      },
-      collaboration: {
-        parameter: 'Collaboration',
-        weightagePercent: 10,
-        score: collaboration,
-        maxScore: 10,
-        subPoints: ['Respectful turn-taking', 'Active listening', 'Peer acknowledgment'],
-        feedback: interruptions === 0 ? 'Maintained room etiquette without unprompted interruptions.' : `Recorded ${interruptions} interruption(s).`,
-      },
-      leadership: {
-        parameter: 'Leadership',
-        weightagePercent: 5,
-        score: leadership,
-        maxScore: 5,
-        subPoints: ['Discussion direction', 'Conflict moderation', 'Summarization'],
-        feedback: questionsInitiated > 0 ? 'Prompted exploratory queries to engage the room.' : 'Contributed to peer discussion.',
-      },
+      english: { ...base.skills.english, score: english },
+      fluency: { ...base.skills.fluency, score: fluency },
+      clarity: { ...base.skills.clarity, score: clarity },
+      confidence: { ...base.skills.confidence, score: confidence },
+      contentQuality: { ...base.skills.contentQuality, score: content },
+      collaboration: { ...base.skills.collaboration, score: collaboration },
+      leadership: { ...base.skills.leadership, score: leadership },
     },
     overallScore: overall,
     grade: calculateGrade(overall),
-    strengths: turns > 0 ? [
-      'Contributed constructive points aligned with the central topic',
-      'Followed room turn-taking protocol and respectful dialogue',
-      'Exhibited articulate delivery and active listening',
-    ] : ['Ready to begin group discussion participation'],
-    areasForImprovement: [
-      'Expand domain-specific terminology during rebuttals',
-      'Cite verifiable empirical evidence or industry benchmarks',
-      'Practice seamless transitional phrases when introducing new perspectives',
-    ],
-    aiRecommendations: [
-      'Practice framing an opening statement within 60 seconds with 2 supporting pillars',
-      'Incorporate acknowledging phrases before transitioning to counter-arguments',
-      'Consistently track session time to deliver concise, high-impact contributions',
-    ],
-    aiSummary: turns > 0
-      ? `${name} engaged constructively in the discussion on "${topic}", contributing ${Math.floor(durationSec / 60)}m ${durationSec % 60}s of speaking time across ${turns} turn(s).`
-      : `${name} is enrolled in the session for "${topic}". Assessment will update dynamically as participation begins.`,
+    aiSummary: `${student.name} contributed actively to the group discussion on "${topic}", demonstrating constructive dialogue and structured reasoning.`,
     generatedAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
   };
 }

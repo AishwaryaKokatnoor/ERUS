@@ -127,20 +127,20 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({
       {/* Top Bar with Branding, Role Switcher Menu & Theme Switcher */}
       <header className="px-4 sm:px-8 py-4 sm:py-6 flex items-center justify-between max-w-7xl mx-auto w-full relative z-30">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-indigo-600 dark:bg-indigo-500 flex items-center justify-center text-white shadow-sm shrink-0">
-            <Sparkles className="w-4 h-4" />
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 via-blue-500 to-teal-400 flex items-center justify-center shadow-lg shadow-indigo-500/20 ring-1 ring-white/20 shrink-0">
+            <Sparkles className="w-5 h-5 text-white animate-pulse" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-heading font-bold text-lg tracking-tight text-slate-900 dark:text-white">
-                ERUS
+              <span className="font-heading font-extrabold text-lg sm:text-xl tracking-tight text-slate-900 dark:text-white">
+                ERUS-AIGDF
               </span>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold border border-indigo-200 dark:border-indigo-800">
                 MULTI-ROLE PLATFORM
               </span>
             </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 font-normal hidden sm:block">
-              Group Discussion & Assessment Platform
+            <p className="text-xs text-slate-500 dark:text-slate-400 font-medium hidden sm:block">
+              AI-Powered Autonomous Group Discussion Facilitator & Individual Assessment Platform
             </p>
           </div>
         </div>
@@ -290,10 +290,9 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({
       </main>
 
       {/* Footer */}
-      <footer className="px-4 py-4 text-center text-xs text-slate-400 dark:text-slate-500 border-t border-slate-200/80 dark:border-slate-800/80 relative z-10">
-        <span>ERUS Autonomous AI Group Discussion Facilitator & Individual Assessment</span>
+      <footer className="px-4 py-4 text-center text-xs text-slate-500 dark:text-slate-400 border-t border-slate-200/80 dark:border-slate-800/80 relative z-10">
+        <span>ERUS Autonomous AI Group Discussion Facilitator • Multi-Role Academic Portal</span>
       </footer>
     </div>
   );
 };
-
