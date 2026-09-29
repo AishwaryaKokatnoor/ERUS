@@ -171,19 +171,57 @@ function GDAppContent() {
     }
   }, [session?.id, session?.facultyLiveNotes]);
 
+  // Pre-load published slots on initial app mount
+  useEffect(() => {
+    fetchCollegeSlots('ALL').then((backendSlots) => {
+      if (backendSlots && backendSlots.length > 0) {
+        const mappedSlots: GDSession[] = backendSlots.map((s: any): GDSession => ({
+          ...DEFAULT_GD_SESSION,
+          id: s.id,
+          topic: s.topic || s.slotName || 'Group Discussion',
+          description: s.description || '',
+          slotName: s.slotName || s.topic || 'Slot',
+          slotTiming: s.slotTiming || '',
+          durationMinutes: s.durationMinutes || 15,
+          difficulty: s.difficulty || 'Intermediate',
+          assessmentRubric: s.assessmentRubric || 'Standard Academic 7-Parameter Rubric',
+          status: s.status === 'active' ? 'active' : s.status === 'completed' ? 'completed' : 'waiting',
+          students: s.students && s.students.length > 0 ? s.students : generateSlotParticipants(s.enrolledCount || 8),
+          currentPhase: 'intro',
+          facilitatorSpeech: `Welcome to ${s.slotName || 'this GD slot'}. Session begins once started by the Faculty In-Charge.`,
+          facilitatorAction: 'Waiting for Faculty In-Charge to commence session',
+          isFacilitatorSpeaking: false,
+          silenceTimerSeconds: 0,
+          currentSpeakerId: null,
+          breakoutRooms: [],
+          enrolledCount: s.enrolledCount ?? (s.students?.length ?? 0),
+          maxCapacity: s.maxCapacity ?? 15,
+          assignedFacultyId: s.assignedFacultyId || '',
+          assignedFacultyName: s.assignedFacultyName || '',
+          assignedFacultyEmail: s.assignedFacultyEmail || '',
+          assignedFacultyDept: s.assignedFacultyDept || '',
+          facultyLiveNotes: s.facultyLiveNotes || [],
+          createdAt: s.createdAt || new Date().toISOString(),
+        }));
+        setAvailableSlots(mappedSlots);
+        setSession((prev) => (prev && prev.id && prev.id !== DEFAULT_GD_SESSION.id) ? prev : (mappedSlots[0] || DEFAULT_GD_SESSION));
+      }
+    }).catch(() => {});
+  }, []);
+
   // Student live-session status polling: backend remains the source of truth.
   useEffect(() => {
     if (!currentUser || currentUser.role !== 'student') return;
-    const collegeCode = (currentUser as any).collegeCode || 'DIT';
+    const rawCode = (currentUser as any).collegeCode;
+    const collegeCode = rawCode && rawCode !== 'DIT' ? rawCode : 'ALL';
     const timer = setInterval(async () => {
       try {
         const slots = await fetchCollegeSlots(collegeCode);
-        // Even an empty response is authoritative: the college currently has no published slots.
-        // Backend is authoritative: slots missing from the response were deleted
-        // and must disappear from the student portal as well.
-        if (Array.isArray(slots)) {
+        if (Array.isArray(slots) && slots.length > 0) {
           setAvailableSlots(slots.map((fresh: any) => ({
+            ...DEFAULT_GD_SESSION,
             ...fresh,
+            students: fresh.students && fresh.students.length > 0 ? fresh.students : generateSlotParticipants(fresh.enrolledCount || 8),
             status: fresh.status === 'active' ? 'active' : fresh.status === 'completed' ? 'completed' : 'waiting',
           })));
           setSession((prev) => {
@@ -224,12 +262,13 @@ function GDAppContent() {
     } catch {}
 
     // Fetch real slots from backend. Faculty portals are restricted to their assigned sessions.
-    const collegeCode = (user as any).collegeCode || 'DIT';
+    const rawCode = (user as any).collegeCode;
+    const collegeCode = rawCode && rawCode !== 'DIT' ? rawCode : 'ALL';
     const slotSource = user.role === 'faculty'
       ? fetchFacultyAssignedSlots((user as any).facultyId || user.id, collegeCode)
       : fetchCollegeSlots(collegeCode);
     slotSource.then((backendSlots) => {
-      if (backendSlots) {
+      if (backendSlots && backendSlots.length > 0) {
         // Map backend slot objects to GDSession format expected by the frontend
         const mappedSlots: GDSession[] = backendSlots.map((s: any): GDSession => ({
           ...DEFAULT_GD_SESSION,
@@ -259,8 +298,6 @@ function GDAppContent() {
           facultyLiveNotes: s.facultyLiveNotes || [],
           createdAt: s.createdAt || new Date().toISOString(),
         }));
-        // The backend response is authoritative, including an empty array.
-        // This prevents stale local/demo topics from hiding the real college roster.
         setAvailableSlots(mappedSlots);
         setSession(mappedSlots[0] || DEFAULT_GD_SESSION);
       }
@@ -838,7 +875,7 @@ function GDAppContent() {
           slotTiming: s.slotTiming,
           slotName: s.slotName,
           maxCapacity: s.maxCapacity || 15,
-          collegeCode: (currentUser as any).collegeCode || 'DIT',
+          collegeCode: (currentUser as any).collegeCode || 'ALL',
           assignedFacultyId: s.assignedFacultyId,
           assignedFacultyName: s.assignedFacultyName,
           assignedFacultyDept: s.assignedFacultyDept,

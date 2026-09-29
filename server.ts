@@ -1207,25 +1207,31 @@ app.post('/api/college/faculty', async (req, res) => {
 });
 
 app.get('/api/college/slots', async (req, res) => {
-  const code = ((req.query.collegeCode as string) || 'DIT').toUpperCase();
-  const facultyList = persistentState.faculty[code] || [];
+  const rawCode = ((req.query.collegeCode as string) || '').trim().toUpperCase();
+  const isAll = !rawCode || rawCode === 'ALL' || rawCode === 'DIT';
+  const code = isAll ? '' : rawCode;
+
   const slotMap = new Map<string, any>();
 
-  // Start with the in-memory state.
-  for (const slot of (persistentState.slots[code] || [])) {
-    slotMap.set(slot.id, slot);
+  // 1. Gather slots from in-memory state
+  if (isAll) {
+    for (const [colCode, list] of Object.entries(persistentState.slots || {})) {
+      for (const slot of (list || [])) {
+        slotMap.set(slot.id, { ...slot, collegeCode: slot.collegeCode || colCode });
+      }
+    }
+  } else {
+    for (const slot of (persistentState.slots[code] || [])) {
+      slotMap.set(slot.id, { ...slot, collegeCode: slot.collegeCode || code });
+    }
   }
 
-  // PostgreSQL is also authoritative for persisted slots. This is important
-  // after a Railway restart/deploy, where in-memory state starts empty.
-  if (isDbConnected && prisma) {
+  // 2. Query MongoDB GDSessionModel directly if connected
+  if (isMongoConnected()) {
     try {
-      const dbSlots = await prisma.gDSession.findMany({
-        where: { college: { code } },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      for (const s of dbSlots) {
+      const mongoQuery = (!isAll && code) ? { collegeCode: code } : {};
+      const dbSessions = await GDSessionModel.find(mongoQuery).sort({ createdAt: -1 });
+      for (const s of dbSessions) {
         const existing = slotMap.get(s.id) || {};
         slotMap.set(s.id, {
           ...existing,
@@ -1235,25 +1241,64 @@ app.get('/api/college/slots', async (req, res) => {
           durationMinutes: s.durationMinutes,
           difficulty: s.difficulty,
           status: s.status,
-          scheduledTime: s.scheduledTime || undefined,
           slotTiming: s.slotTiming || '',
           slotName: s.slotName || s.topic,
           maxCapacity: s.maxCapacity,
           enrolledCount: s.enrolledCount,
           assignedFacultyId: s.assignedFacultyId || '',
           assignedFacultyName: s.assignedFacultyName || '',
-          collegeCode: code,
-          createdAt: s.createdAt.toISOString(),
+          assignedFacultyEmail: s.assignedFacultyEmail || '',
+          assignedFacultyDept: s.assignedFacultyDept || '',
+          collegeCode: s.collegeCode || code || 'GENERAL',
+          createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString(),
         });
       }
-    } catch (dbErr: any) {
-      console.warn('[Database] Failed to read college slots:', dbErr.message);
+    } catch (mErr: any) {
+      console.warn('[MongoDB] Failed to read college slots:', mErr.message);
     }
   }
 
+  // 3. Fallback: If specific code was requested but yielded 0 slots, return all active slots
+  if (slotMap.size === 0 && !isAll) {
+    for (const [colCode, list] of Object.entries(persistentState.slots || {})) {
+      for (const slot of (list || [])) {
+        slotMap.set(slot.id, { ...slot, collegeCode: slot.collegeCode || colCode });
+      }
+    }
+    if (isMongoConnected()) {
+      try {
+        const allDbSessions = await GDSessionModel.find().sort({ createdAt: -1 });
+        for (const s of allDbSessions) {
+          if (!slotMap.has(s.id)) {
+            slotMap.set(s.id, {
+              id: s.id,
+              topic: s.topic,
+              description: s.description || '',
+              durationMinutes: s.durationMinutes,
+              difficulty: s.difficulty,
+              status: s.status,
+              slotTiming: s.slotTiming || '',
+              slotName: s.slotName || s.topic,
+              maxCapacity: s.maxCapacity,
+              enrolledCount: s.enrolledCount,
+              assignedFacultyId: s.assignedFacultyId || '',
+              assignedFacultyName: s.assignedFacultyName || '',
+              assignedFacultyEmail: s.assignedFacultyEmail || '',
+              assignedFacultyDept: s.assignedFacultyDept || '',
+              collegeCode: s.collegeCode || 'GENERAL',
+              createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString(),
+            });
+          }
+        }
+      } catch {}
+    }
+  }
+
+  // 4. Resolve Faculty Info for each slot
+  const allFaculty: BackendCollegeFacultyItem[] = Object.values(persistentState.faculty || {}).flat();
   const slots = Array.from(slotMap.values()).map((slot) => {
     const faculty = slot.assignedFacultyId
-      ? facultyList.find((f) => f.facultyId === slot.assignedFacultyId || f.id === slot.assignedFacultyId)
+      ? allFaculty.find((f) => f.facultyId === slot.assignedFacultyId || f.id === slot.assignedFacultyId)
       : undefined;
 
     return {
@@ -1265,8 +1310,10 @@ app.get('/api/college/slots', async (req, res) => {
     };
   });
 
-  // Keep the in-memory cache synchronized so all portals see the same roster.
-  persistentState.slots[code] = slots;
+  // Keep in-memory cache synchronized
+  if (code && code !== 'ALL') {
+    persistentState.slots[code] = slots.filter((s) => s.collegeCode === code);
+  }
   savePersistentState();
 
   res.json({ success: true, slots });
@@ -1723,13 +1770,41 @@ app.post('/api/student/book-slot', async (req, res) => {
   }
 
   let slot: any = null;
-  let slotCode = (student.collegeCode || 'DIT').toUpperCase();
+  let slotCode = (student.collegeCode || '').toUpperCase();
   for (const [code, list] of Object.entries(persistentState.slots)) {
     const found = list.find((s) => s.id === slotId);
     if (found) { slot = found; slotCode = code; break; }
   }
+  if (!slot && isMongoConnected()) {
+    try {
+      const dbS = await GDSessionModel.findOne({ id: slotId });
+      if (dbS) {
+        slot = {
+          id: dbS.id,
+          slotName: dbS.slotName,
+          topic: dbS.topic,
+          description: dbS.description,
+          slotTiming: dbS.slotTiming,
+          status: dbS.status,
+          durationMinutes: dbS.durationMinutes,
+          enrolledCount: dbS.enrolledCount,
+          maxCapacity: dbS.maxCapacity,
+          collegeCode: dbS.collegeCode,
+          assignedFacultyId: dbS.assignedFacultyId,
+          assignedFacultyName: dbS.assignedFacultyName,
+          assignedFacultyEmail: dbS.assignedFacultyEmail,
+          assignedFacultyDept: dbS.assignedFacultyDept,
+        };
+        slotCode = dbS.collegeCode || 'GENERAL';
+      }
+    } catch {}
+  }
   if (!slot) return res.status(404).json({ success: false, error: 'GD slot not found' });
-  if (slot.collegeCode && slot.collegeCode !== slotCode) {
+
+  // If student joined without a college code or with legacy fallback, associate them with this slot's college
+  if (!student.collegeCode || student.collegeCode === 'DIT' || student.collegeCode === 'ALL') {
+    student.collegeCode = slot.collegeCode || slotCode;
+  } else if (slot.collegeCode && slotCode && slot.collegeCode !== slotCode && slotCode !== 'ALL') {
     return res.status(403).json({ success: false, error: 'Invalid college for this slot' });
   }
   if (slot.status === 'completed' || slot.status === 'active') {

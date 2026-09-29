@@ -34,7 +34,11 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
 
   React.useEffect(() => {
     fetchAdminColleges().then(async (list) => {
-      if (list && list.length > 0) setAvailableColleges(list);
+      if (list && list.length > 0) {
+        setAvailableColleges(list);
+        setQuickCollege((prev) => prev || list[0].code);
+        setRegCollege((prev) => prev || list[0].code);
+      }
       const codes = Array.from(new Set((list || []).map((c: any) => String(c.code || '').toUpperCase()).filter(Boolean)));
       if (codes.length === 0) {
         setDemoStudents([]);
@@ -85,7 +89,11 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
 
     setIsLoading(true);
     const cleanName = quickName.trim();
-    const cleanCollege = quickCollege.trim() || 'Engineering Institute';
+    const matchedCol = availableColleges.find(
+      (c) => c.code?.toUpperCase() === quickCollege.toUpperCase() || c.name?.toLowerCase() === quickCollege.toLowerCase()
+    ) || (availableColleges.length > 0 ? availableColleges[0] : null);
+    const cleanCollege = matchedCol?.name || quickCollege.trim() || 'General Engineering';
+    const cleanCode = matchedCol?.code || 'ALL';
     const emailStub = `${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '')}${Date.now().toString().slice(-3)}@live.erus.ai`;
 
     const quickUser: StudentUser = {
@@ -95,6 +103,7 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
       role: 'student',
       studentId: `STU-${Math.floor(1000 + Math.random() * 9000)}`,
       college: cleanCollege,
+      collegeCode: cleanCode,
       course: 'B.Tech',
       batch: '2024-2028',
       seatNumber: 1,
@@ -150,13 +159,18 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
       return;
     }
 
+    const matchedCol = availableColleges.find(
+      (c) => c.code?.toUpperCase() === regCollege.toUpperCase() || c.name?.toLowerCase() === regCollege.toLowerCase()
+    ) || (availableColleges.length > 0 ? availableColleges[0] : null);
+
     setIsLoading(true);
     const res = await registerUser({
       name: regName.trim(),
       email: regEmail.trim(),
       role: 'student',
       studentId: regStudentId.trim() || `STU-${Date.now().toString().slice(-4)}`,
-      college: regCollege.trim(),
+      college: matchedCol?.name || regCollege.trim() || 'General Engineering',
+      collegeCode: matchedCol?.code || 'ALL',
       course: regCourse.trim() || 'General Engineering',
       batch: '2024-2028',
       seatNumber: 1,
@@ -297,18 +311,32 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              College or University (Optional)
+              Institution / College
             </label>
             <div className="relative">
-              <Building className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={quickCollege}
-                onChange={(e) => setQuickCollege(e.target.value)}
-                placeholder="e.g. Delhi Institute of Technology"
-                list="student-college-suggestions"
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-              />
+              <Building className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              {availableColleges.length > 0 ? (
+                <select
+                  value={quickCollege}
+                  onChange={(e) => setQuickCollege(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500 transition-all cursor-pointer"
+                >
+                  {availableColleges.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.name} ({c.code})
+                    </option>
+                  ))}
+                  <option value="ALL">All Institutions / Open Practice</option>
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={quickCollege}
+                  onChange={(e) => setQuickCollege(e.target.value)}
+                  placeholder="e.g. Engineering Institute"
+                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                />
+              )}
             </div>
           </div>
 
@@ -461,26 +489,31 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
                 College / Institution *
               </label>
               <div className="relative">
-                <Building className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={regCollege}
-                  onChange={(e) => setRegCollege(e.target.value)}
-                  placeholder="e.g. IIT Delhi"
-                  list="student-college-suggestions"
-                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950 text-xs text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                  required
-                />
-                <datalist id="student-college-suggestions">
-                  {(availableColleges.length > 0 ? availableColleges : [
-                    { code: 'DIT', name: 'Delhi Institute of Technology' },
-                    { code: 'IITB', name: 'Indian Institute of Technology Bombay' }
-                  ]).map((col) => (
-                    <option key={col.code} value={col.name}>
-                      {col.code} - {col.name}
-                    </option>
-                  ))}
-                </datalist>
+                <Building className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                {availableColleges.length > 0 ? (
+                  <select
+                    value={regCollege}
+                    onChange={(e) => setRegCollege(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950 text-xs text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                    required
+                  >
+                    {availableColleges.map((col) => (
+                      <option key={col.code} value={col.code}>
+                        {col.name} ({col.code})
+                      </option>
+                    ))}
+                    <option value="ALL">All Institutions / Open</option>
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={regCollege}
+                    onChange={(e) => setRegCollege(e.target.value)}
+                    placeholder="e.g. Engineering Institute"
+                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950 text-xs text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                    required
+                  />
+                )}
               </div>
             </div>
 

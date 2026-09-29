@@ -402,11 +402,13 @@ export async function addCollegeFaculty(payload: any) {
   return { success: true, faculty: facObj };
 }
 
-export async function fetchCollegeSlots(collegeCode: string = 'DIT'): Promise<any[]> {
-  const code = collegeCode.toUpperCase();
+export async function fetchCollegeSlots(collegeCode?: string): Promise<any[]> {
+  const rawCode = (collegeCode || '').trim().toUpperCase();
+  const isAll = !rawCode || rawCode === 'DIT' || rawCode === 'ALL';
+  const queryParam = isAll ? '?collegeCode=ALL' : `?collegeCode=${encodeURIComponent(rawCode)}`;
   let backendSlots: any[] = [];
   try {
-    const res = await fetch(`/api/college/slots?collegeCode=${encodeURIComponent(code)}`);
+    const res = await fetch(`/api/college/slots${queryParam}`);
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.slots)) {
@@ -419,10 +421,13 @@ export async function fetchCollegeSlots(collegeCode: string = 'DIT'): Promise<an
 
   // Backend is authoritative. Local slots are only a resilience cache and must
   // never overwrite backend assignment/status/enrollment fields.
+  const cacheCode = isAll ? 'ALL' : rawCode;
   const merged = backendSlots.length > 0
     ? backendSlots
-    : getLocalSlots(code);
-  saveLocalSlots(code, merged);
+    : getLocalSlots(cacheCode);
+  if (!isAll) {
+    saveLocalSlots(cacheCode, merged);
+  }
   return merged;
 }
 

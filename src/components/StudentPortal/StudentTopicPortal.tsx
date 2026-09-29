@@ -178,7 +178,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
               <GraduationCap className="w-3.5 h-3.5 text-indigo-300" />
               <span>Student GD Placement & Evaluation Portal</span>
               <span className="text-indigo-400">•</span>
-              <span>{currentUser?.college || 'Delhi Institute of Technology'}</span>
+              <span>{currentUser?.college || (availableSlots[0]?.collegeCode ? `Institution (${availableSlots[0].collegeCode})` : 'All Institutions')}</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
               Welcome, {currentUser?.name || 'Student Participant'}
@@ -320,88 +320,104 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
             </div>
           </div>
 
-          {/* Topics Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
-            {filteredTopics.map((topicItem, index) => {
-              const openSeats = Math.max(0, topicItem.totalSeats - topicItem.enrolledSeats);
-              const isTopicBooked = topicItem.hasBookedSlot;
+          {/* Topics Grid or Empty State */}
+          {filteredTopics.length === 0 ? (
+            <div className="p-8 sm:p-12 text-center rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+              <div className="w-16 h-16 mx-auto rounded-3xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center border border-indigo-100 dark:border-indigo-900/50">
+                <BookOpen className="w-8 h-8" />
+              </div>
+              <div className="space-y-1.5 max-w-md mx-auto">
+                <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+                  No Discussion Topics Published Yet
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
+                  The college coordinator has not published scheduled GD evaluation slots for this view yet. Please check back shortly or reload the portal.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
+              {filteredTopics.map((topicItem, index) => {
+                const openSeats = Math.max(0, topicItem.totalSeats - topicItem.enrolledSeats);
+                const isTopicBooked = topicItem.hasBookedSlot;
 
-              return (
-                <div
-                  key={topicItem.topic}
-                  onClick={() => setSelectedTopic(topicItem.topic)}
-                  className={`p-5 sm:p-6 rounded-3xl border transition-all cursor-pointer flex flex-col justify-between group relative overflow-hidden ${
-                    isTopicBooked
-                      ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-400 dark:border-emerald-600/60 hover:shadow-lg hover:shadow-emerald-500/10'
-                      : 'bg-white dark:bg-slate-900 border-slate-200/90 dark:border-slate-800 hover:border-indigo-400 dark:hover:border-indigo-600/60 hover:shadow-lg hover:shadow-indigo-500/10'
-                  }`}
-                >
-                  <div className="space-y-3">
-                    {/* Header Row: Topic Number, Domain Tag & Booking Pill */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 flex items-center justify-center shrink-0 border border-indigo-100 dark:border-indigo-800/40">
-                          {getTopicIcon(topicItem.topic)}
+                return (
+                  <div
+                    key={topicItem.topic}
+                    onClick={() => setSelectedTopic(topicItem.topic)}
+                    className={`p-5 sm:p-6 rounded-3xl border transition-all cursor-pointer flex flex-col justify-between group relative overflow-hidden ${
+                      isTopicBooked
+                        ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-400 dark:border-emerald-600/60 hover:shadow-lg hover:shadow-emerald-500/10'
+                        : 'bg-white dark:bg-slate-900 border-slate-200/90 dark:border-slate-800 hover:border-indigo-400 dark:hover:border-indigo-600/60 hover:shadow-lg hover:shadow-indigo-500/10'
+                    }`}
+                  >
+                    <div className="space-y-3">
+                      {/* Header Row: Topic Number, Domain Tag & Booking Pill */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 flex items-center justify-center shrink-0 border border-indigo-100 dark:border-indigo-800/40">
+                            {getTopicIcon(topicItem.topic)}
+                          </div>
+                          <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                            Topic {index + 1}
+                          </span>
                         </div>
-                        <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                          Topic {index + 1}
-                        </span>
-                      </div>
 
-                      {isTopicBooked ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-bold text-[10px] border border-emerald-300 dark:border-emerald-800">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                          <span>1 Confirmed Slot</span>
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                          {topicItem.slots.length} {topicItem.slots.length === 1 ? 'Slot Available' : 'Slots Available'}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Topic Title */}
-                    <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors leading-snug">
-                      {topicItem.topic}
-                    </h3>
-
-                    {/* Topic Description */}
-                    <p className="text-xs text-slate-600 dark:text-slate-400 line-clamp-2 leading-relaxed">
-                      {topicItem.description}
-                    </p>
-
-                    {/* Allotted Faculty Mentors Badges */}
-                    <div className="space-y-1 pt-1">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1">
-                        <GraduationCap className="w-3 h-3 text-amber-500" />
-                        <span>Allotted Faculty In-Charge:</span>
-                      </span>
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        {topicItem.facultyList[0] && (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 border border-amber-200/80 dark:border-amber-800/40 text-[11px] font-medium">
-                            <strong>{topicItem.facultyList[0].name}</strong>{topicItem.facultyList[0].dept ? ` (${topicItem.facultyList[0].dept.split(' ')[0]})` : ''}
+                        {isTopicBooked ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-bold text-[10px] border border-emerald-300 dark:border-emerald-800">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            <span>1 Confirmed Slot</span>
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                            {topicItem.slots.length} {topicItem.slots.length === 1 ? 'Slot Available' : 'Slots Available'}
                           </span>
                         )}
                       </div>
+
+                      {/* Topic Title */}
+                      <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors leading-snug">
+                        {topicItem.topic}
+                      </h3>
+
+                      {/* Topic Description */}
+                      <p className="text-xs text-slate-600 dark:text-slate-400 line-clamp-2 leading-relaxed">
+                        {topicItem.description}
+                      </p>
+
+                      {/* Allotted Faculty Mentors Badges */}
+                      <div className="space-y-1 pt-1">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1">
+                          <GraduationCap className="w-3 h-3 text-amber-500" />
+                          <span>Allotted Faculty In-Charge:</span>
+                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {topicItem.facultyList[0] && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 border border-amber-200/80 dark:border-amber-800/40 text-[11px] font-medium">
+                              <strong>{topicItem.facultyList[0].name}</strong>{topicItem.facultyList[0].dept ? ` (${topicItem.facultyList[0].dept.split(' ')[0]})` : ''}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Footer Row: Capacity Meter & Action Arrow */}
+                    <div className="mt-5 pt-3.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400 text-[11px] font-medium">
+                        <Users className="w-3.5 h-3.5 text-teal-500" />
+                        <span>{openSeats} seats open across {topicItem.slots.length} batches</span>
+                      </div>
+
+                      <div className="flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 group-hover:translate-x-1 transition-transform text-xs">
+                        <span>Explore Slots</span>
+                        <ChevronRight className="w-4 h-4" />
+                      </div>
                     </div>
                   </div>
-
-                  {/* Footer Row: Capacity Meter & Action Arrow */}
-                  <div className="mt-5 pt-3.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400 text-[11px] font-medium">
-                      <Users className="w-3.5 h-3.5 text-teal-500" />
-                      <span>{openSeats} seats open across {topicItem.slots.length} batches</span>
-                    </div>
-
-                    <div className="flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 group-hover:translate-x-1 transition-transform text-xs">
-                      <span>Explore Slots</span>
-                      <ChevronRight className="w-4 h-4" />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       ) : (
         /* 4. SLOTS VIEW FOR SELECTED TOPIC */
