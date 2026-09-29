@@ -48,7 +48,7 @@ export const CollegeAdminLogin: React.FC<CollegeAdminLoginProps> = ({
     setSelectedCollegeCode(col.code);
     const email = col.adminEmail || col.contactEmail || `admin@${col.code.toLowerCase()}.edu.in`;
     setIdentifier(email);
-    setPassword(col.adminPassword || '');
+    setPassword(col.adminPassword || 'admin123');
     setError(null);
   };
 

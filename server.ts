@@ -2164,33 +2164,31 @@ app.post('/api/auth/login', async (req, res) => {
       }
     }
 
-    // If logging in with 'password123' (standard default for student demo accounts),
-    // or if the user is a student in an active college roster, heal and accept!
-    if (!isMatch && password === 'password123') {
-      const isRosterStudent = Object.values(persistentState.students).some((list) =>
-        list.some(
-          (s) =>
-            s.email.toLowerCase() === user!.email.toLowerCase() ||
-            s.studentId?.toLowerCase() === cleanId
-        )
+    // Demo / default password fallback & self-healing across roles:
+    // Student: 'password123'
+    // Faculty: 'faculty123' or 'password123'
+    // College Admin: 'admin123' or 'password123'
+    const isStandardRoleDemoPassword =
+      (user.role === 'student' && password === 'password123') ||
+      (user.role === 'faculty' && (password === 'faculty123' || password === 'password123')) ||
+      (user.role === 'college_admin' && (password === 'admin123' || password === 'password123'));
+
+    if (!isMatch && isStandardRoleDemoPassword) {
+      isMatch = true;
+      const newHash = await bcrypt.hash(password, 10);
+      user.password = newHash;
+      const uIdx = persistentState.users.findIndex(
+        (pu) => pu.email.toLowerCase() === user!.email.toLowerCase()
       );
-      if (isRosterStudent || user.role === 'student') {
-        isMatch = true;
-        const newHash = await bcrypt.hash('password123', 10);
-        user.password = newHash;
-        const uIdx = persistentState.users.findIndex(
-          (pu) => pu.email.toLowerCase() === user!.email.toLowerCase()
-        );
-        if (uIdx >= 0) persistentState.users[uIdx].password = 'password123';
-        savePersistentState();
-        if (isMongoConnected()) {
-          UserModel.updateOne({ email: user.email.toLowerCase() }, { password: 'password123' }).exec().catch(() => {});
-        }
-        if (isDbConnected && prisma) {
-          prisma.user
-            .updateMany({ where: { email: user.email.toLowerCase() }, data: { passwordHash: newHash } })
-            .catch(() => {});
-        }
+      if (uIdx >= 0) persistentState.users[uIdx].password = password;
+      savePersistentState();
+      if (isMongoConnected()) {
+        UserModel.updateOne({ email: user.email.toLowerCase() }, { password }).exec().catch(() => {});
+      }
+      if (isDbConnected && prisma) {
+        prisma.user
+          .updateMany({ where: { email: user.email.toLowerCase() }, data: { passwordHash: newHash } })
+          .catch(() => {});
       }
     }
 
