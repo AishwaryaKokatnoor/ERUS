@@ -210,30 +210,43 @@ function GDAppContent() {
     }).catch(() => {});
   }, []);
 
-  // Student live-session status polling: backend remains the source of truth.
+  // Live-session status polling: backend remains the source of truth across all roles.
   useEffect(() => {
-    if (!currentUser || currentUser.role !== 'student') return;
+    if (!currentUser) return;
     const rawCode = (currentUser as any).collegeCode;
     const collegeCode = rawCode && rawCode !== 'DIT' ? rawCode : 'ALL';
     const timer = setInterval(async () => {
       try {
-        const slots = await fetchCollegeSlots(collegeCode);
+        let slots: any[] = [];
+        if (currentUser.role === 'faculty') {
+          const fid = (currentUser as any).facultyId || currentUser.id;
+          slots = await fetchFacultyAssignedSlots(fid, collegeCode);
+          if (!slots || slots.length === 0) {
+            slots = await fetchCollegeSlots(collegeCode);
+          }
+        } else {
+          slots = await fetchCollegeSlots(collegeCode);
+        }
+
         if (Array.isArray(slots) && slots.length > 0) {
-          setAvailableSlots(slots.map((fresh: any) => ({
+          const mappedSlots = slots.map((fresh: any) => ({
             ...DEFAULT_GD_SESSION,
             ...fresh,
             students: fresh.students && fresh.students.length > 0 ? fresh.students : generateSlotParticipants(fresh.enrolledCount || 8),
             status: fresh.status === 'active' ? 'active' : fresh.status === 'completed' ? 'completed' : 'waiting',
-          })));
+          }));
+          setAvailableSlots(mappedSlots);
           setSession((prev) => {
             const currentId = prev?.id;
             const fresh = currentId ? slots.find((s: any) => s && s.id === currentId) : null;
             if (!fresh) {
-              return slots[0]
-                ? { ...(prev || DEFAULT_GD_SESSION), ...slots[0], status: slots[0].status === 'active' ? 'active' : slots[0].status === 'completed' ? 'completed' : 'waiting' }
-                : (prev || DEFAULT_GD_SESSION);
+              return mappedSlots[0] || (prev || DEFAULT_GD_SESSION);
             }
-            return { ...(prev || DEFAULT_GD_SESSION), ...fresh, status: fresh.status === 'active' ? 'active' : fresh.status === 'completed' ? 'completed' : 'waiting' };
+            return {
+              ...(prev || DEFAULT_GD_SESSION),
+              ...fresh,
+              status: fresh.status === 'active' ? 'active' : fresh.status === 'completed' ? 'completed' : 'waiting',
+            };
           });
         }
       } catch {}
@@ -262,11 +275,14 @@ function GDAppContent() {
       localStorage.setItem('erus_auth_user', JSON.stringify(user));
     } catch {}
 
-    // Fetch real slots from backend. Faculty portals are restricted to their assigned sessions.
+    // Fetch real slots from backend. Faculty portals see their assigned sessions or college sessions.
     const rawCode = (user as any).collegeCode;
     const collegeCode = rawCode && rawCode !== 'DIT' ? rawCode : 'ALL';
     const slotSource = user.role === 'faculty'
-      ? fetchFacultyAssignedSlots((user as any).facultyId || user.id, collegeCode)
+      ? fetchFacultyAssignedSlots((user as any).facultyId || user.id, collegeCode).then(async (facSlots) => {
+          if (facSlots && facSlots.length > 0) return facSlots;
+          return fetchCollegeSlots(collegeCode);
+        })
       : fetchCollegeSlots(collegeCode);
     slotSource.then((backendSlots) => {
       if (backendSlots && backendSlots.length > 0) {

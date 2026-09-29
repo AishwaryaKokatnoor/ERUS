@@ -134,17 +134,14 @@ export function useWebRTCRoom({
       audioElementsRef.current.set(peerSocketId, audioEl);
     }
     audioEl.srcObject = stream;
-    audioEl.play().catch((e) => {
-      console.warn('[WebRTC Audio Playback Notice]:', e);
-      // If browser blocked autoplay, unlock audio on user's first click anywhere on screen
-      const unlockAudio = () => {
-        audioEl?.play().catch(() => {});
-        window.removeEventListener('click', unlockAudio);
-        window.removeEventListener('touchstart', unlockAudio);
-      };
-      window.addEventListener('click', unlockAudio);
-      window.addEventListener('touchstart', unlockAudio);
-    });
+    audioEl.muted = false;
+    audioEl.volume = 1.0;
+    const playPromise = audioEl.play();
+    if (playPromise !== undefined) {
+      playPromise.catch((e) => {
+        console.warn('[WebRTC Audio Playback Notice]:', e);
+      });
+    }
   }, []);
 
   // 2. Remove peer audio element & stream on disconnect
@@ -170,19 +167,49 @@ export function useWebRTCRoom({
     pc = new RTCPeerConnection(ICE_SERVERS);
     peerConnectionsRef.current.set(peerSocketId, pc);
 
-    // Add local microphone audio track to the connection
+    // Pre-allocate audio transceiver in sendrecv direction so audio m-lines are ALWAYS established
+    try {
+      pc.addTransceiver('audio', { direction: 'sendrecv' });
+    } catch {}
+
+    // Add local microphone audio track to the connection if already available
     if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach((track) => {
-        pc?.addTrack(track, localStreamRef.current!);
-      });
+      const audioTrack = localStreamRef.current.getAudioTracks()[0];
+      if (audioTrack) {
+        const audioTransceiver = pc.getTransceivers().find((t) => t.receiver.track.kind === 'audio');
+        if (audioTransceiver && audioTransceiver.sender) {
+          audioTransceiver.sender.replaceTrack(audioTrack).catch(() => {});
+        } else {
+          try {
+            pc.addTrack(audioTrack, localStreamRef.current);
+          } catch {}
+        }
+      }
     }
 
     // Add local webcam video track if camera is currently enabled
     if (videoStreamRef.current && isCameraOnRef.current) {
       videoStreamRef.current.getVideoTracks().forEach((track) => {
-        pc?.addTrack(track, videoStreamRef.current!);
+        try {
+          pc?.addTrack(track, videoStreamRef.current!);
+        } catch {}
       });
     }
+
+    // Handle dynamic renegotiation needed (e.g. tracks added/removed)
+    pc.onnegotiationneeded = async () => {
+      try {
+        if (pc?.signalingState !== 'stable') return;
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socketRef.current?.emit('signal-send', {
+          to: peerSocketId,
+          signal: { sdp: pc.localDescription },
+        });
+      } catch (err) {
+        console.warn('[WebRTC renegotiation notice]:', err);
+      }
+    };
 
     // ICE Candidate exchange
     pc.onicecandidate = (event) => {
@@ -254,15 +281,22 @@ export function useWebRTCRoom({
       setIsMicMuted(true);
 
       // Attach tracks to any peer connections that were established before mic was ready
-      peerConnectionsRef.current.forEach((pc) => {
-        const senders = pc.getSenders();
-        stream.getTracks().forEach((track) => {
-          const hasTrack = senders.some((s) => s.track === track);
-          if (!hasTrack) {
-            pc.addTrack(track, stream);
+      const audioTrack = stream.getAudioTracks()[0];
+      if (audioTrack) {
+        peerConnectionsRef.current.forEach(async (pc) => {
+          try {
+            const senders = pc.getSenders();
+            const audioSender = senders.find((s) => s.track?.kind === 'audio' || (s as any).kind === 'audio');
+            if (audioSender) {
+              await audioSender.replaceTrack(audioTrack);
+            } else {
+              pc.addTrack(audioTrack, stream);
+            }
+          } catch (err) {
+            console.warn('[WebRTC mic attach warning]:', err);
           }
         });
-      });
+      }
 
       // Setup Web Audio Analyser for speaking detection & audio visualizer
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -616,8 +650,34 @@ export function useWebRTCRoom({
     };
   }, [slotId, currentUser, initLocalMicrophone, getOrCreatePeerConnection, detachRemoteAudio]);
 
+  // Global user gesture unlocker: resumes AudioContext & plays any paused peer audio elements
+  useEffect(() => {
+    const unlockAudio = () => {
+      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume().catch(() => {});
+      }
+      audioElementsRef.current.forEach((el) => {
+        el.muted = false;
+        el.volume = 1.0;
+        el.play().catch(() => {});
+      });
+    };
+
+    window.addEventListener('click', unlockAudio);
+    window.addEventListener('keydown', unlockAudio);
+    window.addEventListener('touchstart', unlockAudio);
+    return () => {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+  }, []);
+
   // Toggle local microphone mute
   const toggleMute = useCallback(() => {
+    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume().catch(() => {});
+    }
     if (localStreamRef.current) {
       const audioTrack = localStreamRef.current.getAudioTracks()[0];
       if (audioTrack) {
@@ -639,6 +699,9 @@ export function useWebRTCRoom({
 
   // Set explicit microphone enabled state (true = unmuted, false = muted)
   const setMicEnabled = useCallback((enabled: boolean) => {
+    if (enabled && audioContextRef.current && audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume().catch(() => {});
+    }
     if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach((track) => {
         track.enabled = enabled;

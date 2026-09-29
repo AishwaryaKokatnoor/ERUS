@@ -94,7 +94,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   onUpdateLayout,
   bookedSlotId,
 }) => {
-  const [activeTab, setActiveTab] = useState<'transcript' | 'rules' | 'analytics' | 'breakout'>('transcript');
+  const [activeTab, setActiveTab] = useState<'transcript' | 'rules' | 'analytics' | 'breakout' | 'participants'>('transcript');
   const [liveSpeechTranscript, setLiveSpeechTranscript] = useState('');
   const liveTranscriptRef = useRef<string>('');
   const speechPauseTimerRef = useRef<any>(null);
@@ -439,12 +439,79 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   useEffect(() => {
     setSession((prev) => {
       const capacity = Math.max(2, Math.min(15, prev.maxCapacity || 8));
-      const existingReal = prev.students.filter((s) => s.isUser || s.isRealPeer);
-      const usedSeats = new Set(existingReal.map((s) => s.seatNumber));
-      const seats: Student[] = [...existingReal];
+      const mySeat = rtcAssignedSeat || (currentUser && 'seatNumber' in currentUser ? (currentUser as any).seatNumber : 1) || 1;
 
+      const realPeersMap = new Map<number, Student>();
+
+      // 1. Current user themselves (if student)
+      if (!isFaculty && currentUser) {
+        realPeersMap.set(mySeat, {
+          id: currentUser.id,
+          name: currentUser.name || 'Participant',
+          seatNumber: mySeat,
+          college: currentUser.college || 'Campus Participant',
+          course: (currentUser as any).course || '',
+          batch: (currentUser as any).batch || '',
+          avatar: currentUser.avatar || '',
+          isUser: true,
+          micActive: isListeningMic || !rtcIsMicMuted,
+          isSpeaking: isListeningMic || rtcIsSpeakingLive,
+          hasRaisedHand: false,
+          cameraActive: isCameraOn,
+          speakingDurationSeconds: 0,
+          speakingTurns: 0,
+          interruptionCount: 0,
+          questionsAnswered: 0,
+          questionsInitiated: 0,
+          sentiment: 'neutral',
+          isEmptySeat: false,
+          isRealPeer: false,
+          isDemoAI: false,
+        });
+      }
+
+      // 2. Connected WebRTC peers
+      rtcPeers.forEach((p) => {
+        if (p.userId === currentUser?.id) return;
+        let sNum = p.seatNumber || 2;
+        if (sNum === mySeat) {
+          for (let s = 1; s <= 15; s++) {
+            if (s !== mySeat && !realPeersMap.has(s)) {
+              sNum = s;
+              break;
+            }
+          }
+        }
+        realPeersMap.set(sNum, {
+          id: p.userId,
+          name: p.name,
+          seatNumber: sNum,
+          college: p.college || 'Campus Participant',
+          course: '',
+          batch: '',
+          avatar: p.avatar,
+          isUser: false,
+          micActive: p.micActive,
+          isSpeaking: p.isSpeaking,
+          hasRaisedHand: false,
+          cameraActive: p.cameraActive,
+          speakingDurationSeconds: p.speakingDurationSeconds || 0,
+          speakingTurns: p.speakingTurns || 0,
+          interruptionCount: p.interruptionCount || 0,
+          questionsAnswered: 0,
+          questionsInitiated: 0,
+          sentiment: 'neutral',
+          isEmptySeat: false,
+          isRealPeer: true,
+          isDemoAI: false,
+        });
+      });
+
+      const seats: Student[] = [];
       for (let seatNum = 1; seatNum <= capacity; seatNum++) {
-        if (!usedSeats.has(seatNum)) {
+        if (realPeersMap.has(seatNum)) {
+          seats.push(realPeersMap.get(seatNum)!);
+        } else {
           seats.push({
             id: `seat-${seatNum}-empty`,
             name: `Seat ${seatNum}`,
@@ -474,7 +541,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       seats.sort((a, b) => (a.seatNumber || 0) - (b.seatNumber || 0));
       return { ...prev, students: seats };
     });
-  }, [session?.id, session?.maxCapacity, setSession]);
+  }, [session?.id, session?.maxCapacity, rtcPeers, rtcAssignedSeat, currentUser, isFaculty, isListeningMic, rtcIsMicMuted, rtcIsSpeakingLive, isCameraOn, setSession]);
 
   // Active display students: merge connected user with live connected WebRTC peers & available desks
   const activeDisplayStudents = useMemo(() => {
@@ -2498,11 +2565,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             
             {/* Sidebar Tabs */}
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3 mb-3">
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1 overflow-x-auto">
                 <button
                   id="tab-transcript-sub"
                   onClick={() => setActiveTab('transcript')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
                     activeTab === 'transcript'
                       ? 'bg-indigo-600 text-white shadow-sm'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -2511,9 +2578,20 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   Transcript ({transcripts.length})
                 </button>
                 <button
+                  id="tab-participants-sub"
+                  onClick={() => setActiveTab('participants')}
+                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
+                    activeTab === 'participants'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                  }`}
+                >
+                  Participants ({activeDisplayStudents.filter((s) => !s.isEmptySeat).length})
+                </button>
+                <button
                   id="tab-rules-sub"
                   onClick={() => setActiveTab('rules')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
                     activeTab === 'rules'
                       ? 'bg-indigo-600 text-white shadow-sm'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -2524,7 +2602,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 <button
                   id="tab-analytics-sub"
                   onClick={() => setActiveTab('analytics')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
                     activeTab === 'analytics'
                       ? 'bg-indigo-600 text-white shadow-sm'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -2535,7 +2613,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 <button
                   id="tab-breakout-sub"
                   onClick={() => setActiveTab('breakout')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
                     activeTab === 'breakout'
                       ? 'bg-indigo-600 text-white shadow-sm'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -2697,6 +2775,146 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                         </div>
                       </div>
                     ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 5: Live Participants Roster & Audio Mesh */}
+            {activeTab === 'participants' && (
+              <div className="flex-1 overflow-y-auto space-y-3 text-xs">
+                {/* Audio Mesh & WebRTC Connection Status Banner */}
+                <div className="p-3 bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/40 dark:to-teal-950/40 rounded-xl border border-emerald-200 dark:border-emerald-800">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="font-bold text-emerald-800 dark:text-emerald-200 flex items-center gap-1.5">
+                      <Wifi className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      Live Audio Mesh
+                    </span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-700">
+                      {rtcPeers.length > 0 ? `${rtcPeers.length} Peer(s) Connected` : 'Audio Mesh Active'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-emerald-700 dark:text-emerald-300 leading-snug">
+                    Real-time peer-to-peer audio is active. Speak naturally through your microphone; all candidates in this room hear each other clearly.
+                  </p>
+                  <div className="mt-2 flex items-center justify-between pt-1 border-t border-emerald-200/60 dark:border-emerald-800/60">
+                    <span className="text-[10px] text-emerald-800 dark:text-emerald-300 font-medium">
+                      Audio Hardware:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowAudioTestModal(true)}
+                      className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                    >
+                      <Volume2 className="w-2.5 h-2.5" />
+                      Test Mic & Audio
+                    </button>
+                  </div>
+                </div>
+
+                {/* Participants Roster List */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between pb-1 border-b border-slate-200 dark:border-slate-800">
+                    <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <Users className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      Candidate Roster ({activeDisplayStudents.filter(s => !s.isEmptySeat).length})
+                    </span>
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+                      Room #{session.id.slice(-6)}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5 pt-1">
+                    {activeDisplayStudents.map((st) => {
+                      const isCandidateUser = !isFaculty && !!st.isUser;
+                      const isCandidateSpeaking = isCandidateUser ? isListeningMic : (st.id === session?.currentSpeakerId || st.isSpeaking);
+                      const isCandidateMuted = isCandidateUser ? !isListeningMic : (st.isMuted ?? false);
+
+                      return (
+                        <div
+                          key={st.id}
+                          className={`p-2 rounded-lg flex items-center justify-between transition-all ${
+                            st.isEmptySeat
+                              ? 'bg-slate-100/50 dark:bg-slate-900/40 border border-dashed border-slate-200 dark:border-slate-800 opacity-60'
+                              : isCandidateSpeaking
+                              ? 'bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-300 dark:border-indigo-700 shadow-2xs'
+                              : isCandidateUser
+                              ? 'bg-blue-50/60 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800'
+                              : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            {/* Avatar or Seat Badge */}
+                            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                              st.isEmptySeat
+                                ? 'bg-slate-200 dark:bg-slate-800 text-slate-400'
+                                : isCandidateUser
+                                ? 'bg-indigo-600 text-white'
+                                : st.isRealPeer
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-slate-700 text-white'
+                            }`}>
+                              {st.isEmptySeat ? '?' : st.name.charAt(0).toUpperCase()}
+                            </div>
+
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className={`font-semibold text-xs truncate max-w-[130px] sm:max-w-[160px] ${
+                                  st.isEmptySeat
+                                    ? 'text-slate-400 dark:text-slate-500 italic'
+                                    : isCandidateUser
+                                    ? 'text-indigo-700 dark:text-indigo-300 font-bold'
+                                    : 'text-slate-900 dark:text-white'
+                                }`} title={st.name}>
+                                  {st.isEmptySeat ? 'Empty Seat' : st.name}
+                                </span>
+                                {isCandidateUser && (
+                                  <span className="text-[9px] px-1 rounded bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 font-bold">
+                                    YOU
+                                  </span>
+                                )}
+                                {st.isRealPeer && !isCandidateUser && (
+                                  <span className="text-[9px] px-1 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold border border-emerald-300 dark:border-emerald-700">
+                                    LIVE
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+                                <span>Seat {st.seatNumber}</span>
+                                {!st.isEmptySeat && (
+                                  <>
+                                    <span>•</span>
+                                    <span>{st.speakingTurns} turns</span>
+                                    <span>•</span>
+                                    <span>{st.speakingTimeSeconds}s spoken</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Mic and Live Status Indicator */}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {st.isEmptySeat ? (
+                              <span className="text-[10px] font-mono text-slate-400">Open</span>
+                            ) : isCandidateSpeaking ? (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold border border-emerald-300 dark:border-emerald-800 animate-pulse">
+                                <Radio className="w-2.5 h-2.5" />
+                                Speaking
+                              </span>
+                            ) : isCandidateMuted ? (
+                              <span className="p-1 rounded-full bg-slate-100 dark:bg-slate-800 text-rose-500" title="Microphone muted">
+                                <MicOff className="w-3 h-3" />
+                              </span>
+                            ) : (
+                              <span className="p-1 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600" title="Microphone ready">
+                                <Mic className="w-3 h-3" />
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -3142,6 +3360,22 @@ export const StudentVideoFrame: React.FC<{
         </div>
       )}
 
+      {/* Google Meet-Style Candidate Name Badge Overlay (Large Speaker Center / Presenter Mode) */}
+      {size === 'large' && !student.isEmptySeat && (
+        <div className="absolute bottom-2 left-2 max-w-[85%] bg-slate-950/85 backdrop-blur-xs text-white px-2 py-0.5 rounded-lg flex items-center gap-1.5 z-20 text-[10px] sm:text-xs font-semibold truncate shadow-md pointer-events-none border border-slate-700/60">
+          {isMicLive ? (
+            <Mic className="w-3 h-3 text-emerald-400 shrink-0" />
+          ) : (
+            <MicOff className="w-3 h-3 text-rose-400 shrink-0" />
+          )}
+          <span className="truncate">
+            {student.seatNumber ? `#${student.seatNumber} ` : ''}
+            {student.name}
+            {isUser ? ' (You)' : ''}
+          </span>
+        </div>
+      )}
+
       {/* 4. Faculty Pin/Observation Indicator (Top-Left) */}
       {isFaculty && (
         <div className="absolute top-1 left-1 bg-indigo-600/90 text-white p-0.5 rounded-md shadow flex items-center justify-center z-10">
@@ -3244,7 +3478,7 @@ export const StudentPodCard: React.FC<{
       </div>
 
       {/* 3. Student Name & Turns (Positioned cleanly below avatar with zero overlap) */}
-      <div className="text-center mt-1.5 max-w-[68px] sm:max-w-[85px]">
+      <div className="text-center mt-1.5 max-w-[85px] sm:max-w-[110px] px-0.5">
         <p className={`text-[11px] sm:text-xs font-semibold truncate leading-tight ${
           student.isEmptySeat
             ? 'text-slate-400 dark:text-slate-500 font-normal italic'
@@ -3253,8 +3487,8 @@ export const StudentPodCard: React.FC<{
             : student.isRealPeer 
             ? 'text-emerald-700 dark:text-emerald-300 font-bold' 
             : 'text-slate-800 dark:text-slate-200'
-        }`}>
-          {student.isEmptySeat ? 'Available' : student.name.split(' ')[0]}
+        }`} title={student.name}>
+          {student.isEmptySeat ? 'Available' : student.name}
         </p>
         <span className="text-[9px] text-slate-500 dark:text-slate-400 font-mono block mt-0.5">
           {student.isEmptySeat ? 'Waiting...' : `${student.speakingTurns} turns`}
@@ -3335,8 +3569,8 @@ export const ClassroomDeskCard: React.FC<{
             student.isEmptySeat
               ? 'text-slate-400 dark:text-slate-500 italic'
               : isUser ? 'text-indigo-700 dark:text-indigo-300' : student.isRealPeer ? 'text-emerald-700 dark:text-emerald-300 font-bold' : 'text-slate-800 dark:text-slate-200'
-          }`}>
-            {student.isEmptySeat ? 'Available' : student.name.split(' ')[0]}
+          }`} title={student.name}>
+            {student.isEmptySeat ? 'Available' : student.name}
           </p>
           {student.isRealPeer && !isUser && (
             <span className="text-[8px] bg-emerald-500 text-white font-bold px-1 rounded">LIVE</span>

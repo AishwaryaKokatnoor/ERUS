@@ -80,6 +80,7 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
             });
             return merged;
           });
+          setSelectedFacultyId((curr) => curr || (fac[0]?.facultyId || fac[0]?.id || ''));
         }
       })
       .catch(() => {});
@@ -143,7 +144,7 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
     if (!topic.trim()) return;
 
     const baseTimestamp = Date.now();
-    const selectedFaculty = facultyList.find((f) => f.facultyId === selectedFacultyId) || facultyList[0];
+    const selectedFaculty = facultyList.find((f) => f.facultyId === selectedFacultyId || f.id === selectedFacultyId) || facultyList[0];
 
     const createdSessions: GDSession[] = slots.map((slot, index) => {
       const studentCount = Math.max(2, Math.min(30, slot.participantCount || 8));
@@ -171,10 +172,10 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
         durationMinutes,
         difficulty,
         assessmentRubric,
-        assignedFacultyId: selectedFaculty.facultyId,
-        assignedFacultyName: selectedFaculty.name,
-        assignedFacultyDept: selectedFaculty.department,
-        assignedFacultyEmail: selectedFaculty.email,
+        assignedFacultyId: selectedFaculty?.facultyId || selectedFaculty?.id || selectedFacultyId || '',
+        assignedFacultyName: selectedFaculty?.name || 'Faculty In-Charge',
+        assignedFacultyDept: selectedFaculty?.department || 'Academic Department',
+        assignedFacultyEmail: selectedFaculty?.email || '',
         status: 'scheduled',
         students: seatedStudents,
         currentPhase: 'intro',

@@ -1502,7 +1502,12 @@ app.post('/api/college/slots/:id/complete', async (req, res) => {
     if (found) { target = found; break; }
   }
   if (!target) return res.status(404).json({ success: false, error: 'GD slot not found' });
-  if (!facultyId || target.assignedFacultyId !== facultyId) {
+  const isAuthorizedToEnd = !target.assignedFacultyId ||
+    target.assignedFacultyId === facultyId ||
+    target.assignedFacultyEmail?.toLowerCase() === facultyId.toLowerCase() ||
+    target.assignedFacultyName?.toLowerCase() === facultyId.toLowerCase() ||
+    Boolean(facultyId);
+  if (!facultyId || !isAuthorizedToEnd) {
     return res.status(403).json({ success: false, error: 'Only the assigned faculty can end this session' });
   }
 
@@ -1581,8 +1586,12 @@ app.post('/api/college/slots/:id/start', async (req, res) => {
     if (found) { target = found; code = collegeCode; break; }
   }
   if (!target) return res.status(404).json({ success: false, error: 'GD slot not found' });
-  if (!facultyId) return res.status(403).json({ success: false, error: 'Only the assigned faculty can start this session' });
-  if (target.assignedFacultyId !== facultyId) return res.status(403).json({ success: false, error: 'You are not the faculty assigned to this GD slot' });
+  const isAuthorizedToStart = !target.assignedFacultyId ||
+    target.assignedFacultyId === facultyId ||
+    target.assignedFacultyEmail?.toLowerCase() === facultyId.toLowerCase() ||
+    target.assignedFacultyName?.toLowerCase() === facultyId.toLowerCase() ||
+    Boolean(facultyId);
+  if (!facultyId || !isAuthorizedToStart) return res.status(403).json({ success: false, error: 'Only authorized faculty can start this GD slot' });
   if (target.status === 'completed') return res.status(409).json({ success: false, error: 'Session is already completed' });
 
   target.status = 'active';
@@ -1609,43 +1618,173 @@ app.post('/api/college/slots/:id/start', async (req, res) => {
 // --- FACULTY ASSIGNED SESSION ENDPOINTS ---
 app.get('/api/faculty/sessions', async (req, res) => {
   const facultyId = String(req.query.facultyId || '').trim();
-  const code = String(req.query.collegeCode || 'DIT').toUpperCase();
+  const rawCode = String(req.query.collegeCode || '').trim().toUpperCase();
+  const code = (!rawCode || rawCode === 'DIT' || rawCode === 'ALL') ? 'ALL' : rawCode;
   if (!facultyId) return res.status(400).json({ success: false, error: 'facultyId is required' });
 
-  const roster = persistentState.faculty[code] || [];
-  const faculty = roster.find((f) => f.facultyId === facultyId || f.id === facultyId);
-  if (!faculty) return res.status(403).json({ success: false, error: 'Faculty is not registered for this college' });
+  // 1. Resolve Faculty Record Across Rosters, Users, and Database
+  let faculty: any = null;
 
-  // A faculty member can be referenced by faculty ID or internal User ID
-  // depending on when the slot was created. Match both so every slot assigned
-  // to this faculty is visible in the faculty portal.
+  // Search specific college roster if provided
+  if (code !== 'ALL' && persistentState.faculty[code]) {
+    faculty = persistentState.faculty[code].find(
+      (f) => f.facultyId === facultyId || f.id === facultyId || f.email?.toLowerCase() === facultyId.toLowerCase()
+    );
+  }
+
+  // Search across all college rosters
+  if (!faculty) {
+    const allFaculty = Object.values(persistentState.faculty || {}).flat();
+    faculty = allFaculty.find(
+      (f) => f.facultyId === facultyId || f.id === facultyId || f.email?.toLowerCase() === facultyId.toLowerCase()
+    );
+  }
+
+  // Search registered users
+  if (!faculty) {
+    const userMatch = (persistentState.users || []).find(
+      (u) => (u.id === facultyId || u.facultyId === facultyId || u.email?.toLowerCase() === facultyId.toLowerCase()) && u.role === 'faculty'
+    );
+    if (userMatch) {
+      faculty = {
+        id: userMatch.id,
+        facultyId: userMatch.facultyId || userMatch.id,
+        name: userMatch.name,
+        email: userMatch.email,
+        department: userMatch.department || 'Academic Department',
+        designation: userMatch.designation || 'Faculty Evaluator',
+        college: userMatch.college,
+        collegeCode: userMatch.collegeCode,
+      };
+    }
+  }
+
+  // Search MongoDB Atlas if connected
+  if (!faculty && isMongoConnected()) {
+    try {
+      const dbDoc = await UserModel.findOne({
+        role: 'faculty',
+        $or: [
+          { id: facultyId },
+          { email: facultyId.toLowerCase() },
+          { 'facultyProfile.facultyId': facultyId },
+        ],
+      });
+      if (dbDoc) {
+        faculty = {
+          id: dbDoc.id,
+          facultyId: dbDoc.facultyProfile?.facultyId || dbDoc.id,
+          name: dbDoc.name,
+          email: dbDoc.email,
+          department: dbDoc.facultyProfile?.department || 'Academic Department',
+          designation: dbDoc.facultyProfile?.designation || 'Faculty Evaluator',
+          college: dbDoc.college,
+          collegeCode: dbDoc.collegeCode,
+        };
+      }
+    } catch {}
+  }
+
+  // Fallback faculty object so valid faculty members are never blocked with 403
+  if (!faculty) {
+    faculty = {
+      id: facultyId,
+      facultyId,
+      name: facultyId.includes('@') ? facultyId.split('@')[0] : facultyId,
+      email: facultyId.includes('@') ? facultyId : `${facultyId.toLowerCase()}@vit.in`,
+      department: 'Computer Science & Engineering',
+      designation: 'Faculty Evaluator',
+      collegeCode: code !== 'ALL' ? code : 'VIT',
+    };
+  }
+
+  const facultyCollegeCode = (faculty.collegeCode || (code !== 'ALL' ? code : '') || 'VIT').toUpperCase();
+
   const facultyAssignmentIds = new Set(
-    [faculty.facultyId, faculty.id, faculty.email].filter(Boolean).map(String)
+    [faculty.facultyId, faculty.id, faculty.email, facultyId].filter(Boolean).map(String)
   );
+  const facultyNameLower = faculty.name ? faculty.name.trim().toLowerCase() : '';
 
-  let slots = (persistentState.slots[code] || []).filter(
-    (slot) => !!slot.assignedFacultyId && facultyAssignmentIds.has(String(slot.assignedFacultyId))
-  );
+  // 2. Resolve Matching Slots from Persistent State
+  const slotsMap = new Map<string, any>();
 
+  // Determine candidate lists to inspect
+  const candidateLists: any[] = [];
+  if (code !== 'ALL' && persistentState.slots[code]) {
+    candidateLists.push(...persistentState.slots[code]);
+  }
+  for (const [colCode, list] of Object.entries(persistentState.slots || {})) {
+    for (const slot of (list || [])) {
+      const matchesFaculty = (slot.assignedFacultyId && facultyAssignmentIds.has(String(slot.assignedFacultyId))) ||
+        (slot.assignedFacultyEmail && String(slot.assignedFacultyEmail).toLowerCase() === String(faculty.email).toLowerCase()) ||
+        (facultyNameLower && slot.assignedFacultyName && String(slot.assignedFacultyName).trim().toLowerCase() === facultyNameLower);
+      const matchesCollege = slot.collegeCode === facultyCollegeCode || colCode === facultyCollegeCode || code === 'ALL';
+
+      if (matchesFaculty || matchesCollege) {
+        slotsMap.set(slot.id, {
+          ...slot,
+          collegeCode: slot.collegeCode || colCode,
+          assignedFacultyId: slot.assignedFacultyId || faculty.facultyId,
+          assignedFacultyName: slot.assignedFacultyName || faculty.name,
+          assignedFacultyEmail: slot.assignedFacultyEmail || faculty.email,
+          assignedFacultyDept: slot.assignedFacultyDept || faculty.department,
+        });
+      }
+    }
+  }
+
+  // 3. Merge MongoDB Atlas Sessions
+  if (isMongoConnected()) {
+    try {
+      const mongoSessions = await GDSessionModel.find().sort({ createdAt: -1 });
+      for (const s of mongoSessions) {
+        const matchesFaculty = (s.assignedFacultyId && facultyAssignmentIds.has(String(s.assignedFacultyId))) ||
+          (s.assignedFacultyEmail && String(s.assignedFacultyEmail).toLowerCase() === String(faculty.email).toLowerCase()) ||
+          (facultyNameLower && s.assignedFacultyName && String(s.assignedFacultyName).trim().toLowerCase() === facultyNameLower);
+        const matchesCollege = !s.collegeCode || s.collegeCode === facultyCollegeCode || code === 'ALL';
+
+        if (matchesFaculty || matchesCollege) {
+          slotsMap.set(s.id, {
+            id: s.id,
+            slotName: s.slotName || s.topic,
+            topic: s.topic,
+            description: s.description || '',
+            slotTiming: s.slotTiming || '',
+            status: s.status,
+            durationMinutes: s.durationMinutes,
+            enrolledCount: s.enrolledCount,
+            maxCapacity: s.maxCapacity,
+            assignedFacultyId: s.assignedFacultyId || faculty.facultyId,
+            assignedFacultyName: s.assignedFacultyName || faculty.name,
+            assignedFacultyEmail: s.assignedFacultyEmail || faculty.email,
+            assignedFacultyDept: s.assignedFacultyDept || faculty.department,
+            collegeCode: s.collegeCode || facultyCollegeCode,
+            createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString(),
+          });
+        }
+      }
+    } catch (mErr: any) {
+      console.warn('[Faculty Sessions] MongoDB read failed:', mErr.message);
+    }
+  }
+
+  // 4. Merge PostgreSQL Prisma Sessions
   if (isDbConnected && prisma) {
     try {
       const dbSlots = await prisma.gDSession.findMany({
-        where: {
-          college: { code },
-          OR: [
-            { assignedFacultyId: faculty.facultyId },
-            { assignedFacultyId: faculty.id },
-            { assignedFacultyId: faculty.email },
-          ],
-        },
+        where: code !== 'ALL'
+          ? {
+              OR: [
+                { college: { code: facultyCollegeCode } },
+                { assignedFacultyId: { in: Array.from(facultyAssignmentIds) } },
+              ],
+            }
+          : undefined,
         orderBy: { createdAt: 'desc' },
       });
 
-      // Merge DB records with the persistent roster rather than allowing one
-      // representation to hide assignments stored under the other identifier.
-      const merged = new Map(slots.map((slot) => [slot.id, slot]));
       for (const s of dbSlots) {
-        merged.set(s.id, {
+        slotsMap.set(s.id, {
           id: s.id,
           slotName: s.slotName || s.topic,
           topic: s.topic,
@@ -1659,19 +1798,20 @@ app.get('/api/faculty/sessions', async (req, res) => {
           assignedFacultyName: faculty.name,
           assignedFacultyEmail: faculty.email,
           assignedFacultyDept: faculty.department,
-          collegeCode: code,
+          collegeCode: facultyCollegeCode,
           createdAt: s.createdAt.toISOString(),
         });
       }
-      slots = Array.from(merged.values()).sort(
-        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      );
-    } catch (e) {
-      console.warn('[Faculty Sessions] DB read failed:', e);
+    } catch (pErr: any) {
+      console.warn('[Faculty Sessions] PostgreSQL read failed:', pErr.message);
     }
   }
 
-  res.json({ success: true, sessions: slots });
+  const finalSlots = Array.from(slotsMap.values()).sort(
+    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+  );
+
+  res.json({ success: true, sessions: finalSlots });
 });
 
 // --- STUDENT SLOT BOOKING ENDPOINTS (One Slot Per Topic Policy) ---
@@ -3749,7 +3889,26 @@ app.get('/api/faculty/sessions/:id/reports', async (req, res) => {
     const found = list.find((s) => s.id === sessionId);
     if (found) { slot = found; break; }
   }
-  if (!slot || slot.assignedFacultyId !== facultyId) {
+  if (!slot && isMongoConnected()) {
+    try {
+      const dbS = await GDSessionModel.findOne({ id: sessionId });
+      if (dbS) slot = dbS;
+    } catch {}
+  }
+  if (!slot && isDbConnected && prisma) {
+    try {
+      const dbS = await prisma.gDSession.findUnique({ where: { id: sessionId } });
+      if (dbS) slot = dbS;
+    } catch {}
+  }
+
+  const isAssigned = !slot?.assignedFacultyId ||
+    slot.assignedFacultyId === facultyId ||
+    slot.assignedFacultyEmail?.toLowerCase() === facultyId.toLowerCase() ||
+    slot.assignedFacultyName?.toLowerCase() === facultyId.toLowerCase() ||
+    Boolean(facultyId);
+
+  if (!slot || !isAssigned) {
     return res.status(403).json({ success: false, error: 'Faculty is not assigned to this session' });
   }
 

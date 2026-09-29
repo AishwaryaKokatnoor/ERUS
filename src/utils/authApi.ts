@@ -608,8 +608,9 @@ export async function fetchAdminStats() {
 }
 
 
-export async function fetchFacultyAssignedSlots(facultyId: string, collegeCode: string = 'DIT'): Promise<any[]> {
-  const code = collegeCode.toUpperCase();
+export async function fetchFacultyAssignedSlots(facultyId: string, collegeCode?: string): Promise<any[]> {
+  const rawCode = (collegeCode || '').trim().toUpperCase();
+  const code = (!rawCode || rawCode === 'DIT' || rawCode === 'ALL') ? 'ALL' : rawCode;
   try {
     const res = await fetch(
       `/api/faculty/sessions?facultyId=${encodeURIComponent(facultyId)}&collegeCode=${encodeURIComponent(code)}`
