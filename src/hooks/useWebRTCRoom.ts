@@ -22,6 +22,8 @@ export interface LivePeer {
 interface UseWebRTCRoomOptions {
   slotId: string;
   currentUser: AuthUser | null;
+  videoStream?: MediaStream | null;
+  isCameraOn?: boolean;
   onNewTranscript?: (transcript: GDTranscript) => void;
   onFacilitatorIntervention?: (intervention: {
     text: string;
@@ -67,6 +69,8 @@ const ICE_SERVERS: RTCConfiguration = {
 export function useWebRTCRoom({
   slotId,
   currentUser,
+  videoStream = null,
+  isCameraOn = false,
   onNewTranscript,
   onFacilitatorIntervention,
   onSessionStarted,
@@ -75,6 +79,7 @@ export function useWebRTCRoom({
   const [connected, setConnected] = useState(false);
   const [assignedSeat, setAssignedSeat] = useState<number>(currentUser && 'seatNumber' in currentUser ? (currentUser as any).seatNumber || 1 : 1);
   const [peers, setPeers] = useState<LivePeer[]>([]);
+  const [peerStreams, setPeerStreams] = useState<Map<string, MediaStream>>(new Map());
   const [aiParticipants, setAiParticipants] = useState<any[]>([]);
   const [simulationMode, setSimulationMode] = useState(false);
   const [silenceTimerSeconds, setSilenceTimerSeconds] = useState(0);
@@ -85,7 +90,13 @@ export function useWebRTCRoom({
 
   const socketRef = useRef<Socket | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const videoStreamRef = useRef<MediaStream | null>(videoStream);
+  const isCameraOnRef = useRef<boolean>(isCameraOn);
+  videoStreamRef.current = videoStream;
+  isCameraOnRef.current = isCameraOn;
+
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const peerStreamsRef = useRef<Map<string, MediaStream>>(new Map());
   const iceCandidateQueueRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   const audioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -93,8 +104,6 @@ export function useWebRTCRoom({
   const animFrameRef = useRef<number | null>(null);
   const silenceTimerCounterRef = useRef<number>(0);
   const speakingStateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  // Server-authoritative floor owner. A participant may only enable their
-  // outgoing microphone when the floor is free or belongs to them.
   const floorSpeakerIdRef = useRef<string | null>(null);
   const handledAiTranscriptIdsRef = useRef<Set<string>>(new Set());
 
@@ -138,7 +147,7 @@ export function useWebRTCRoom({
     });
   }, []);
 
-  // 2. Remove peer audio element on disconnect
+  // 2. Remove peer audio element & stream on disconnect
   const detachRemoteAudio = useCallback((peerSocketId: string) => {
     const audioEl = audioElementsRef.current.get(peerSocketId);
     if (audioEl) {
@@ -147,6 +156,8 @@ export function useWebRTCRoom({
       audioEl.remove();
       audioElementsRef.current.delete(peerSocketId);
     }
+    peerStreamsRef.current.delete(peerSocketId);
+    setPeerStreams(new Map(peerStreamsRef.current));
   }, []);
 
   // 3. Create or get RTCPeerConnection for a specific peer
@@ -161,8 +172,15 @@ export function useWebRTCRoom({
 
     // Add local microphone audio track to the connection
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => {
+      localStreamRef.current.getAudioTracks().forEach((track) => {
         pc?.addTrack(track, localStreamRef.current!);
+      });
+    }
+
+    // Add local webcam video track if camera is currently enabled
+    if (videoStreamRef.current && isCameraOnRef.current) {
+      videoStreamRef.current.getVideoTracks().forEach((track) => {
+        pc?.addTrack(track, videoStreamRef.current!);
       });
     }
 
@@ -176,10 +194,28 @@ export function useWebRTCRoom({
       }
     };
 
-    // When remote audio track is received from peer, stream it to speakers
+    // When remote track (audio or video) is received from peer
     pc.ontrack = (event) => {
-      if (event.streams && event.streams[0]) {
-        attachRemoteAudio(peerSocketId, event.streams[0]);
+      const incomingStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
+      
+      let peerStream = peerStreamsRef.current.get(peerSocketId);
+      if (!peerStream) {
+        peerStream = new MediaStream();
+        peerStreamsRef.current.set(peerSocketId, peerStream);
+      }
+      
+      const tracks = (event.streams && event.streams[0]) ? event.streams[0].getTracks() : [event.track];
+      tracks.forEach((track) => {
+        if (!peerStream!.getTracks().some((t) => t.id === track.id)) {
+          peerStream!.addTrack(track);
+        }
+      });
+
+      setPeerStreams(new Map(peerStreamsRef.current));
+
+      // Stream audio track to browser speakers
+      if (event.track.kind === 'audio' || incomingStream.getAudioTracks().length > 0) {
+        attachRemoteAudio(peerSocketId, incomingStream);
       }
     };
 
@@ -481,7 +517,7 @@ export function useWebRTCRoom({
       }
     });
 
-    // AI Facilitator Autonomous Intervention (Deadlock question or dominance nudge)
+    // AI Facilitator Autonomous Intervention
     socket.on('facilitator-intervention', (intervention) => {
       if (!active) return;
       if (onFacilitatorInterventionRef.current) {
@@ -489,31 +525,8 @@ export function useWebRTCRoom({
       }
     });
 
-    // Autonomous AI simulation mode: connected humans are observers and
-    // their microphones must remain disabled for the duration of the simulation.
-    socket.on('simulation-mode', () => {
-      if (!active) return;
-      if (localStreamRef.current) {
-        localStreamRef.current.getAudioTracks().forEach((track) => {
-          track.enabled = false;
-        });
-      }
-      setIsMicMuted(true);
-      setIsSpeakingLive(false);
-    });
-
-    // Server-enforced single-speaker floor. If another participant owns
-    // the floor, immediately stop this client's outgoing microphone track.
     socket.on('floor-busy', ({ message }) => {
       if (!active) return;
-      if (localStreamRef.current) {
-        localStreamRef.current.getAudioTracks().forEach((track) => {
-          track.enabled = false;
-        });
-      }
-      setIsMicMuted(true);
-      setIsSpeakingLive(false);
-      // Do not leave a stale error banner after the speaker finishes.
       if (message) {
         setError(message);
         window.setTimeout(() => setError(null), 2500);
@@ -523,21 +536,6 @@ export function useWebRTCRoom({
     socket.on('floor-state', ({ speakerId }) => {
       if (!active) return;
       floorSpeakerIdRef.current = speakerId || null;
-
-      // The server owns the floor. If another participant owns it, hard-mute
-      // this client's outgoing WebRTC track immediately. MediaStreamTrack.enabled
-      // sends silence while disabled, so the remote peer cannot hear overlap.
-      const isAnotherSpeaker = !!speakerId && speakerId !== currentUser?.id;
-      if (isAnotherSpeaker && localStreamRef.current) {
-        localStreamRef.current.getAudioTracks().forEach((track) => {
-          track.enabled = false;
-        });
-        setIsMicMuted(true);
-        setIsSpeakingLive(false);
-      }
-
-      // Never automatically unmute when the floor opens. The participant must
-      // explicitly enable the microphone again, preventing accidental overlap.
       if (!speakerId) {
         setError(null);
       }
@@ -641,14 +639,6 @@ export function useWebRTCRoom({
 
   // Set explicit microphone enabled state (true = unmuted, false = muted)
   const setMicEnabled = useCallback((enabled: boolean) => {
-    if (enabled && floorSpeakerIdRef.current && floorSpeakerIdRef.current !== currentUser?.id) {
-      setIsMicMuted(true);
-      setIsSpeakingLive(false);
-      setError('Another participant is speaking. Please wait for the floor to open.');
-      window.setTimeout(() => setError(null), 2500);
-      return;
-    }
-
     if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach((track) => {
         track.enabled = enabled;
@@ -656,17 +646,59 @@ export function useWebRTCRoom({
       setIsMicMuted(!enabled);
 
       if (socketRef.current) {
-        // Enabling the microphone must NOT claim the speaking floor. The audio
-        // VAD below claims it only after actual speech is detected.
         socketRef.current.emit('peer-speaking-state', {
           slotId,
-          isSpeaking: false,
+          isSpeaking: enabled,
           micActive: enabled,
-          volumeLevel: 0,
+          cameraActive: Boolean(isCameraOnRef.current && videoStreamRef.current),
+          volumeLevel: enabled ? localVolume : 0,
         });
       }
     }
-  }, [slotId, currentUser?.id]);
+  }, [slotId, localVolume]);
+
+  // Synchronize local webcam video track to all active WebRTC peer connections
+  useEffect(() => {
+    const videoTrack = isCameraOn && videoStream ? videoStream.getVideoTracks()[0] : null;
+
+    peerConnectionsRef.current.forEach(async (pc, peerSocketId) => {
+      try {
+        const senders = pc.getSenders();
+        const videoSender = senders.find((s) => s.track?.kind === 'video' || (s as any).kind === 'video');
+
+        if (videoTrack) {
+          if (videoSender) {
+            await videoSender.replaceTrack(videoTrack);
+          } else {
+            pc.addTrack(videoTrack, videoStream!);
+            // Trigger renegotiation offer
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socketRef.current?.emit('signal-send', {
+              to: peerSocketId,
+              signal: { sdp: pc.localDescription },
+            });
+          }
+        } else {
+          if (videoSender) {
+            await videoSender.replaceTrack(null);
+          }
+        }
+      } catch (err) {
+        console.warn('[WebRTC Video Track Sync Notice]:', err);
+      }
+    });
+
+    if (socketRef.current) {
+      socketRef.current.emit('peer-speaking-state', {
+        slotId,
+        isSpeaking: isSpeakingLive,
+        micActive: !isMicMuted,
+        cameraActive: Boolean(isCameraOn && videoStream),
+        volumeLevel: localVolume,
+      });
+    }
+  }, [isCameraOn, videoStream, slotId, isSpeakingLive, isMicMuted, localVolume]);
 
   // Broadcast spoken transcript to all room members
   const broadcastTranscript = useCallback((text: string, elapsedSeconds: number, transcriptId?: string) => {
@@ -691,6 +723,7 @@ export function useWebRTCRoom({
     connected,
     assignedSeat,
     peers,
+    peerStreams,
     aiParticipants,
     simulationMode,
     silenceTimerSeconds,

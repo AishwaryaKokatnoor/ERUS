@@ -47,8 +47,8 @@ async function runEndToEndVerification() {
   console.log(`Sub-Table "assessment_reports":    ${reportCount} records`);
   console.log(`Sub-Table "gd_bookings":           ${bookingCount} records`);
 
-  if (sessionCount === 0 || collegeCount === 0 || userCount === 0) {
-    console.error('❌ Expected baseline tables to be populated.');
+  if (userCount === 0) {
+    console.error('❌ Expected Super Admin user to be present in users collection.');
     process.exit(1);
   }
 

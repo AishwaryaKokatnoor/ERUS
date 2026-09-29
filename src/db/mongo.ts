@@ -375,296 +375,69 @@ export async function initMongoDBTablesAndSubTables(): Promise<void> {
   console.log('[MongoDB] ==========================================\n');
 
   try {
-    // 1. Seed Default Colleges (Parent Table)
-    const collegeCount = await CollegeModel.countDocuments();
-    if (collegeCount === 0) {
-      console.log('[MongoDB] Seeding Primary Table: colleges...');
-      await CollegeModel.create([
-        {
-          id: 'col-1',
-          name: 'Delhi Institute of Technology',
-          code: 'DIT',
-          contactEmail: 'admin@dit.edu.in',
-          phone: '+91 11 2659 1000',
-          address: 'Hauz Khas, New Delhi',
-          status: 'active',
-          studentCount: 3,
-          facultyCount: 2,
-          slotCount: 2,
-          adminEmail: 'admin@dit.edu.in',
-          adminName: 'DIT College Administrator',
-        },
-        {
-          id: 'col-2',
-          name: 'Indian Institute of Technology Bombay',
-          code: 'IITB',
-          contactEmail: 'admin@iitb.ac.in',
-          phone: '+91 22 2572 2545',
-          address: 'Powai, Mumbai',
-          status: 'active',
-          studentCount: 2,
-          facultyCount: 1,
-          slotCount: 1,
-          adminEmail: 'admin@iitb.ac.in',
-          adminName: 'IITB Academic Admin',
-        },
-      ]);
-      console.log('[MongoDB] Primary Table colleges seeded successfully.');
-    }
+    // 1. Purge legacy dummy mock records from database if present
+    const legacyDummyUserIds = ['ca-1', 'fac-1', 'fac-2', 's1', 's2', 's3'];
+    const legacyDummyEmails = [
+      'admin@dit.edu.in',
+      'sunita.rao@dit.edu.in',
+      'rajesh.verma@dit.edu.in',
+      'rahul.kumar@dit.edu.in',
+      'neha.gupta@dit.edu.in',
+      'aditya.singh@dit.edu.in',
+    ];
+    await UserModel.deleteMany({
+      $or: [{ id: { $in: legacyDummyUserIds } }, { email: { $in: legacyDummyEmails } }],
+    });
 
-    // 3. Seed Default Users (Parent Table) with Sub-Table Profiles
-    const userCount = await UserModel.countDocuments();
-    if (userCount === 0) {
-      console.log('[MongoDB] Seeding Primary Table: users & profile sub-tables...');
-      await UserModel.create([
-        {
-          id: 'sa-1',
-          name: 'Platform Super Admin',
-          email: 'superadmin@erus.ai',
-          password: 'admin123',
-          role: 'super_admin',
-          college: 'ERUS Global Administration',
-        },
-        {
-          id: 'ca-1',
-          name: 'DIT College Administrator',
-          email: 'admin@dit.edu.in',
-          password: 'college123',
-          role: 'college_admin',
-          college: 'Delhi Institute of Technology',
-          collegeCode: 'DIT',
-          collegeAdminProfile: {
-            adminId: 'CADM-DIT-001',
-            department: 'Academic Administration',
-          },
-        },
-        {
-          id: 'fac-1',
-          name: 'Dr. Sunita Rao',
-          email: 'sunita.rao@dit.edu.in',
-          password: 'faculty123',
-          role: 'faculty',
-          college: 'Delhi Institute of Technology',
-          collegeCode: 'DIT',
-          facultyProfile: {
-            facultyId: 'FAC-CSE-102',
-            department: 'Department of Computer Science & Engineering',
-            designation: 'Professor & Head of Department',
-          },
-        },
-        {
-          id: 'fac-2',
-          name: 'Prof. Rajesh Verma',
-          email: 'rajesh.verma@dit.edu.in',
-          password: 'faculty123',
-          role: 'faculty',
-          college: 'Delhi Institute of Technology',
-          collegeCode: 'DIT',
-          facultyProfile: {
-            facultyId: 'FAC-MGT-205',
-            department: 'School of Management',
-            designation: 'Dean of Academic Affairs',
-          },
-        },
-        {
-          id: 's1',
-          name: 'Rahul Kumar',
-          email: 'rahul.kumar@dit.edu.in',
-          password: 'password123',
-          role: 'student',
-          college: 'Delhi Institute of Technology',
-          collegeCode: 'DIT',
-          studentProfile: {
-            studentId: 'STU-2022-041',
-            course: 'B.Tech CSE',
-            batch: '2022-2026',
-            seatNumber: 1,
-          },
-        },
-        {
-          id: 's2',
-          name: 'Neha Gupta',
-          email: 'neha.gupta@dit.edu.in',
-          password: 'password123',
-          role: 'student',
-          college: 'Delhi Institute of Technology',
-          collegeCode: 'DIT',
-          studentProfile: {
-            studentId: 'STU-2022-072',
-            course: 'B.Tech IT',
-            batch: '2022-2026',
-            seatNumber: 2,
-          },
-        },
-        {
-          id: 's3',
-          name: 'Aditya Singh',
-          email: 'aditya.singh@dit.edu.in',
-          password: 'password123',
-          role: 'student',
-          college: 'Delhi Institute of Technology',
-          collegeCode: 'DIT',
-          studentProfile: {
-            studentId: 'STU-2022-094',
-            course: 'B.Tech ECE',
-            batch: '2022-2026',
-            seatNumber: 3,
-          },
-        },
-      ]);
-      console.log('[MongoDB] Primary Table users seeded successfully.');
-    }
+    const legacyDummyCollegeCodes = ['DIT', 'IITB'];
+    await CollegeModel.deleteMany({
+      $or: [{ code: { $in: legacyDummyCollegeCodes } }, { id: { $in: ['col-1', 'col-2'] } }],
+    });
 
-    // 4. Seed Default GD Sessions (Parent Table)
-    const sessionCount = await GDSessionModel.countDocuments();
-    if (sessionCount === 0) {
-      console.log('[MongoDB] Seeding Primary Table: gd_sessions (Parent Table)...');
-      await GDSessionModel.create([
-        {
-          id: 'slot-dit-001',
-          slotName: 'Slot 1: AI Ethics & Hiring Transformation',
-          topic: 'Impact of Generative AI on Tech Hiring & Software Engineering',
-          description: 'Autonomous AI evaluation of technical argumentation, structured thinking, and empathy.',
-          slotTiming: '10:30 AM - 10:45 AM',
-          slotDate: 'Today',
-          status: 'scheduled',
-          currentPhase: 'intro',
-          durationMinutes: 15,
-          enrolledCount: 1,
-          maxCapacity: 15,
-          collegeCode: 'DIT',
-          assignedFacultyId: 'FAC-CSE-102',
-          assignedFacultyName: 'Dr. Sunita Rao',
-          assignedFacultyEmail: 'sunita.rao@dit.edu.in',
-          assignedFacultyDept: 'Department of Computer Science & Engineering',
-          facilitatorSpeech: 'Welcome participants. Today we analyze how generative AI is shifting tech talent evaluation.',
-          facilitatorAction: 'Waiting for room start',
-          isFacilitatorSpeaking: false,
-        },
-        {
-          id: 'session-101',
-          slotName: 'Live Session: Generative AI Discussion',
-          topic: 'Impact of Generative AI on Tech Hiring & Software Engineering',
-          description: 'Autonomous AI evaluation of technical argumentation, structured thinking, and empathy.',
-          slotTiming: '10:00 AM - 10:30 AM',
-          slotDate: 'Today',
-          status: 'active',
-          currentPhase: 'active_discussion',
-          durationMinutes: 25,
-          enrolledCount: 3,
-          maxCapacity: 15,
-          collegeCode: 'DIT',
-          assignedFacultyId: 'FAC-CSE-102',
-          assignedFacultyName: 'Dr. Sunita Rao',
-          assignedFacultyEmail: 'sunita.rao@dit.edu.in',
-          assignedFacultyDept: 'Department of Computer Science & Engineering',
-          facilitatorSpeech: 'Welcome participants. Today we analyze how generative AI is shifting tech talent evaluation from syntax memorization to architectural thinking. The floor is open.',
-          facilitatorAction: 'Moderating discussion flow',
-          isFacilitatorSpeaking: false,
-        },
-        {
-          id: 'slot-teachers-1',
-          slotName: 'Slot 1 - Morning Batch',
-          topic: 'Should Artificial Intelligence replace teachers in Higher Education?',
-          description: 'Debating cognitive personalization algorithms versus empathetic educator mentoring in higher technical education.',
-          slotTiming: '11:30 AM - 12:00 PM',
-          slotDate: 'Today',
-          status: 'scheduled',
-          currentPhase: 'intro',
-          durationMinutes: 25,
-          enrolledCount: 0,
-          maxCapacity: 15,
-          collegeCode: 'DIT',
-          assignedFacultyId: 'FAC-MGT-205',
-          assignedFacultyName: 'Prof. Rajesh Verma',
-          assignedFacultyEmail: 'rajesh.verma@dit.edu.in',
-          assignedFacultyDept: 'School of Management',
-          facilitatorSpeech: 'Good morning participants. Today we debate whether AI can substitute teachers in higher education.',
-          facilitatorAction: 'Waiting for room start',
-          isFacilitatorSpeaking: false,
-        },
-      ]);
-      console.log('[MongoDB] Primary Table gd_sessions seeded successfully.');
-    }
+    const legacyDummySessionIds = ['slot-dit-001', 'session-101', 'slot-teachers-1', 'slot-dit-0700'];
+    await GDSessionModel.deleteMany({
+      $or: [
+        { id: { $in: legacyDummySessionIds } },
+        { collegeCode: { $in: legacyDummyCollegeCodes } },
+        { assignedFacultyEmail: { $in: legacyDummyEmails } },
+      ],
+    });
+    await TranscriptEntryModel.deleteMany({
+      $or: [
+        { id: { $in: ['t-init-1', 't-init-2', 't-live-test-001'] } },
+        { speakerName: 'Rahul Kumar' },
+        { speakerId: { $in: legacyDummyUserIds } },
+      ],
+    });
+    await GDBookingModel.deleteMany({
+      $or: [
+        { id: { $in: ['b-s1-slot-dit-001', 'bk-s3-slot-teachers-1', 'bk-s1-slot-dit-0700'] } },
+        { studentId: { $in: legacyDummyUserIds } },
+      ],
+    });
+    await AssessmentReportModel.deleteMany({
+      $or: [
+        { id: { $in: ['rep-s1-session-101', 'rep-live-test-001'] } },
+        { studentName: 'Rahul Kumar' },
+        { studentId: { $in: legacyDummyUserIds } },
+      ],
+    });
 
-    // 5. Seed Sub-Table: gd_transcripts (Child of gd_sessions)
-    const transcriptCount = await TranscriptEntryModel.countDocuments();
-    if (transcriptCount === 0) {
-      console.log('[MongoDB] Seeding Sub-Table: gd_transcripts (Child of gd_sessions)...');
-      await TranscriptEntryModel.create([
-        {
-          id: 't-init-1',
-          sessionId: 'session-101', // References parent gd_sessions.id
-          speakerId: 'facilitator-ai',
-          speakerName: 'Dr. Sunita Rao (AI Facilitator)',
-          seatNumber: null,
-          isFacilitator: true,
-          timestamp: '10:00:15 AM',
-          timestampSeconds: 15,
-          text: 'Welcome participants. Today we analyze how generative AI is shifting tech talent evaluation from syntax memorization to architectural thinking. The floor is open.',
-          type: 'greeting',
-          sentiment: 'neutral',
-        },
-        {
-          id: 't-init-2',
-          sessionId: 'session-101', // References parent gd_sessions.id
-          speakerId: 's1',
-          speakerName: 'Rahul Kumar',
-          seatNumber: 1,
-          isFacilitator: false,
-          timestamp: '10:00:45 AM',
-          timestampSeconds: 45,
-          text: 'I believe generative AI tools like GitHub Copilot allow developers to focus higher-level system design rather than boilerplate code.',
-          type: 'statement',
-          sentiment: 'positive',
-        },
-      ]);
-      console.log('[MongoDB] Sub-Table gd_transcripts seeded successfully.');
-    }
-
-    // 6. Seed Sub-Table: gd_bookings (Child of gd_sessions & users)
-    const bookingCount = await GDBookingModel.countDocuments();
-    if (bookingCount === 0) {
-      console.log('[MongoDB] Seeding Sub-Table: gd_bookings (Child of gd_sessions)...');
-      await GDBookingModel.create([
-        {
-          id: 'b-s1-slot-dit-001',
-          sessionId: 'slot-dit-001', // References parent gd_sessions.id
-          studentId: 's1', // References parent users.id
-          topic: 'Impact of Generative AI on Tech Hiring & Software Engineering',
-          status: 'BOOKED',
-          bookedAt: new Date(),
-        },
-      ]);
-      console.log('[MongoDB] Sub-Table gd_bookings seeded successfully.');
-    }
-
-    // 7. Seed Sub-Table: assessment_reports (Child of gd_sessions)
-    const reportCount = await AssessmentReportModel.countDocuments();
-    if (reportCount === 0) {
-      console.log('[MongoDB] Seeding Sub-Table: assessment_reports (Child of gd_sessions)...');
-      await AssessmentReportModel.create([
-        {
-          id: 'rep-s1-session-101',
-          sessionId: 'session-101', // References parent gd_sessions.id
-          studentId: 's1', // References parent users.id
-          studentName: 'Rahul Kumar',
-          overallScore: 86,
-          rubricJson: {
-            englishCommunication: 88,
-            fluency: 84,
-            clarity: 87,
-            confidence: 85,
-            contentKnowledge: 89,
-            collaboration: 85,
-            leadership: 84,
-          },
-          feedback: 'Rahul demonstrated solid technical depth and clear opening argumentation on AI development practices.',
-          strengths: ['Clear articulate delivery', 'Strong conceptual foundation in software engineering'],
-          improvements: ['Engage more proactively in collaborative rebuttal and questioning peers'],
-        },
-      ]);
-      console.log('[MongoDB] Sub-Table assessment_reports seeded successfully.');
+    // 2. Ensure Super Admin account exists in users collection
+    const superAdminExists = await UserModel.findOne({
+      $or: [{ role: 'super_admin' }, { email: 'superadmin@erus.ai' }],
+    });
+    if (!superAdminExists) {
+      console.log('[MongoDB] Creating Platform Super Admin account...');
+      await UserModel.create({
+        id: 'sa-1',
+        name: 'Platform Super Admin',
+        email: 'superadmin@erus.ai',
+        password: 'admin123',
+        role: 'super_admin',
+        college: 'ERUS Global Administration',
+      });
+      console.log('[MongoDB] Platform Super Admin account initialized.');
     }
 
     const counts = {

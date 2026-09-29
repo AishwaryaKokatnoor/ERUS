@@ -24,6 +24,7 @@ export interface Student {
   isEmptySeat?: boolean;
   volumeLevel?: number;
   bookedSlotId?: string;
+  videoStream?: MediaStream | null;
 }
 
 export interface BreakoutRoom {

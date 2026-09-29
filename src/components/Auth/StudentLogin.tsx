@@ -35,7 +35,11 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
   React.useEffect(() => {
     fetchAdminColleges().then(async (list) => {
       if (list && list.length > 0) setAvailableColleges(list);
-      const codes = Array.from(new Set(['DIT', ...(list || []).map((c: any) => String(c.code || '').toUpperCase()).filter(Boolean)]));
+      const codes = Array.from(new Set((list || []).map((c: any) => String(c.code || '').toUpperCase()).filter(Boolean)));
+      if (codes.length === 0) {
+        setDemoStudents([]);
+        return;
+      }
       const rosters = await Promise.all(codes.map((code) => fetchCollegeStudents(code)));
       const merged = rosters.flat();
       const byId = new Map<string, any>();

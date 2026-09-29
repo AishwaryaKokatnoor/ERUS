@@ -215,11 +215,12 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     }
   };
 
-  // Real-Time Multi-User WebRTC Audio Mesh & Room Signaling (PDF Page 13 & 14)
+  // Real-Time Multi-User WebRTC Audio/Video Mesh & Room Signaling
   const {
     connected: isSocketConnected,
     assignedSeat: rtcAssignedSeat,
     peers: rtcPeers,
+    peerStreams: rtcPeerStreams,
     silenceTimerSeconds: rtcSilenceTimer,
     isMicMuted: rtcIsMicMuted,
     isSpeakingLive: rtcIsSpeakingLive,
@@ -231,8 +232,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     aiParticipants: rtcAiParticipants,
     simulationMode: rtcSimulationMode,
   } = useWebRTCRoom({
-    slotId: session.slotId || session.id || 'slot-dit-001',
+    slotId: session.slotId || session.id || 'slot-1',
     currentUser,
+    videoStream,
+    isCameraOn,
     onSessionStarted: () => {
       setSession((prev) => ({
         ...prev,
@@ -432,67 +435,48 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // Local auto-simulation is retained only for the single-user demo mode.
   const hasRealStudentPeers = rtcPeers.some((p) => p.role === 'student');
 
-  // Demo participants follow the slot capacity exactly. If a slot has
-  // capacity 6, the room shows 6 participants total (including the current
-  // student), with AI participants filling the remaining seats.
+  // Clean GD room seating: real participants occupy seats, unused desks are empty candidate seats
   useEffect(() => {
     setSession((prev) => {
-      const capacity = Math.max(1, prev.maxCapacity || 15);
+      const capacity = Math.max(2, Math.min(15, prev.maxCapacity || 8));
+      const existingReal = prev.students.filter((s) => s.isUser || s.isRealPeer);
+      const usedSeats = new Set(existingReal.map((s) => s.seatNumber));
+      const seats: Student[] = [...existingReal];
 
-      // Existing generated slot participants are demo participants unless they
-      // are the current user or a real WebRTC peer.
-      const normalizedStudents = prev.students.map((s) =>
-        !s.isUser && !s.isRealPeer && !s.isEmptySeat && s.id.startsWith('slot-stu-')
-          ? { ...s, isDemoAI: true }
-          : s
-      );
-
-      const fixedStudents = normalizedStudents.filter((s) => !s.isDemoAI && !s.isEmptySeat);
-      const existingDemo = normalizedStudents
-        .filter((s) => s.isDemoAI && !s.isEmptySeat)
-        .slice(0, Math.max(0, capacity - fixedStudents.length));
-      const targetAiCount = Math.max(0, capacity - fixedStudents.length);
-
-      if (existingDemo.length === targetAiCount && normalizedStudents.length === capacity) {
-        return normalizedStudents === prev.students ? prev : { ...prev, students: normalizedStudents };
+      for (let seatNum = 1; seatNum <= capacity; seatNum++) {
+        if (!usedSeats.has(seatNum)) {
+          seats.push({
+            id: `seat-${seatNum}-empty`,
+            name: `Seat ${seatNum}`,
+            seatNumber: seatNum,
+            college: 'Available Desk',
+            course: '',
+            batch: '',
+            avatar: '',
+            isUser: false,
+            micActive: false,
+            isSpeaking: false,
+            hasRaisedHand: false,
+            cameraActive: false,
+            speakingDurationSeconds: 0,
+            speakingTurns: 0,
+            interruptionCount: 0,
+            questionsAnswered: 0,
+            questionsInitiated: 0,
+            sentiment: 'neutral',
+            isEmptySeat: true,
+            isRealPeer: false,
+            isDemoAI: false,
+          });
+        }
       }
 
-      const usedSeats = new Set([...fixedStudents, ...existingDemo].map((s) => s.seatNumber));
-      const additions: Student[] = [];
-      const missingAiCount = targetAiCount - existingDemo.length;
-      const demoTemplates = generateSlotParticipants(Math.max(1, targetAiCount));
-      let nextSeat = 1;
-
-      for (let i = 0; i < missingAiCount; i++) {
-        while (usedSeats.has(nextSeat)) nextSeat++;
-        const demo = demoTemplates[i % demoTemplates.length];
-        additions.push({
-          ...demo,
-          id: 'demo-ai-' + Date.now() + '-' + i,
-          seatNumber: nextSeat,
-          isUser: false,
-          isDemoAI: true,
-          micActive: false,
-          isSpeaking: false,
-          isRealPeer: false,
-          isEmptySeat: false,
-          speakingTurns: 0,
-          speakingDurationSeconds: 0,
-          interruptionCount: 0,
-          questionsAnswered: 0,
-          questionsInitiated: 0,
-        });
-        usedSeats.add(nextSeat);
-        nextSeat++;
-      }
-
-      return {
-        ...prev,
-        students: [...fixedStudents, ...existingDemo, ...additions].slice(0, capacity),
-      };
+      seats.sort((a, b) => (a.seatNumber || 0) - (b.seatNumber || 0));
+      return { ...prev, students: seats };
     });
   }, [session.id, session.maxCapacity, setSession]);
-  // Active display students: merge static mock participants with live connected WebRTC peers
+
+  // Active display students: merge connected user with live connected WebRTC peers & available desks
   const activeDisplayStudents = useMemo(() => {
     const targetUserSeat = !isFaculty
       ? (rtcAssignedSeat || (currentUser && 'seatNumber' in currentUser ? (currentUser as any).seatNumber : 1) || 1)
@@ -518,12 +502,15 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           isSpeaking: isListeningMic || rtcIsSpeakingLive,
           micActive: isListeningMic || !rtcIsMicMuted,
           cameraActive: isCameraOn,
+          isEmptySeat: false,
+          videoStream: videoStream,
         };
       }
 
       // Check if another real peer is connected in this seat
       const realPeer = rtcPeers.find((p) => p.seatNumber === fixedSeatNumber);
       if (realPeer) {
+        const remoteStream = rtcPeerStreams.get(realPeer.socketId) || null;
         return {
           ...st,
           id: realPeer.userId,
@@ -537,7 +524,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           speakingTurns: realPeer.speakingTurns || st.speakingTurns,
           speakingDurationSeconds: realPeer.speakingDurationSeconds || st.speakingDurationSeconds,
           isRealPeer: true,
+          isEmptySeat: false,
           volumeLevel: realPeer.volumeLevel,
+          videoStream: remoteStream,
         };
       }
 
@@ -548,7 +537,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           id: `seat-${fixedSeatNumber}-empty`,
           seatNumber: fixedSeatNumber,
           name: `Seat ${fixedSeatNumber}`,
-          college: 'Open Candidate Seat',
+          college: 'Available Desk',
           avatar: '',
           isUser: false,
           isRealPeer: false,
@@ -558,6 +547,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           cameraActive: false,
           speakingTurns: 0,
           speakingDurationSeconds: 0,
+          videoStream: null,
         };
       }
 
@@ -567,7 +557,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         isUser: false,
       };
     });
-  }, [session.students, rtcPeers, rtcAssignedSeat, currentUser, isFaculty, isListeningMic, rtcIsSpeakingLive, rtcIsMicMuted, isCameraOn, autoSimulatePeers]);
+  }, [session.students, rtcPeers, rtcPeerStreams, rtcAssignedSeat, currentUser, isFaculty, isListeningMic, rtcIsSpeakingLive, rtcIsMicMuted, isCameraOn, videoStream]);
 
   const latestSpeakerTranscript = transcripts.slice().reverse().find((t) => !t.isFacilitator);
   const activeStudentUser = !isFaculty ? activeDisplayStudents.find((s) => s.isUser) : null;
@@ -757,16 +747,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   }, [isFaculty, stopAudioAnalyser, rtcSetMicEnabled]);
 
   const toggleMicRecognition = () => {
-    if (!isSessionActive && !isFaculty) {
-      alert('The session is currently waiting for Faculty In-Charge to commence. Microphones are muted.');
-      return;
-    }
-
-    if (!recognitionRef.current) {
-      alert('Speech recognition is not supported in this browser. You can click Quick Speaking Points to speak directly.');
-      return;
-    }
-
     if (isListeningMic) {
       // User muting: auto-commit any pending speech immediately so words are not lost
       if (speechPauseTimerRef.current) {
@@ -779,10 +759,12 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       }
 
       isListeningMicRef.current = false;
-      try {
-        recognitionRef.current.stop();
-      } catch (e) {
-        console.warn('Recognition stop error:', e);
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {
+          console.warn('Recognition stop error:', e);
+        }
       }
       setIsListeningMic(false);
       stopAudioAnalyser();
@@ -794,22 +776,24 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         }));
       }
     } else {
-      try {
-        liveTranscriptRef.current = '';
-        setLiveSpeechTranscript('');
-        isListeningMicRef.current = true;
-        recognitionRef.current.start();
-        setIsListeningMic(true);
-        startAudioAnalyser();
-        rtcSetMicEnabled(true);
-        if (!isFaculty) {
-          setSession((prev) => ({
-            ...prev,
-            students: prev.students.map((s) => (s.isUser ? { ...s, micActive: true } : s)),
-          }));
+      liveTranscriptRef.current = '';
+      setLiveSpeechTranscript('');
+      isListeningMicRef.current = true;
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.start();
+        } catch (e) {
+          console.warn('Speech recognition start error (WebRTC audio will still stream):', e);
         }
-      } catch (e) {
-        console.error('Failed to start speech recognition:', e);
+      }
+      setIsListeningMic(true);
+      startAudioAnalyser();
+      rtcSetMicEnabled(true);
+      if (!isFaculty) {
+        setSession((prev) => ({
+          ...prev,
+          students: prev.students.map((s) => (s.isUser ? { ...s, micActive: true } : s)),
+        }));
       }
     }
   };
@@ -2172,25 +2156,18 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   <button
                     id="mic-speak-btn"
                     onClick={toggleMicRecognition}
-                    disabled={!isSessionActive && !isFaculty}
-                    className={`relative p-3 rounded-full font-semibold transition-all shadow-lg flex items-center justify-center ${
-                      !isSessionActive && !isFaculty
-                        ? 'bg-slate-800/60 text-slate-500 border border-slate-700/50 cursor-not-allowed opacity-60'
-                        : isListeningMic
-                        ? 'bg-red-600 hover:bg-red-700 text-white ring-4 ring-red-500/40 animate-pulse cursor-pointer'
-                        : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 cursor-pointer'
+                    className={`relative p-3 rounded-full font-semibold transition-all shadow-lg flex items-center justify-center cursor-pointer ${
+                      isListeningMic
+                        ? 'bg-red-600 hover:bg-red-700 text-white ring-4 ring-red-500/40 animate-pulse'
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
                     }`}
                     title={
-                      !isSessionActive && !isFaculty
-                        ? 'Microphone locked. Waiting for Faculty In-Charge to commence session.'
-                        : isFaculty
+                      isFaculty
                         ? (isListeningMic ? 'Stop Speaking (Moderator Mic Live)' : 'Push to Speak as Faculty Moderator')
                         : (isListeningMic ? 'Mute Microphone (Speaking Active)' : 'Unmute Microphone (Push to Speak)')
                     }
                   >
-                    {!isSessionActive && !isFaculty ? (
-                      <Lock className="w-5 h-5 text-amber-400" />
-                    ) : isListeningMic ? (
+                    {isListeningMic ? (
                       <Mic className="w-5 h-5 text-white animate-bounce" />
                     ) : (
                       <MicOff className="w-5 h-5 text-rose-400" />
@@ -2424,11 +2401,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                           </span>
                         </div>
                         <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                          {!isSessionActive && !isFaculty
-                            ? `Waiting for Faculty In-Charge ${session.assignedFacultyName ? `(${session.assignedFacultyName}) ` : ''}to start the session. Microphones are muted.`
-                            : isFaculty
+                          {isFaculty
                             ? 'Unmute microphone to speak live to the room, or click directives below.'
-                            : 'Click Unmute to speak live to the room — no typing or send button needed.'}
+                            : 'Click Unmute to speak live to the room — your voice is broadcast live to all participants.'}
                         </p>
                       </div>
                     </div>
@@ -2444,23 +2419,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                         <span>Test Audio & Mic</span>
                       </button>
 
-                      {!isSessionActive && !isFaculty ? (
-                        <button
-                          disabled
-                          className="px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 text-xs font-semibold flex items-center gap-1.5 cursor-not-allowed border border-slate-300 dark:border-slate-700"
-                        >
-                          <Lock className="w-3.5 h-3.5 text-amber-500" />
-                          <span>Muted in Lobby</span>
-                        </button>
-                      ) : (
-                        <button
-                          onClick={toggleMicRecognition}
-                          className="px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-md cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
-                        >
-                          <Mic className="w-3.5 h-3.5" />
-                          <span>Unmute & Speak Live</span>
-                        </button>
-                      )}
+                      <button
+                        onClick={toggleMicRecognition}
+                        className="px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-md cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
+                      >
+                        <Mic className="w-3.5 h-3.5" />
+                        <span>Unmute & Speak Live</span>
+                      </button>
                     </div>
                   </div>
                 )}
@@ -3028,7 +2993,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 };
 
 // Sub-Component: HTML5 Video Stream Player for Live Webcam Feed
-const VideoStreamPlayer: React.FC<{ stream: MediaStream; className?: string }> = ({ stream, className }) => {
+const VideoStreamPlayer: React.FC<{ stream: MediaStream; className?: string; muted?: boolean }> = ({ stream, className, muted = true }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -3042,13 +3007,12 @@ const VideoStreamPlayer: React.FC<{ stream: MediaStream; className?: string }> =
       ref={videoRef}
       autoPlay
       playsInline
-      muted
-      className={className || "w-full h-full object-cover transform -scale-x-100"}
+      muted={muted}
+      className={className || "w-full h-full object-cover"}
     />
   );
 };
 
-// Sub-Component: Student Video / Camera Frame with Google Meet Badges & Live Webcam Streaming
 // Sub-Component: Student Video / Camera Frame with Google Meet Badges & Live Webcam Streaming
 export const StudentVideoFrame: React.FC<{
   student: Student;
@@ -3070,7 +3034,8 @@ export const StudentVideoFrame: React.FC<{
   isFaculty = false,
 }) => {
   const isUser = !isFaculty && !!student.isUser;
-  const isLiveWebcam = isUser && isUserCameraOn && !!videoStream;
+  const effectiveStream = isUser ? videoStream : student.videoStream;
+  const isLiveWebcam = (isUser && isUserCameraOn && !!videoStream) || (!isUser && !!student.videoStream && student.cameraActive !== false);
   const isCameraEnabled = isUser ? isUserCameraOn : (student.cameraActive !== false);
   const isMicLive = isUser ? isListeningMic : (isCurrentSpeaker || student.isSpeaking);
 
@@ -3082,15 +3047,27 @@ export const StudentVideoFrame: React.FC<{
           <User className="w-5 h-5 text-slate-300 dark:text-slate-600 mb-0.5" />
           <span className="text-[8px] font-mono uppercase tracking-wider text-slate-400 dark:text-slate-500">Empty</span>
         </div>
-      ) : isLiveWebcam ? (
-        <VideoStreamPlayer stream={videoStream!} className="w-full h-full object-cover transform -scale-x-100" />
-      ) : isCameraEnabled ? (
-        <img
-          src={student.avatar}
-          alt={student.name}
-          className="w-full h-full object-cover"
-          referrerPolicy="no-referrer"
+      ) : isLiveWebcam && effectiveStream ? (
+        <VideoStreamPlayer 
+          stream={effectiveStream} 
+          muted={true}
+          className={`w-full h-full object-cover ${isUser ? 'transform -scale-x-100' : ''}`} 
         />
+      ) : isCameraEnabled ? (
+        student.avatar ? (
+          <img
+            src={student.avatar}
+            alt={student.name}
+            className="w-full h-full object-cover"
+            referrerPolicy="no-referrer"
+          />
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center bg-slate-800 text-slate-400">
+            <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold text-white uppercase">
+              {student.name.charAt(0)}
+            </div>
+          </div>
+        )
       ) : (
         /* Camera Off Fallback Placeholder */
         <div className="w-full h-full flex flex-col items-center justify-center bg-slate-800 text-slate-400">

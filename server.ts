@@ -114,123 +114,13 @@ interface StoredAuthUser {
   avatar?: string;
 }
 
-const DEFAULT_COLLEGES: BackendCollege[] = [
-  {
-    id: 'col-1',
-    name: 'Delhi Institute of Technology',
-    code: 'DIT',
-    contactEmail: 'admin@dit.edu.in',
-    phone: '+91 11 2659 1000',
-    address: 'Hauz Khas, New Delhi',
-    status: 'active',
-    studentCount: 3,
-    facultyCount: 2,
-    slotCount: 2,
-    adminEmail: 'admin@dit.edu.in',
-    adminName: 'DIT College Administrator',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'col-2',
-    name: 'Indian Institute of Technology Bombay',
-    code: 'IITB',
-    contactEmail: 'admin@iitb.ac.in',
-    phone: '+91 22 2572 2545',
-    address: 'Powai, Mumbai',
-    status: 'active',
-    studentCount: 2,
-    facultyCount: 1,
-    slotCount: 1,
-    adminEmail: 'admin@iitb.ac.in',
-    adminName: 'IITB Academic Admin',
-    createdAt: new Date().toISOString(),
-  },
-];
+const DEFAULT_COLLEGES: BackendCollege[] = [];
 
-const DEFAULT_COLLEGE_STUDENTS: Record<string, BackendCollegeStudentItem[]> = {
-  DIT: [
-    {
-      id: 's1',
-      name: 'Rahul Kumar',
-      email: 'rahul.kumar@dit.edu.in',
-      studentId: 'STU-2022-041',
-      course: 'B.Tech CSE',
-      batch: '2022-2026',
-      seatNumber: 1,
-      college: 'Delhi Institute of Technology',
-      collegeCode: 'DIT',
-    },
-    {
-      id: 's2',
-      name: 'Neha Gupta',
-      email: 'neha.gupta@dit.edu.in',
-      studentId: 'STU-2022-072',
-      course: 'B.Tech IT',
-      batch: '2022-2026',
-      seatNumber: 2,
-      college: 'Delhi Institute of Technology',
-      collegeCode: 'DIT',
-    },
-    {
-      id: 's3',
-      name: 'Aditya Singh',
-      email: 'aditya.singh@dit.edu.in',
-      studentId: 'STU-2022-094',
-      course: 'B.Tech ECE',
-      batch: '2022-2026',
-      seatNumber: 3,
-      college: 'Delhi Institute of Technology',
-      collegeCode: 'DIT',
-    },
-  ],
-};
+const DEFAULT_COLLEGE_STUDENTS: Record<string, BackendCollegeStudentItem[]> = {};
 
-const DEFAULT_COLLEGE_FACULTY: Record<string, BackendCollegeFacultyItem[]> = {
-  DIT: [
-    {
-      id: 'fac-1',
-      name: 'Dr. Sunita Rao',
-      email: 'sunita.rao@dit.edu.in',
-      facultyId: 'FAC-CSE-102',
-      department: 'Department of Computer Science & Engineering',
-      designation: 'Professor & Head of Department',
-      college: 'Delhi Institute of Technology',
-      collegeCode: 'DIT',
-      assignedSlotsCount: 3,
-    },
-    {
-      id: 'fac-2',
-      name: 'Prof. Rajesh Verma',
-      email: 'rajesh.verma@dit.edu.in',
-      facultyId: 'FAC-MGT-205',
-      department: 'School of Management',
-      designation: 'Dean of Academic Affairs',
-      college: 'Delhi Institute of Technology',
-      collegeCode: 'DIT',
-      assignedSlotsCount: 2,
-    },
-  ],
-};
+const DEFAULT_COLLEGE_FACULTY: Record<string, BackendCollegeFacultyItem[]> = {};
 
-const DEFAULT_COLLEGE_SLOTS: Record<string, BackendCollegeSlotItem[]> = {
-  DIT: [
-    {
-      id: 'slot-dit-001',
-      slotName: 'Slot 1: AI Ethics & Hiring Transformation',
-      topic: 'Impact of Generative AI on Tech Hiring & Software Engineering',
-      description: 'Autonomous AI evaluation of technical argumentation, structured thinking, and empathy.',
-      slotTiming: '10:30 AM - 10:45 AM',
-      status: 'scheduled',
-      durationMinutes: 15,
-      enrolledCount: 3,
-      maxCapacity: 15,
-      assignedFacultyId: 'FAC-CSE-102',
-      assignedFacultyName: 'Dr. Sunita Rao',
-      collegeCode: 'DIT',
-      createdAt: new Date().toISOString(),
-    },
-  ],
-};
+const DEFAULT_COLLEGE_SLOTS: Record<string, BackendCollegeSlotItem[]> = {};
 
 const DEFAULT_USERS: StoredAuthUser[] = [
   {
@@ -240,53 +130,6 @@ const DEFAULT_USERS: StoredAuthUser[] = [
     password: 'admin123',
     role: 'super_admin',
     college: 'ERUS Global Administration',
-  },
-  {
-    id: 'ca-1',
-    name: 'DIT College Administrator',
-    email: 'admin@dit.edu.in',
-    password: 'college123',
-    role: 'college_admin',
-    college: 'Delhi Institute of Technology',
-    collegeCode: 'DIT',
-    adminId: 'CADM-DIT-001',
-  },
-  {
-    id: 'fac-1',
-    name: 'Dr. Sunita Rao',
-    email: 'sunita.rao@dit.edu.in',
-    password: 'faculty123',
-    role: 'faculty',
-    college: 'Delhi Institute of Technology',
-    collegeCode: 'DIT',
-    facultyId: 'FAC-CSE-102',
-    department: 'Department of Computer Science & Engineering',
-    designation: 'Professor & Head of Department',
-  },
-  {
-    id: 'fac-2',
-    name: 'Prof. Rajesh Verma',
-    email: 'rajesh.verma@dit.edu.in',
-    password: 'faculty123',
-    role: 'faculty',
-    college: 'Delhi Institute of Technology',
-    collegeCode: 'DIT',
-    facultyId: 'FAC-MGT-205',
-    department: 'School of Management',
-    designation: 'Dean of Academic Affairs',
-  },
-  {
-    id: 's1',
-    name: 'Rahul Kumar',
-    email: 'rahul.kumar@dit.edu.in',
-    password: 'password123',
-    role: 'student',
-    college: 'Delhi Institute of Technology',
-    collegeCode: 'DIT',
-    studentId: 'STU-2022-041',
-    course: 'B.Tech CSE',
-    batch: '2022-2026',
-    seatNumber: 1,
   },
 ];
 
@@ -298,7 +141,7 @@ let persistentState = {
   faculty: { ...DEFAULT_COLLEGE_FACULTY },
   slots: { ...DEFAULT_COLLEGE_SLOTS },
   users: [...DEFAULT_USERS],
-  studentBookings: { 's1': 'slot-dit-001' } as Record<string, string>,
+  studentBookings: {} as Record<string, string>,
   studentTopicBookings: {} as Record<string, Record<string, string>>,
 };
 
@@ -308,13 +151,68 @@ function loadPersistentState() {
       const raw = fs.readFileSync(PERSIST_FILE, 'utf-8');
       const data = JSON.parse(raw);
       if (data && typeof data === 'object') {
-        if (Array.isArray(data.colleges) && data.colleges.length > 0) persistentState.colleges = data.colleges;
-        if (data.students && typeof data.students === 'object') persistentState.students = data.students;
-        if (data.faculty && typeof data.faculty === 'object') persistentState.faculty = data.faculty;
-        if (data.slots && typeof data.slots === 'object') persistentState.slots = data.slots;
-        if (Array.isArray(data.users) && data.users.length > 0) persistentState.users = data.users;
-        if (data.studentBookings && typeof data.studentBookings === 'object') persistentState.studentBookings = data.studentBookings;
-        if (data.studentTopicBookings && typeof data.studentTopicBookings === 'object') persistentState.studentTopicBookings = data.studentTopicBookings;
+        const dummyCollegeCodes = ['DIT', 'IITB'];
+        const dummyUserIds = ['ca-1', 'fac-1', 'fac-2', 's1', 's2', 's3'];
+
+        if (Array.isArray(data.colleges)) {
+          persistentState.colleges = data.colleges.filter(
+            (c: any) => !dummyCollegeCodes.includes(c?.code) && !['col-1', 'col-2'].includes(c?.id)
+          );
+        }
+        if (data.students && typeof data.students === 'object') {
+          persistentState.students = {};
+          for (const [k, v] of Object.entries(data.students)) {
+            if (!dummyCollegeCodes.includes(k) && Array.isArray(v)) {
+              persistentState.students[k] = (v as any[]).filter(
+                (s: any) => !dummyUserIds.includes(s?.id)
+              );
+            }
+          }
+        }
+        if (data.faculty && typeof data.faculty === 'object') {
+          persistentState.faculty = {};
+          for (const [k, v] of Object.entries(data.faculty)) {
+            if (!dummyCollegeCodes.includes(k) && Array.isArray(v)) {
+              persistentState.faculty[k] = (v as any[]).filter(
+                (f: any) => !dummyUserIds.includes(f?.id)
+              );
+            }
+          }
+        }
+        if (data.slots && typeof data.slots === 'object') {
+          persistentState.slots = {};
+          for (const [k, v] of Object.entries(data.slots)) {
+            if (!dummyCollegeCodes.includes(k) && Array.isArray(v)) {
+              persistentState.slots[k] = (v as any[]).filter(
+                (slot: any) => !['slot-dit-001', 'session-101', 'slot-teachers-1'].includes(slot?.id)
+              );
+            }
+          }
+        }
+        if (Array.isArray(data.users)) {
+          const filteredUsers = data.users.filter(
+            (u: any) =>
+              !dummyUserIds.includes(u?.id) &&
+              u?.email !== 'admin@dit.edu.in' &&
+              u?.email !== 'sunita.rao@dit.edu.in' &&
+              u?.email !== 'rajesh.verma@dit.edu.in' &&
+              u?.email !== 'rahul.kumar@dit.edu.in' &&
+              u?.email !== 'neha.gupta@dit.edu.in' &&
+              u?.email !== 'aditya.singh@dit.edu.in'
+          );
+          if (!filteredUsers.some((u: any) => u.role === 'super_admin' || u.email === 'superadmin@erus.ai')) {
+            filteredUsers.push(...DEFAULT_USERS);
+          }
+          persistentState.users = filteredUsers;
+        }
+        if (data.studentBookings && typeof data.studentBookings === 'object') {
+          const bookings = { ...data.studentBookings };
+          delete bookings['s1'];
+          persistentState.studentBookings = bookings;
+        }
+        if (data.studentTopicBookings && typeof data.studentTopicBookings === 'object') {
+          persistentState.studentTopicBookings = data.studentTopicBookings;
+        }
       }
     }
   } catch (err) {
@@ -3859,7 +3757,7 @@ const AI_PARTICIPANT_NAMES = [
   'Nikhil Reddy','Riya Malhotra','Vivek Rao','Pooja Menon','Karan Joshi','Anika Sharma',
   'Manav Patel','Sanya Kapoor'
 ];
-const AI_GD_SIMULATION_MODE = true;
+const AI_GD_SIMULATION_MODE = false;
 const AI_GD_SIMULATION_PARTICIPANTS = 6; // Fallback only; simulation normally follows slot capacity.
 
 function syncAiParticipants(room: LiveGDRoomState) {
@@ -4502,14 +4400,13 @@ io.on('connection', (socket) => {
 
     syncAiParticipants(room);
 
-    // Demo mode: connected browser users are observers only. The speaking
-    // floor contains AI participants exclusively.
-    const otherPeers = room.simulationMode ? [] : Array.from(room.peers.values()).filter(p => p.socketId !== socket.id);
+    // Real peer connectivity: send all connected peers in the room to enable WebRTC mesh
+    const otherPeers = Array.from(room.peers.values()).filter(p => p.socketId !== socket.id);
     socket.emit('gd-room-joined', {
       assignedSeat: seatNumber,
       peers: otherPeers,
       aiParticipants: Array.from(room.aiParticipants.values()),
-      simulationMode: room.simulationMode,
+      simulationMode: false,
       transcripts: room.transcripts,
       topic: room.topic,
       silenceTimerSeconds: room.silenceTimerSeconds,
@@ -4574,59 +4471,12 @@ io.on('connection', (socket) => {
     const peer = room.peers.get(socket.id);
     if (!peer) return;
 
-    peer.isSpeaking = isSpeaking;
+    peer.isSpeaking = !!isSpeaking;
     if (micActive !== undefined) peer.micActive = micActive;
     if (cameraActive !== undefined) peer.cameraActive = cameraActive;
 
-    if (isSpeaking && room.simulationMode) {
-      // AI simulation owns the entire speaking floor. Humans are observers.
-      peer.isSpeaking = false;
-      peer.micActive = false;
-      io.to(socket.id).emit('floor-busy', {
-        message: 'AI simulation is running. Human microphones are disabled while AI participants conduct the GD.'
-      });
-      return;
-    }
-
     if (isSpeaking) {
-      // HARD FLOOR LOCK: one participant at a time. A second participant
-      // cannot claim the floor while another human or AI participant owns it.
-      if (
-        room.currentSpeakerId &&
-        room.currentSpeakerId !== peer.userId
-      ) {
-        peer.isSpeaking = false;
-        peer.micActive = false;
-        socket.emit('floor-busy', {
-          speakerId: room.currentSpeakerId,
-          message: 'Another participant is speaking. Please wait until the floor is released.'
-        });
-        return;
-      }
-
-      // Enforce one turn per participant per round.
-      const allTurnParticipants: any[] = [
-        ...Array.from(room.peers.values()).filter((p) => p.role === 'student'),
-        ...syncAiParticipants(room),
-      ];
-      const minimumTurns = allTurnParticipants.length
-        ? Math.min(...allTurnParticipants.map((p) => Number(p.speakingTurns || 0)))
-        : 0;
-      const peerTurns = Number(peer.speakingTurns || 0);
-      const someoneStillNeedsTurn = allTurnParticipants.some(
-        (p) => p.id !== peer.userId && p.userId !== peer.userId && Number(p.speakingTurns || 0) === minimumTurns
-      );
-      if (peerTurns > minimumTurns && someoneStillNeedsTurn) {
-        peer.isSpeaking = false;
-        peer.micActive = false;
-        socket.emit('floor-busy', {
-          speakerId: room.currentSpeakerId,
-          message: 'You have already spoken in this round. Please wait until all participants have spoken.'
-        });
-        return;
-      }
-
-      // A human has taken the floor; cancel any pending AI selection.
+      // A participant has claimed the floor; cancel any pending AI timers
       if (room.turnTimer) clearTimeout(room.turnTimer);
       room.turnTimer = undefined;
       room.waitingForParticipantId = undefined;
@@ -4642,7 +4492,7 @@ io.on('connection', (socket) => {
         floorVersion: room.floorVersion,
       });
     } else if (room.currentSpeakerSocketId === socket.id) {
-      // Only the current speaker can release the floor.
+      // Current speaker finished speaking
       room.currentSpeakerId = null;
       room.currentSpeakerSocketId = null;
       room.waitingForParticipantId = undefined;
@@ -4675,17 +4525,9 @@ io.on('connection', (socket) => {
     const peer = room.peers.get(socket.id);
     if (!peer) return;
 
-    // Transcript submission is also protected by the server-owned floor.
-    // A client must never be able to inject a second speaker's transcript
-    // while another participant owns the floor.
-    if (room.currentSpeakerId && room.currentSpeakerSocketId !== socket.id) {
-      peer.isSpeaking = false;
-      peer.micActive = false;
-      socket.emit('floor-busy', {
-        speakerId: room.currentSpeakerId,
-        message: 'Another participant is speaking. Please wait until the floor is released.'
-      });
-      return;
+    if (room.currentSpeakerId !== peer.userId) {
+      room.currentSpeakerId = peer.userId;
+      room.currentSpeakerSocketId = socket.id;
     }
 
     // A quick statement can arrive before VAD claims the floor. In that case,

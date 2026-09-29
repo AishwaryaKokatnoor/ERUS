@@ -32,7 +32,11 @@ export const FacultyLogin: React.FC<FacultyLoginProps> = ({
   React.useEffect(() => {
     fetchAdminColleges().then(async (list) => {
       if (list && list.length > 0) setAvailableColleges(list);
-      const codes = Array.from(new Set(['DIT', ...(list || []).map((c: any) => String(c.code || '').toUpperCase()).filter(Boolean)]));
+      const codes = Array.from(new Set((list || []).map((c: any) => String(c.code || '').toUpperCase()).filter(Boolean)));
+      if (codes.length === 0) {
+        setDemoFaculty([]);
+        return;
+      }
       const rosters = await Promise.all(codes.map((code) => fetchCollegeFaculty(code)));
       const merged = rosters.flat();
       const byId = new Map<string, any>();
