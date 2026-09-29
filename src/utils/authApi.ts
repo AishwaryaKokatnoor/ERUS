@@ -132,43 +132,15 @@ export async function verifyCurrentSession(): Promise<AuthUser | null> {
 // ==========================================
 const CUSTOM_COLLEGES_KEY = 'erus_custom_colleges';
 
-const DEFAULT_ADMIN_COLLEGES = [
-  {
-    id: 'col-1',
-    name: 'Delhi Institute of Technology',
-    code: 'DIT',
-    contactEmail: 'admin@dit.edu.in',
-    phone: '+91 11 2659 1000',
-    address: 'Hauz Khas, New Delhi',
-    status: 'active',
-    studentCount: 120,
-    facultyCount: 18,
-    slotCount: 8,
-    adminEmail: 'admin@dit.edu.in',
-    adminName: 'DIT College Administrator',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'col-2',
-    name: 'Indian Institute of Technology Bombay',
-    code: 'IITB',
-    contactEmail: 'admin@iitb.ac.in',
-    phone: '+91 22 2572 2545',
-    address: 'Powai, Mumbai',
-    status: 'active',
-    studentCount: 95,
-    facultyCount: 14,
-    slotCount: 6,
-    adminEmail: 'admin@iitb.ac.in',
-    adminName: 'IITB Academic Admin',
-    createdAt: new Date().toISOString(),
-  },
-];
+const DEFAULT_ADMIN_COLLEGES: any[] = [];
 
 export function getLocalCustomColleges(): any[] {
   try {
     const raw = localStorage.getItem(CUSTOM_COLLEGES_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((c: any) => !['DIT', 'IITB'].includes(c?.code?.toUpperCase()) && !['col-1', 'col-2'].includes(c?.id))
+      : [];
   } catch {
     return [];
   }
