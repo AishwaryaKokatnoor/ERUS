@@ -28,6 +28,7 @@ import {
   ResponsiveContainer, 
   Cell 
 } from 'recharts';
+import { DEFAULT_GD_SESSION } from '../../data/mockGDData';
 
 interface FacultyDashboardViewProps {
   session: GDSession;
@@ -60,7 +61,7 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
 
   // Compute student rankings and scores. Normalize every incoming array so a
   // faculty account with no assigned slots/participants can never crash the UI.
-  const safeSession = session || ({ ...INITIAL_SESSION, students: [] } as any);
+  const safeSession = session || ({ ...DEFAULT_GD_SESSION, students: [] } as any);
   const safeStudents = Array.isArray(safeSession?.students) ? safeSession.students : [];
   const safeTranscripts = Array.isArray(transcripts) ? transcripts : [];
   const safeFacultyLiveNotes = Array.isArray(safeSession?.facultyLiveNotes) ? safeSession.facultyLiveNotes : [];

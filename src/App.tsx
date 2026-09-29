@@ -16,6 +16,7 @@ import { AuthPortal } from './components/Auth/AuthPortal';
 import { GDSession, Student, TranscriptEntry, StudentAssessmentReport } from './types/gd';
 import { AuthUser } from './types/auth';
 import { 
+  DEFAULT_GD_SESSION,
   INITIAL_SESSION, 
   INITIAL_SLOTS, 
   INITIAL_TRANSCRIPTS, 
@@ -320,6 +321,8 @@ function GDAppContent() {
           college: user.college || '',
           course: user.course || '',
           batch: user.batch || '',
+          seatNumber: (user as any).seatNumber || 1,
+          avatar: user.avatar || '',
           isUser: true,
           bookedSlotId: activeSlotId,
           micActive: false,

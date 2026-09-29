@@ -59,7 +59,7 @@ import {
   generateStudentFollowUpStatement
 } from '../../utils/facilitatorQuestionEngine';
 import { LobbyAudioTester } from './LobbyAudioTester';
-import { generateSlotParticipants } from '../../data/mockGDData';
+import { generateSlotParticipants, DEFAULT_GD_SESSION } from '../../data/mockGDData';
 
 interface RealisticGDRoomProps {
   session: GDSession;
@@ -395,9 +395,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     // AI speech events. Merge the roster instead of rebuilding students from
     // the original zero-turn roster on every speaker change.
     setSession((prev) => {
-      const previousById = new Map(prev.students.map((s) => [s.id, s]));
+      const previousById = new Map((prev?.students || []).map((s) => [s.id, s]));
       const aiStudents: Student[] = rtcAiParticipants.map((p: any) => {
-        const previous = previousById.get(p.id);
+        const previous: any = previousById.get(p.id);
         return {
           ...(previous || {}),
           id: p.id,

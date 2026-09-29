@@ -1084,10 +1084,10 @@ app.get('/api/college/faculty', async (req, res) => {
   // reloads and is available to the slot-creation modal.
   if (isDbConnected && prisma) {
     try {
-      const dbFaculty = await prisma.user.findMany({
+      const dbFaculty: any[] = await (prisma.user as any).findMany({
         where: {
           role: 'faculty',
-          college: { code },
+          collegeOrg: { code },
         },
         include: { facultyProfile: true },
       });
@@ -1239,7 +1239,7 @@ app.get('/api/college/slots', async (req, res) => {
           topic: s.topic,
           description: s.description || '',
           durationMinutes: s.durationMinutes,
-          difficulty: s.difficulty,
+          difficulty: (s as any).difficulty || 'Intermediate',
           status: s.status,
           slotTiming: s.slotTiming || '',
           slotName: s.slotName || s.topic,
@@ -1275,7 +1275,7 @@ app.get('/api/college/slots', async (req, res) => {
               topic: s.topic,
               description: s.description || '',
               durationMinutes: s.durationMinutes,
-              difficulty: s.difficulty,
+              difficulty: (s as any).difficulty || 'Intermediate',
               status: s.status,
               slotTiming: s.slotTiming || '',
               slotName: s.slotName || s.topic,
