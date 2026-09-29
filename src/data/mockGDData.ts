@@ -109,22 +109,42 @@ export function computeOverallScore(skills: {
 }
 
 export function generateStudentReport(
-  student: Student,
-  topic: string,
+  student?: Partial<Student> | null,
+  topic: string = 'General Discussion',
   durationMinutes: number = 20,
   baseReport?: StudentAssessmentReport
 ): StudentAssessmentReport {
+  const safeStudent: Student = {
+    id: student?.id || 'slot-stu-1',
+    name: student?.name || 'Participant',
+    college: student?.college || 'Engineering Institute',
+    course: student?.course || '',
+    batch: student?.batch || '',
+    seatNumber: student?.seatNumber || 1,
+    isUser: student?.isUser ?? true,
+    micActive: student?.micActive ?? false,
+    isSpeaking: student?.isSpeaking ?? false,
+    hasRaisedHand: student?.hasRaisedHand ?? false,
+    cameraActive: student?.cameraActive ?? false,
+    speakingDurationSeconds: student?.speakingDurationSeconds || 0,
+    speakingTurns: student?.speakingTurns || 0,
+    interruptionCount: student?.interruptionCount || 0,
+    questionsAnswered: student?.questionsAnswered || 0,
+    questionsInitiated: student?.questionsInitiated || 0,
+    sentiment: student?.sentiment || 'neutral',
+  };
+
   const base = baseReport || SAMPLE_REPORT_RAHUL;
-  const turns = student.speakingTurns || 4;
-  const durationSec = student.speakingDurationSeconds || 180;
+  const turns = safeStudent.speakingTurns || 4;
+  const durationSec = safeStudent.speakingDurationSeconds || 180;
 
   const english = Math.min(20, Math.max(14, Math.round(16 + (turns % 3))));
   const fluency = Math.min(20, Math.max(13, Math.round(15 + ((durationSec / 45) % 4))));
-  const clarity = Math.min(15, Math.max(10, Math.round(12 + ((student.questionsAnswered || 2) % 3))));
-  const confidence = Math.min(15, Math.max(11, Math.round(13 + ((student.questionsInitiated || 1) % 3))));
+  const clarity = Math.min(15, Math.max(10, Math.round(12 + ((safeStudent.questionsAnswered || 2) % 3))));
+  const confidence = Math.min(15, Math.max(11, Math.round(13 + ((safeStudent.questionsInitiated || 1) % 3))));
   const content = Math.min(15, Math.max(10, Math.round(12 + ((turns * 2) % 3))));
-  const collaboration = Math.min(10, Math.max(7, Math.round(8 - (student.interruptionCount || 0))));
-  const leadership = Math.min(5, Math.max(3, Math.round(4 + ((student.questionsInitiated || 0) > 0 ? 1 : 0))));
+  const collaboration = Math.min(10, Math.max(7, Math.round(8 - (safeStudent.interruptionCount || 0))));
+  const leadership = Math.min(5, Math.max(3, Math.round(4 + ((safeStudent.questionsInitiated || 0) > 0 ? 1 : 0))));
 
   const overall = computeOverallScore({
     english,
@@ -138,18 +158,18 @@ export function generateStudentReport(
 
   return {
     ...base,
-    id: `rep-${student.id}-${Date.now()}`,
+    id: `rep-${safeStudent.id}-${Date.now()}`,
     sessionId: 'session-001',
-    studentId: student.id,
-    studentName: student.name,
-    college: student.college || 'Engineering Institute',
+    studentId: safeStudent.id,
+    studentName: safeStudent.name,
+    college: safeStudent.college || 'Engineering Institute',
     topic,
     durationMinutes,
     speakingTimeFormatted: `${Math.floor(durationSec / 60)} min ${durationSec % 60} sec`,
     speakingTimeSeconds: durationSec,
     speakingTurns: turns,
-    interruptions: student.interruptionCount || 0,
-    questionsAnswered: student.questionsAnswered || 3,
+    interruptions: safeStudent.interruptionCount || 0,
+    questionsAnswered: safeStudent.questionsAnswered || 3,
     wpm: baseReport?.wpm || 135,
     wpmStatus: baseReport?.wpmStatus || 'Optimal',
     fillerWordsCount: baseReport?.fillerWordsCount ?? 2,
@@ -171,7 +191,7 @@ export function generateStudentReport(
     },
     overallScore: overall,
     grade: calculateGrade(overall),
-    aiSummary: `${student.name} contributed actively to the group discussion on "${topic}", demonstrating constructive dialogue and structured reasoning.`,
+    aiSummary: `${safeStudent.name} contributed actively to the group discussion on "${topic}", demonstrating constructive dialogue and structured reasoning.`,
     generatedAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
   };
 }

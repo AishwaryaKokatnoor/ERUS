@@ -71,13 +71,32 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
   const [activeReportTab, setActiveReportTab] = useState<'single' | 'comparison'>('single');
 
   // Find the active student for this user
-  const userStudent = session.students.find(
-    (s) => s.isUser || (currentUser && (s.id === currentUser.id || s.name === currentUser.name))
-  ) || session.students[0];
+  const safeSessionStudents = Array.isArray(session?.students) ? session.students : [];
+  const userStudent: Student = safeSessionStudents.find(
+    (s) => s && (s.isUser || (currentUser && (s.id === currentUser.id || s.name === currentUser.name)))
+  ) || safeSessionStudents[0] || {
+    id: currentUser?.id || 'slot-stu-1',
+    name: currentUser?.name || 'Participant',
+    college: currentUser?.college || 'Engineering Institute',
+    course: currentUser?.course || '',
+    batch: currentUser?.batch || '',
+    seatNumber: 1,
+    isUser: true,
+    micActive: false,
+    isSpeaking: false,
+    hasRaisedHand: false,
+    cameraActive: false,
+    speakingDurationSeconds: 0,
+    speakingTurns: 0,
+    interruptionCount: 0,
+    questionsAnswered: 0,
+    questionsInitiated: 0,
+    sentiment: 'neutral',
+  };
 
   const effectiveInitialStudentId = isStudent
     ? userStudent.id
-    : (targetStudentId || initialReport?.studentId || session.students[0]?.id || 's1');
+    : (targetStudentId || initialReport?.studentId || safeSessionStudents[0]?.id || userStudent.id);
 
   const [selectedStudentId, setSelectedStudentId] = useState<string>(effectiveInitialStudentId);
 
@@ -90,7 +109,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
       ) {
         return initialReport;
       }
-      return generateStudentReport(userStudent, session.topic, session.durationMinutes, initialReport);
+      return generateStudentReport(userStudent, session?.topic || 'General Discussion', session?.durationMinutes || 20, initialReport);
     }
     return initialReport || SAMPLE_REPORT_RAHUL;
   });
@@ -128,7 +147,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
 
   // After completion, load the persisted report instead of treating generated mock data as authoritative.
   useEffect(() => {
-    if (!isStudent || session.status !== 'completed' || !currentUser?.id) return;
+    if (!isStudent || session?.status !== 'completed' || !currentUser?.id || !session?.id) return;
     let cancelled = false;
     (async () => {
       try {
@@ -143,14 +162,14 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [isStudent, currentUser?.id, session.id, session.status]);
+  }, [isStudent, currentUser?.id, session?.id, session?.status]);
 
   // Ensure student always stays strictly locked to their own report
   useEffect(() => {
     if (isStudent) {
       setSelectedStudentId(userStudent.id);
       if (currentReport.studentName !== (currentUser?.name || userStudent.name)) {
-        setCurrentReport(generateStudentReport(userStudent, session.topic, session.durationMinutes, initialReport));
+        setCurrentReport(generateStudentReport(userStudent, session?.topic || 'General Discussion', session?.durationMinutes || 20, initialReport));
       }
     } else if (targetStudentId && targetStudentId !== selectedStudentId) {
       setSelectedStudentId(targetStudentId);
@@ -167,11 +186,11 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
 
   // Faculty live observation notes for this candidate (Enhancement 4)
   const candidateLiveNotes = useMemo(() => {
-    const list = session.facultyLiveNotes || currentReport.facultyLiveNotes || [];
+    const list = session?.facultyLiveNotes || currentReport.facultyLiveNotes || [];
     return list.filter(
       (n) => n.studentId === selectedStudentId || n.studentName?.toLowerCase() === currentReport.studentName?.toLowerCase()
     );
-  }, [session.facultyLiveNotes, currentReport.facultyLiveNotes, selectedStudentId, currentReport.studentName]);
+  }, [session?.facultyLiveNotes, currentReport.facultyLiveNotes, selectedStudentId, currentReport.studentName]);
 
   // Handle student switch (Allowed only for faculty reviewers)
   const handleSelectStudent = async (studentId: string) => {
@@ -181,14 +200,14 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
 
     setSelectedStudentId(studentId);
     setIsEditingScores(false);
-    const targetStudent = session.students.find((s) => s.id === studentId);
+    const targetStudent = safeSessionStudents.find((s) => s.id === studentId);
     if (!targetStudent) return;
 
     setIsLoading(true);
     try {
       if (isFaculty) {
         const facultyId = (currentUser as any)?.facultyId || currentUser?.id || '';
-        const res = await fetch('/api/faculty/sessions/' + encodeURIComponent(session.id) + '/reports?facultyId=' + encodeURIComponent(facultyId));
+        const res = await fetch('/api/faculty/sessions/' + encodeURIComponent(session?.id || 'default') + '/reports?facultyId=' + encodeURIComponent(facultyId));
         const data = await res.json();
         const persisted = Array.isArray(data.reports)
           ? data.reports.find((r: any) => r.studentId === targetStudent.id || (r.studentName && String(r.studentName).toLowerCase() === String(targetStudent.name).toLowerCase()))
@@ -203,7 +222,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
             studentId: persisted.studentId,
             studentName: targetStudent.name,
             college: targetStudent.college,
-            topic: session.topic,
+            topic: session?.topic || 'General Discussion',
             overallScore: persisted.overallScore,
             grade: persisted.overallScore >= 90 ? 'Excellent' : persisted.overallScore >= 75 ? 'Very Good' : persisted.overallScore >= 60 ? 'Good' : persisted.overallScore >= 40 ? 'Average' : 'Needs Improvement',
             skills,
@@ -214,14 +233,14 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
           } as StudentAssessmentReport);
         }
       } else {
-        const res = await fetch('/api/student/reports?studentId=' + encodeURIComponent(userStudent.id) + '&sessionId=' + encodeURIComponent(session.id));
+        const res = await fetch('/api/student/reports?studentId=' + encodeURIComponent(userStudent.id) + '&sessionId=' + encodeURIComponent(session?.id || 'default'));
         const data = await res.json();
         const persisted = Array.isArray(data.reports) ? data.reports[0] : null;
         if (persisted) setCurrentReport({ ...currentReport, ...persisted } as StudentAssessmentReport);
       }
     } catch (err) {
       console.error(err);
-      setCurrentReport(generateStudentReport(targetStudent, session.topic, session.durationMinutes));
+      setCurrentReport(generateStudentReport(targetStudent, session?.topic || 'General Discussion', session?.durationMinutes || 20));
     } finally {
       setIsLoading(false);
     }
@@ -361,7 +380,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
                 onChange={(e) => handleSelectStudent(e.target.value)}
                 className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl px-3.5 py-2 text-xs font-bold focus:outline-none focus:border-indigo-500 pr-8 cursor-pointer shadow-xs"
               >
-                {session.students.map((st) => (
+                {safeSessionStudents.map((st) => (
                   <option key={st.id} value={st.id}>
                     Seat {st.seatNumber}: {st.name} {st.isUser ? '(Demo Student)' : ''}
                   </option>
@@ -413,7 +432,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
               onClick={onBackToRoom}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md shadow-indigo-600/20 cursor-pointer"
             >
-              <span>{session.status === 'completed' ? 'Go to Active GD Room' : 'Back to GD Room'}</span>
+              <span>{session?.status === 'completed' ? 'Go to Active GD Room' : 'Back to GD Room'}</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           ) : (
@@ -438,20 +457,21 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
               Viewing Report for Slot:
             </span>
             <span className="text-xs font-semibold text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/60 px-2.5 py-1 rounded-lg border border-purple-200 dark:border-purple-800 flex items-center gap-1.5">
-              <span>{session.slotName || session.id}</span>
-              {session.status === 'completed' && <span className="text-[10px] font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400">• Completed & Evaluated</span>}
+              <span>{session?.slotName || session?.id || 'GD Session'}</span>
+              {session?.status === 'completed' && <span className="text-[10px] font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400">• Completed & Evaluated</span>}
             </span>
           </div>
 
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-[11px] text-slate-500 dark:text-slate-400">View Other Slot Reports:</span>
             {availableSlots.map((sl) => {
-              const isSelected = sl.id === session.id;
+              if (!sl) return null;
+              const isSelected = sl.id === session?.id;
               const isCompleted = sl.status === 'completed';
               const studentKey = currentUser?.id || currentUser?.email || 'student';
               const effectiveBooked = bookedSlotId || (isStudent ? (localStorage.getItem(`erus_student_booked_slot_${studentKey}`) || 'slot-dit-001') : null);
               const isLockedForStudent = isStudent && Boolean(effectiveBooked) && sl.id !== effectiveBooked;
-              const bookedSlotObj = isLockedForStudent ? availableSlots.find((s) => s.id === effectiveBooked) : null;
+              const bookedSlotObj = isLockedForStudent ? availableSlots.find((s) => s && s.id === effectiveBooked) : null;
 
               if (isLockedForStudent) {
                 return (

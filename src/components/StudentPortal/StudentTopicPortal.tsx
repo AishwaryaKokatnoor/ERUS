@@ -56,7 +56,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
       return bookedSlotsByTopic;
     }
     if (bookedSlotId) {
-      const s = availableSlots.find((slot) => slot.id === bookedSlotId);
+      const s = (availableSlots || []).find((slot) => slot && slot.id === bookedSlotId);
       const t = s?.topic || 'General Topic';
       return { [t]: bookedSlotId };
     }
@@ -67,7 +67,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
   const allBookedSlots = useMemo(() => {
     const bookedIds = new Set(Object.values(bookedSlotsMap));
     if (bookedIds.size === 0) return [];
-    return availableSlots.filter((s) => bookedIds.has(s.id));
+    return (availableSlots || []).filter((s) => s && s.id && bookedIds.has(s.id));
   }, [availableSlots, bookedSlotsMap]);
 
   // Backward-compatible single booked slot reference
@@ -89,6 +89,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
     }>();
 
     (availableSlots || []).forEach((slot) => {
+      if (!slot || !slot.id) return;
       const topicTitle = slot.topic || 'General Topic';
       const existing = topicMap.get(topicTitle);
       const maxCap = slot.maxCapacity || 15;
@@ -449,8 +450,8 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                   const enrolled = slot.enrolledCount ?? slot.students?.length ?? 15;
                   const isFull = enrolled >= maxCap;
                   const bookedSlotForThisTopic = bookedSlotsMap[activeTopicObj.topic];
-                  const isThisBooked = Boolean(bookedSlotForThisTopic) && slot.id === bookedSlotForThisTopic;
-                  const isOtherSlotLocked = Boolean(bookedSlotForThisTopic) && slot.id !== bookedSlotForThisTopic;
+                  const isThisBooked = Boolean(bookedSlotForThisTopic) && slot?.id === bookedSlotForThisTopic;
+                  const isOtherSlotLocked = Boolean(bookedSlotForThisTopic) && slot?.id !== bookedSlotForThisTopic;
                   const seatsLeft = Math.max(0, maxCap - enrolled);
                   const occupancyPercent = Math.min(100, Math.round((enrolled / maxCap) * 100));
 
@@ -459,7 +460,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
 
                   return (
                     <div
-                      key={slot.id}
+                      key={slot?.id || index}
                       className={`p-5 rounded-3xl border transition-all flex flex-col justify-between ${
                         isThisBooked
                           ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-500 ring-2 ring-emerald-500/30 shadow-lg shadow-emerald-500/10'
@@ -693,7 +694,9 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  onReviveSlot(reviveModalSlot.id);
+                  if (reviveModalSlot?.id) {
+                    onReviveSlot(reviveModalSlot.id);
+                  }
                   setReviveModalSlot(null);
                 }}
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-xs transition-all cursor-pointer flex items-center gap-1.5"

@@ -105,10 +105,14 @@ export function clearStudentBookedSlotForTopic(
  * Check if a specific slot is selectable for a student under the One-Slot-Per-Topic rule.
  */
 export function isSlotSelectableForTopic(
-  slot: { id: string; topic?: string },
+  slot?: { id?: string; topic?: string } | null,
   userRole?: string | null,
   bookedSlotsMap: Record<string, string> = {}
 ): { allowed: boolean; isUserBookedSlot: boolean; reason?: string } {
+  if (!slot || !slot.id) {
+    return { allowed: false, isUserBookedSlot: false };
+  }
+
   // Evaluators and admins can access any slot
   if (userRole !== 'student') {
     return { allowed: true, isUserBookedSlot: false };
@@ -139,11 +143,14 @@ export function isSlotSelectableForTopic(
  * 1-Hour Revive Rule:
  * Students can revive/cancel their booked slot before 1 hour of the slot start time.
  */
-export function checkCanReviveSlot(slot: { slotTiming?: string; slotDate?: string; status?: string }): {
+export function checkCanReviveSlot(slot?: { slotTiming?: string; slotDate?: string; status?: string } | null): {
   canRevive: boolean;
   minutesRemaining?: number;
   reason?: string;
 } {
+  if (!slot) {
+    return { canRevive: false, reason: 'No slot specified' };
+  }
   if (slot.status === 'completed') {
     return { canRevive: false, reason: 'This discussion session has already concluded and been evaluated.' };
   }

@@ -58,7 +58,7 @@ export const Header: React.FC<HeaderProps> = ({
   const isFaculty = currentUser?.role === 'faculty';
   const isCollegeAdmin = currentUser?.role === 'college_admin';
   const isSuperAdmin = currentUser?.role === 'super_admin';
-  const isSessionActive = session.status === 'active';
+  const isSessionActive = session?.status === 'active';
 
   return (
     <header className="bg-white/95 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 sticky top-0 z-40 px-3 sm:px-4 lg:px-6 py-2 transition-colors duration-200 no-print shadow-xs dark:shadow-none w-full">
@@ -212,10 +212,10 @@ export const Header: React.FC<HeaderProps> = ({
           {!isSuperAdmin && currentTab === 'room' && (
             <div 
               className="flex items-center gap-1.5 sm:gap-2 bg-slate-100 dark:bg-slate-800/80 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700/60 text-xs text-slate-700 dark:text-slate-300 whitespace-nowrap shrink-0 h-9"
-              title={session.slotTiming ? `${session.slotName || 'GD Session'} (${session.slotTiming})` : (session.slotName || 'GD Session')}
+              title={session?.slotTiming ? `${session?.slotName || 'GD Session'} (${session.slotTiming})` : (session?.slotName || 'GD Session')}
             >
               <Clock className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 shrink-0" />
-              {session.slotName && (
+              {session?.slotName && (
                 <>
                   <span className="font-semibold text-indigo-600 dark:text-indigo-400 max-w-[70px] sm:max-w-[110px] truncate">
                     {session.slotName.split(' - ')[0] || session.slotName}
@@ -229,7 +229,7 @@ export const Header: React.FC<HeaderProps> = ({
                     {formatTime(elapsedSeconds)}
                   </span>
                   <span className="font-mono text-slate-400 dark:text-slate-500 text-[11px] hidden sm:inline">
-                    / {session.durationMinutes}:00
+                    / {session?.durationMinutes || 15}:00
                   </span>
                 </>
               ) : (

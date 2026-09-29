@@ -50,13 +50,13 @@ export const GDComparisonReport: React.FC<GDComparisonReportProps> = ({
   }, [studentKey, currentReport]);
 
   // Default comparison: latest session vs immediately preceding session
-  const [currentId, setCurrentId] = useState<string>(history[0]?.id || currentReport.id);
+  const [currentId, setCurrentId] = useState<string>(history[0]?.id || currentReport?.id || 'rep-curr');
   const [previousId, setPreviousId] = useState<string>(
-    history.length > 1 ? history[1].id : (history[0]?.id || currentReport.id)
+    history.length > 1 ? (history[1]?.id || currentReport?.id || 'rep-prev') : (history[0]?.id || currentReport?.id || 'rep-curr')
   );
 
-  const selectedCurrent = history.find((r) => r.id === currentId) || currentReport;
-  const selectedPrevious = history.find((r) => r.id === previousId) || history[1] || currentReport;
+  const selectedCurrent = history.find((r) => r?.id === currentId) || currentReport;
+  const selectedPrevious = history.find((r) => r?.id === previousId) || history[1] || currentReport;
 
   // Compute live comparison delta between the two chosen sessions
   const delta: ReportComparisonDelta = useMemo(() => {
@@ -661,7 +661,7 @@ export const GDComparisonReport: React.FC<GDComparisonReportProps> = ({
           </div>
 
           <div className="text-left sm:text-right font-mono text-[11px]">
-            <div>Comparison Hash: {selectedCurrent.id.slice(-8)}-{selectedPrevious.id.slice(-8)}</div>
+            <div>Comparison Hash: {(selectedCurrent?.id || 'ID').slice(-8)}-{(selectedPrevious?.id || 'ID').slice(-8)}</div>
             <div>Generated: {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</div>
           </div>
         </div>

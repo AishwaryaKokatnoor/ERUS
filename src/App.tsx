@@ -97,7 +97,7 @@ function GDAppContent() {
   const [availableSlots, setAvailableSlots] = useState<GDSession[]>(loadInitialSlots);
   const [session, setSession] = useState<GDSession>(() => {
     const slots = loadInitialSlots();
-    return slots[0] || INITIAL_SESSION;
+    return slots[0] || DEFAULT_GD_SESSION;
   });
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>(INITIAL_TRANSCRIPTS);
   const [activeReport, setActiveReport] = useState<StudentAssessmentReport>(SAMPLE_REPORT_RAHUL);
@@ -149,8 +149,8 @@ function GDAppContent() {
   useEffect(() => {
     if (currentUser?.role === 'faculty' || currentUser?.role === 'college_admin' || currentUser?.role === 'super_admin') {
       setSession((prev) => ({
-        ...prev,
-        students: (prev.students || []).map((s) => (s.isUser ? { ...s, isUser: false } : s)),
+        ...(prev || DEFAULT_GD_SESSION),
+        students: ((prev?.students) || []).map((s) => (s.isUser ? { ...s, isUser: false } : s)),
       }));
     }
   }, [currentUser]);
@@ -164,12 +164,12 @@ function GDAppContent() {
 
   // Keep live faculty observation notes synchronized into availableSlots
   useEffect(() => {
-    if (session.facultyLiveNotes && session.facultyLiveNotes.length > 0) {
+    if (session?.facultyLiveNotes && session.facultyLiveNotes.length > 0) {
       setAvailableSlots((prev) =>
-        prev.map((s) => (s.id === session.id ? { ...s, facultyLiveNotes: session.facultyLiveNotes } : s))
+        prev.map((s) => (s && s.id === session?.id ? { ...s, facultyLiveNotes: session.facultyLiveNotes } : s))
       );
     }
-  }, [session.id, session.facultyLiveNotes]);
+  }, [session?.id, session?.facultyLiveNotes]);
 
   // Student live-session status polling: backend remains the source of truth.
   useEffect(() => {
@@ -181,19 +181,22 @@ function GDAppContent() {
         // Even an empty response is authoritative: the college currently has no published slots.
         // Backend is authoritative: slots missing from the response were deleted
         // and must disappear from the student portal as well.
-        setAvailableSlots(slots.map((fresh: any) => ({
-          ...fresh,
-          status: fresh.status === 'active' ? 'active' : fresh.status === 'completed' ? 'completed' : 'waiting',
-        })));
-        setSession((prev) => {
-          const fresh = slots.find((s: any) => s.id === prev.id);
-          if (!fresh) {
-            return slots[0]
-              ? { ...prev, ...slots[0], status: slots[0].status === 'active' ? 'active' : slots[0].status === 'completed' ? 'completed' : 'waiting' }
-              : prev;
-          }
-          return { ...prev, ...fresh, status: fresh.status === 'active' ? 'active' : fresh.status === 'completed' ? 'completed' : 'waiting' };
-        });
+        if (Array.isArray(slots)) {
+          setAvailableSlots(slots.map((fresh: any) => ({
+            ...fresh,
+            status: fresh.status === 'active' ? 'active' : fresh.status === 'completed' ? 'completed' : 'waiting',
+          })));
+          setSession((prev) => {
+            const currentId = prev?.id;
+            const fresh = currentId ? slots.find((s: any) => s && s.id === currentId) : null;
+            if (!fresh) {
+              return slots[0]
+                ? { ...(prev || DEFAULT_GD_SESSION), ...slots[0], status: slots[0].status === 'active' ? 'active' : slots[0].status === 'completed' ? 'completed' : 'waiting' }
+                : (prev || DEFAULT_GD_SESSION);
+            }
+            return { ...(prev || DEFAULT_GD_SESSION), ...fresh, status: fresh.status === 'active' ? 'active' : fresh.status === 'completed' ? 'completed' : 'waiting' };
+          });
+        }
       } catch {}
     }, 2000);
     return () => clearInterval(timer);
@@ -208,7 +211,7 @@ function GDAppContent() {
       });
     } catch {}
     setAvailableSlots(INITIAL_SLOTS);
-    setSession(INITIAL_SLOTS[0]);
+    setSession(INITIAL_SLOTS[0] || DEFAULT_GD_SESSION);
     setElapsedSeconds(0);
   };
 
@@ -229,7 +232,7 @@ function GDAppContent() {
       if (backendSlots) {
         // Map backend slot objects to GDSession format expected by the frontend
         const mappedSlots: GDSession[] = backendSlots.map((s: any): GDSession => ({
-          ...INITIAL_SESSION,
+          ...DEFAULT_GD_SESSION,
           id: s.id,
           topic: s.topic || s.slotName || 'Group Discussion',
           description: s.description || '',
@@ -259,7 +262,7 @@ function GDAppContent() {
         // The backend response is authoritative, including an empty array.
         // This prevents stale local/demo topics from hiding the real college roster.
         setAvailableSlots(mappedSlots);
-        setSession(mappedSlots[0] || INITIAL_SESSION);
+        setSession(mappedSlots[0] || DEFAULT_GD_SESSION);
       }
     }).catch(() => {/* Backend unreachable — slots stay empty until admin creates them */});
 
@@ -272,28 +275,38 @@ function GDAppContent() {
 
       const bookedIds = Object.values(bookedTopics);
       if (bookedIds.length > 0) {
-        const targetBookedSlot = availableSlots.find((s) => bookedIds.includes(s.id)) || session;
-        const activeSlotId = targetBookedSlot.id;
+        const targetBookedSlot = availableSlots.find((s) => s && bookedIds.includes(s.id)) || session || DEFAULT_GD_SESSION;
+        const activeSlotId = targetBookedSlot?.id || DEFAULT_GD_SESSION.id;
         const studentUserObj: Student = {
-          ...INITIAL_SESSION.students[0],
           id: user.id || 'slot-stu-1',
-          name: user.name,
-          college: user.college,
-          course: user.course,
-          batch: user.batch,
+          name: user.name || 'Participant',
+          college: user.college || '',
+          course: user.course || '',
+          batch: user.batch || '',
           isUser: true,
           bookedSlotId: activeSlotId,
+          micActive: false,
+          isSpeaking: false,
+          hasRaisedHand: false,
+          cameraActive: false,
+          speakingDurationSeconds: 0,
+          speakingTurns: 0,
+          interruptionCount: 0,
+          questionsAnswered: 0,
+          questionsInitiated: 0,
+          sentiment: 'neutral',
         };
-        const initialStudentReport = generateStudentReport(studentUserObj, targetBookedSlot.topic, targetBookedSlot.durationMinutes);
+        const initialStudentReport = generateStudentReport(studentUserObj, targetBookedSlot?.topic || 'General Discussion', targetBookedSlot?.durationMinutes || 20);
         setActiveReport(initialStudentReport);
         addReportToStudentHistory(initialStudentReport);
 
         setAvailableSlots((prevSlots) =>
           prevSlots.map((slot) => {
+            if (!slot) return slot;
             const isUserInSlot = bookedIds.includes(slot.id);
             return {
               ...slot,
-              students: (slot.students || generateSlotParticipants(slot.enrolledCount || 8)).map((s, idx) => {
+              students: (slot.students || []).map((s, idx) => {
                 const shouldBeUser = isUserInSlot && (idx === 0 || s.id === user.id || s.seatNumber === user.seatNumber);
                 return {
                   ...s,
@@ -308,8 +321,8 @@ function GDAppContent() {
           })
         );
         setSession((prev) => ({
-          ...targetBookedSlot,
-          students: targetBookedSlot.students.map((s, idx) => ({
+          ...(targetBookedSlot || prev || DEFAULT_GD_SESSION),
+          students: ((targetBookedSlot || prev || DEFAULT_GD_SESSION).students || []).map((s, idx) => ({
             ...s,
             isUser: idx === 0 || s.id === user.id || s.seatNumber === user.seatNumber,
             name: (idx === 0 || s.id === user.id || s.seatNumber === user.seatNumber) ? user.name : s.name,
@@ -330,8 +343,8 @@ function GDAppContent() {
       setCurrentTab('faculty');
     } else if (user.role === 'college_admin') {
       setSession((prev) => ({
-        ...prev,
-        students: (prev.students || []).map((s) => ({ ...s, isUser: false })),
+        ...(prev || DEFAULT_GD_SESSION),
+        students: ((prev?.students) || []).map((s) => ({ ...s, isUser: false })),
       }));
       setCurrentTab('college_admin');
     } else if (user.role === 'super_admin') {
@@ -362,42 +375,43 @@ function GDAppContent() {
 
   // Stop any active AI speech when outside of the discussion room or when session is not actively ongoing
   useEffect(() => {
-    if (currentTab !== 'room' || session.status !== 'active') {
+    if (currentTab !== 'room' || session?.status !== 'active') {
       facilitatorVoice.stop();
     }
-  }, [currentTab, session.status]);
+  }, [currentTab, session?.status]);
 
   // Main session elapsed timer & silence deadlock tracker (Strictly active only when room is live)
   useEffect(() => {
-    if (!currentUser || currentTab !== 'room' || session.status !== 'active') return;
+    if (!currentUser || currentTab !== 'room' || session?.status !== 'active') return;
 
     const timer = setInterval(() => {
       setElapsedSeconds((prev) => prev + 1);
 
       // Deadlock silence detection
       setSession((prevSession) => {
-        const newSilence = prevSession.silenceTimerSeconds + 1;
+        const safeSession = prevSession || DEFAULT_GD_SESSION;
+        const newSilence = (safeSession.silenceTimerSeconds || 0) + 1;
         // If silence reaches 20 seconds, trigger deadlock prompt
-        if (newSilence === 20 && !prevSession.isFacilitatorSpeaking && !prevSession.currentSpeakerId) {
-          triggerDeadlockIntervention(prevSession);
+        if (newSilence === 20 && !safeSession.isFacilitatorSpeaking && !safeSession.currentSpeakerId) {
+          triggerDeadlockIntervention(safeSession);
         }
         return {
-          ...prevSession,
+          ...safeSession,
           silenceTimerSeconds: newSilence,
         };
       });
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [currentUser, currentTab, session.status, session.isFacilitatorSpeaking, session.currentSpeakerId]);
+  }, [currentUser, currentTab, session?.status, session?.isFacilitatorSpeaking, session?.currentSpeakerId]);
 
   // Faculty In-Charge / Host Commences the Discussion Session
   const handleStartSession = (slotIdToStart?: string) => {
     if (currentUser?.role !== 'faculty') {
       return;
     }
-    const targetSlotId = slotIdToStart || session.id;
-    if (session.assignedFacultyId && (currentUser as any).facultyId !== session.assignedFacultyId) {
+    const targetSlotId = slotIdToStart || session?.id || 'session-default';
+    if (session?.assignedFacultyId && (currentUser as any).facultyId !== session.assignedFacultyId) {
       alert('Only the faculty assigned to this GD slot can start the session.');
       return;
     }
@@ -405,20 +419,20 @@ function GDAppContent() {
     // Reset timer to 0 for a fresh live discussion
     setElapsedSeconds(0);
 
-    const welcomeIntroText = `Welcome participants to today's group discussion on "${session.topic}". The discussion has now officially commenced. Each participant will get an opportunity to present their perspectives. Please respect others and avoid interruptions. Let us begin. Who would like to open the discussion?`;
+    const welcomeIntroText = `Welcome participants to today's group discussion on "${session?.topic || 'General Discussion'}". The discussion has now officially commenced. Each participant will get an opportunity to present their perspectives. Please respect others and avoid interruptions. Let us begin. Who would like to open the discussion?`;
 
     sessionQuestionTracker.clear();
 
     // Update active session status and reset speaking metrics for fresh live discussion
     setSession((prev) => ({
-      ...prev,
+      ...(prev || DEFAULT_GD_SESSION),
       status: 'active',
       silenceTimerSeconds: 0,
       currentPhase: 'intro',
       facilitatorSpeech: welcomeIntroText,
       isFacilitatorSpeaking: true,
       startedAt: Date.now(),
-      students: prev.students.map((s) => ({
+      students: ((prev?.students) || []).map((s) => ({
         ...s,
         speakingTurns: 0,
         speakingDurationSeconds: 0,
@@ -428,11 +442,11 @@ function GDAppContent() {
 
     // Update availableSlots list
     setAvailableSlots((prevSlots) =>
-      prevSlots.map((s) => (s.id === targetSlotId ? { 
+      prevSlots.map((s) => (s && s.id === targetSlotId ? { 
         ...s, 
         status: 'active', 
         startedAt: Date.now(),
-        students: s.students.map((st) => ({
+        students: (s.students || []).map((st) => ({
           ...st,
           speakingTurns: 0,
           speakingDurationSeconds: 0,
@@ -524,10 +538,27 @@ function GDAppContent() {
 
   // Conclude GD and generate report
   const handleFinishSession = async () => {
-    const userStudent = session.students.find((s) => s.isUser) || session.students[0];
-    if (!userStudent) return;
+    const userStudent = (session?.students || []).find((s) => s.isUser) || session?.students?.[0] || {
+      id: currentUser?.id || 'slot-stu-1',
+      name: currentUser?.name || 'Participant',
+      college: currentUser?.college || 'College',
+      course: currentUser?.course || '',
+      batch: currentUser?.batch || '',
+      seatNumber: 1,
+      isUser: true,
+      micActive: false,
+      isSpeaking: false,
+      hasRaisedHand: false,
+      cameraActive: false,
+      speakingDurationSeconds: 0,
+      speakingTurns: 0,
+      interruptionCount: 0,
+      questionsAnswered: 0,
+      questionsInitiated: 0,
+      sentiment: 'neutral',
+    };
 
-    const finishedSlotId = session.id;
+    const finishedSlotId = session?.id || 'session-default';
 
     try {
       if (currentUser?.role === 'faculty') {
@@ -548,7 +579,7 @@ function GDAppContent() {
         if (ownReport) {
           const enhancedReport: StudentAssessmentReport = {
             ...ownReport,
-            facultyLiveNotes: session.facultyLiveNotes?.filter(
+            facultyLiveNotes: session?.facultyLiveNotes?.filter(
               (n) => n.studentId === userStudent.id || n.studentName.toLowerCase() === userStudent.name.toLowerCase()
             ),
           };
@@ -557,15 +588,15 @@ function GDAppContent() {
         }
 
         setSession((prev) => ({
-          ...prev,
+          ...(prev || DEFAULT_GD_SESSION),
           status: 'completed',
           currentPhase: 'conclusion',
           facilitatorSpeech: 'Thank you everyone. The final transcript and participant evaluations have been compiled.',
         }));
         setAvailableSlots((prevSlots) =>
           prevSlots.map((slot) =>
-            slot.id === finishedSlotId
-              ? { ...slot, status: 'completed', currentPhase: 'conclusion', facultyLiveNotes: session.facultyLiveNotes || slot.facultyLiveNotes }
+            slot && slot.id === finishedSlotId
+              ? { ...slot, status: 'completed', currentPhase: 'conclusion', facultyLiveNotes: session?.facultyLiveNotes || slot.facultyLiveNotes }
               : slot
           )
         );
@@ -578,15 +609,15 @@ function GDAppContent() {
             student: userStudent,
             transcriptHistory: transcripts,
             sessionId: finishedSlotId,
-            topic: session.topic,
-            durationMinutes: session.durationMinutes,
+            topic: session?.topic || 'General Discussion',
+            durationMinutes: session?.durationMinutes || 20,
           }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.report) throw new Error(data.error || 'Unable to generate assessment');
         const enhancedReport: StudentAssessmentReport = {
           ...data.report,
-          facultyLiveNotes: session.facultyLiveNotes?.filter(
+          facultyLiveNotes: session?.facultyLiveNotes?.filter(
             (n) => n.studentId === userStudent.id || n.studentName.toLowerCase() === userStudent.name.toLowerCase()
           ),
         };
@@ -602,7 +633,7 @@ function GDAppContent() {
   };
 
   const handleSelectSlot = (slotId: string) => {
-    const targetSlot = availableSlots.find((s) => s.id === slotId);
+    const targetSlot = availableSlots.find((s) => s && s.id === slotId);
     if (!targetSlot) return;
 
     // One Slot Per Topic Policy: Enforce that students cannot select a different slot on a topic they already booked
@@ -661,7 +692,11 @@ function GDAppContent() {
         slotForState = { ...targetSlot, students: updatedTargetStudents };
         setSession(slotForState);
 
-        const userStudent = slotForState.students.find((s) => s.isUser) || slotForState.students[0];
+        const userStudent = slotForState.students.find((s) => s.isUser) || slotForState.students[0] || {
+          id: currentUser?.id || 'slot-stu-1',
+          name: currentUser?.name || 'Participant',
+          seatNumber: 1,
+        };
         const studentReport = generateStudentReport(userStudent, targetSlot.topic, targetSlot.durationMinutes);
         setActiveReport(studentReport);
         addReportToStudentHistory(studentReport);
@@ -679,7 +714,7 @@ function GDAppContent() {
       return;
     }
 
-    if (slotId === session.id) return; // already in this slot
+    if (slotId === session?.id) return; // already in this slot
 
     const targetMaxCap = targetSlot.maxCapacity || 15;
     const targetCurrentEnrolled = targetSlot.enrolledCount ?? targetSlot.students?.length ?? 15;
@@ -692,7 +727,7 @@ function GDAppContent() {
 
     sessionQuestionTracker.clear();
 
-    const previousSlotId = session.id;
+    const previousSlotId = session?.id;
 
     // Build updated student roster for target slot with user at Seat 1
     const targetStudents = targetSlot.students || [];
@@ -743,10 +778,10 @@ function GDAppContent() {
     if (isStudentUser) {
       setAvailableSlots((prevSlots) =>
         prevSlots.map((s) => {
-          if (s.id === slotId) {
+          if (s && s.id === slotId) {
             return activeSlot;
           }
-          if (s.id === previousSlotId) {
+          if (previousSlotId && s && s.id === previousSlotId) {
             const prevCount = s.enrolledCount ?? s.students?.length ?? 15;
             const newPrevCount = Math.max(1, prevCount - 1);
             return {
@@ -761,7 +796,7 @@ function GDAppContent() {
       );
     } else {
       setAvailableSlots((prevSlots) =>
-        prevSlots.map((s) => (s.id === slotId ? activeSlot : s))
+        prevSlots.map((s) => (s && s.id === slotId ? activeSlot : s))
       );
     }
 
@@ -941,13 +976,17 @@ function GDAppContent() {
     };
 
     setAvailableSlots((prevSlots) =>
-      prevSlots.map((s) => (s.id === slotId ? updatedSlot : s))
+      prevSlots.map((s) => (s && s.id === slotId ? updatedSlot : s))
     );
 
     setSession(updatedSlot);
 
-    const studentUserObj = updatedTargetStudents.find((s) => s.isUser) || updatedTargetStudents[0];
-    const initialStudentReport = generateStudentReport(studentUserObj, targetSlot.topic, targetSlot.durationMinutes);
+    const studentUserObj = updatedTargetStudents.find((s) => s.isUser) || updatedTargetStudents[0] || {
+      id: currentUser?.id || 'slot-stu-1',
+      name: currentUser?.name || 'Participant',
+      seatNumber: 1,
+    };
+    const initialStudentReport = generateStudentReport(studentUserObj, targetSlot?.topic || 'General Discussion', targetSlot?.durationMinutes || 20);
     setActiveReport(initialStudentReport);
     addReportToStudentHistory(initialStudentReport);
   };
@@ -957,7 +996,7 @@ function GDAppContent() {
     if (!currentUser || currentUser.role !== 'student') return;
     const studentKey = currentUser.id || currentUser.email || 'student';
 
-    const targetSlot = availableSlots.find((s) => s.id === slotId);
+    const targetSlot = availableSlots.find((s) => s && s.id === slotId);
     if (!targetSlot) return;
     const topicKey = targetSlot.topic || 'General Topic';
 
@@ -993,12 +1032,12 @@ function GDAppContent() {
     // Decrement enrolled count and remove isUser flag from slot students
     setAvailableSlots((prevSlots) =>
       prevSlots.map((s) => {
-        if (s.id === slotId) {
+        if (s && s.id === slotId) {
           const currentCount = s.enrolledCount ?? s.students?.length ?? 1;
           return {
             ...s,
             enrolledCount: Math.max(0, currentCount - 1),
-            students: s.students.map((st) => (st.isUser ? { ...st, isUser: false } : st)),
+            students: (s.students || []).map((st) => (st.isUser ? { ...st, isUser: false } : st)),
           };
         }
         return s;
@@ -1071,9 +1110,9 @@ function GDAppContent() {
             currentUser={currentUser}
             bookedSlotId={studentBookedSlotId}
             onUpdateLayout={(newLayout) => {
-              setSession((prev) => ({ ...prev, roomLayout: newLayout }));
+              setSession((prev) => ({ ...(prev || DEFAULT_GD_SESSION), roomLayout: newLayout }));
               setAvailableSlots((prev) =>
-                prev.map((s) => (s.id === session.id ? { ...s, roomLayout: newLayout } : s))
+                prev.map((s) => (s && s.id === session?.id ? { ...s, roomLayout: newLayout } : s))
               );
             }}
           />
@@ -1084,9 +1123,9 @@ function GDAppContent() {
             session={session}
             report={activeReport}
             onBackToRoom={() => {
-              if (session.status === 'completed') {
+              if (session?.status === 'completed') {
                 if (currentUser?.role !== 'student') {
-                  const openSlot = availableSlots.find((s) => s.status !== 'completed');
+                  const openSlot = (availableSlots || []).find((s) => s && s.status !== 'completed');
                   if (openSlot) {
                     handleSelectSlot(openSlot.id);
                     return;
@@ -1110,8 +1149,8 @@ function GDAppContent() {
             transcripts={transcripts}
             onViewStudentReport={handleViewStudentReport}
             onBackToRoom={() => {
-              if (session.status === 'completed') {
-                const openSlot = availableSlots.find((s) => s.status !== 'completed');
+              if (session?.status === 'completed') {
+                const openSlot = (availableSlots || []).find((s) => s && s.status !== 'completed');
                 if (openSlot) {
                   handleSelectSlot(openSlot.id);
                   return;

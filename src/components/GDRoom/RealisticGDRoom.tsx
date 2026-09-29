@@ -108,7 +108,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // a real participant is speaking, so it is disabled for live GDs.
   const [autoSimulatePeers, setAutoSimulatePeers] = useState(false);
   const [invitedStudentPrompt, setInvitedStudentPrompt] = useState<{ student: Student; reason: string; promptText?: string } | null>(null);
-  const [currentLayout, setCurrentLayout] = useState<GDRoomLayoutType>(session.roomLayout || 'round_table');
+  const [currentLayout, setCurrentLayout] = useState<GDRoomLayoutType>(session?.roomLayout || 'round_table');
 
   const hasInitiatedOpeningRef = useRef<boolean>(false);
   const isTransitioningTurnRef = useRef<boolean>(false);
@@ -117,10 +117,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   const isFaculty = currentUser?.role === 'faculty';
   const canStartSession = isFaculty || currentUser?.role === 'college_admin' || currentUser?.role === 'super_admin';
   const isStudent = currentUser?.role === 'student';
-  const isSessionActive = session.status === 'active';
+  const isSessionActive = session?.status === 'active';
   // Faculty Live Observation Notes State (Enhancement 4)
   const [isNotesModalOpen, setIsNotesModalOpen] = useState(false);
-  const [noteTargetStudentId, setNoteTargetStudentId] = useState<string>(session.students[0]?.id || '');
+  const [noteTargetStudentId, setNoteTargetStudentId] = useState<string>(session?.students?.[0]?.id || '');
   const [noteTimestamp, setNoteTimestamp] = useState<string>('00:00');
   const [noteTag, setNoteTag] = useState<'strength' | 'improvement' | 'key_argument' | 'leadership' | 'general'>('general');
   const [noteContent, setNoteContent] = useState<string>('');
@@ -135,7 +135,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   };
 
   const handleOpenNoteModal = (studentId?: string) => {
-    const targetId = studentId || noteTargetStudentId || session.students[0]?.id || '';
+    const targetId = studentId || noteTargetStudentId || session?.students?.[0]?.id || '';
     setNoteTargetStudentId(targetId);
     setNoteTimestamp(formatElapsedClock(elapsedSeconds));
     setIsNotesModalOpen(true);
@@ -143,13 +143,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   const handleSaveObservationNote = () => {
     if (!noteContent.trim()) return;
-    const targetStudent = session.students.find((s) => s.id === noteTargetStudentId) || session.students[0];
+    const targetStudent = (session?.students || []).find((s) => s.id === noteTargetStudentId) || session?.students?.[0];
     const newNote: FacultyLiveNote = {
       id: `note-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      sessionId: session.id,
-      studentId: targetStudent.id,
-      studentName: targetStudent.name,
-      seatNumber: targetStudent.seatNumber,
+      sessionId: session?.id || 'session-default',
+      studentId: targetStudent?.id || 's1',
+      studentName: targetStudent?.name || 'Participant',
+      seatNumber: targetStudent?.seatNumber || 1,
       timestamp: noteTimestamp || formatElapsedClock(elapsedSeconds),
       timestampSeconds: elapsedSeconds,
       note: noteContent.trim(),
@@ -193,23 +193,23 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   };
 
   useEffect(() => {
-    if (session.roomLayout) {
+    if (session?.roomLayout) {
       setCurrentLayout(session.roomLayout);
     }
-  }, [session.roomLayout]);
+  }, [session?.roomLayout]);
 
   // Synchronize webcam live state to user's student state (only when currentUser is a student participant)
   useEffect(() => {
     if (isFaculty) return;
     setSession((prev) => ({
-      ...prev,
-      students: prev.students.map((s) => (s.isUser ? { ...s, cameraActive: isCameraOn } : s)),
+      ...(prev || DEFAULT_GD_SESSION),
+      students: (prev?.students || []).map((s) => (s.isUser ? { ...s, cameraActive: isCameraOn } : s)),
     }));
   }, [isCameraOn, isFaculty, setSession]);
 
   const handleLayoutChange = (newLayout: GDRoomLayoutType) => {
     setCurrentLayout(newLayout);
-    setSession((prev) => ({ ...prev, roomLayout: newLayout }));
+    setSession((prev) => ({ ...(prev || DEFAULT_GD_SESSION), roomLayout: newLayout }));
     if (onUpdateLayout) {
       onUpdateLayout(newLayout);
     }
@@ -232,7 +232,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     aiParticipants: rtcAiParticipants,
     simulationMode: rtcSimulationMode,
   } = useWebRTCRoom({
-    slotId: session.slotId || session.id || 'slot-1',
+    slotId: session?.slotId || session?.id || 'slot-1',
     currentUser,
     videoStream,
     isCameraOn,
@@ -367,7 +367,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         currentUser?.role === 'student' &&
         intervention.targetUserId === currentUser.id
       ) {
-        const targetStudent = session.students.find((s) => s.id === currentUser.id) || session.students[0];
+        const targetStudent = (session?.students || []).find((s) => s.id === currentUser.id) || session?.students?.[0];
         if (targetStudent) {
           setInvitedStudentPrompt({
             student: targetStudent,
@@ -474,7 +474,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       seats.sort((a, b) => (a.seatNumber || 0) - (b.seatNumber || 0));
       return { ...prev, students: seats };
     });
-  }, [session.id, session.maxCapacity, setSession]);
+  }, [session?.id, session?.maxCapacity, setSession]);
 
   // Active display students: merge connected user with live connected WebRTC peers & available desks
   const activeDisplayStudents = useMemo(() => {
@@ -483,7 +483,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       : null;
 
     // Sort students by seatNumber to guarantee seats 1..15 are in deterministic order
-    const sorted = [...session.students].sort((a, b) => (a.seatNumber || 0) - (b.seatNumber || 0));
+    const sorted = [...(session?.students || [])].sort((a, b) => (a.seatNumber || 0) - (b.seatNumber || 0));
 
     return sorted.map((st, idx) => {
       const fixedSeatNumber = st.seatNumber || (idx + 1);
@@ -557,17 +557,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         isUser: false,
       };
     });
-  }, [session.students, rtcPeers, rtcPeerStreams, rtcAssignedSeat, currentUser, isFaculty, isListeningMic, rtcIsSpeakingLive, rtcIsMicMuted, isCameraOn, videoStream]);
+  }, [session?.students, rtcPeers, rtcPeerStreams, rtcAssignedSeat, currentUser, isFaculty, isListeningMic, rtcIsSpeakingLive, rtcIsMicMuted, isCameraOn, videoStream]);
 
   const latestSpeakerTranscript = transcripts.slice().reverse().find((t) => !t.isFacilitator);
   const activeStudentUser = !isFaculty ? activeDisplayStudents.find((s) => s.isUser) : null;
-  const currentSpeakerStudent = activeDisplayStudents.find((s) => s.id === session.currentSpeakerId) ||
+  const currentSpeakerStudent = activeDisplayStudents.find((s) => s.id === session?.currentSpeakerId) ||
     (isListeningMic && !isFaculty ? activeStudentUser : null) ||
     activeDisplayStudents.find((s) => s.id === latestSpeakerTranscript?.speakerId) ||
     activeDisplayStudents.find((s) => s.isSpeaking) ||
     activeStudentUser ||
     activeDisplayStudents[0];
-  const isSpeakingLive = !!(session.currentSpeakerId || (isListeningMic && !isFaculty) || activeDisplayStudents.some((s) => s.isSpeaking));
+  const isSpeakingLive = !!(session?.currentSpeakerId || (isListeningMic && !isFaculty) || activeDisplayStudents.some((s) => s.isSpeaking));
   
   const transcriptEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -936,18 +936,22 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       return;
     }
 
-    const userStudent = session.students.find((s) => s.isUser) || session.students[0];
+    const userStudent = (session?.students || []).find((s) => s.isUser) || session?.students?.[0] || {
+      id: currentUser?.id || 'slot-stu-1',
+      name: currentUser?.name || 'Student Participant',
+      seatNumber: 1,
+    };
 
     // Check if another speaker was currently active (interruption detection)
-    if (session.currentSpeakerId && session.currentSpeakerId !== userStudent.id) {
-      const interruptedStudent = session.students.find((s) => s.id === session.currentSpeakerId);
+    if (session?.currentSpeakerId && session?.currentSpeakerId !== userStudent.id) {
+      const interruptedStudent = (session?.students || []).find((s) => s.id === session.currentSpeakerId);
       setInterruptionWarning(`Interruption detected: ${userStudent.name} spoke while ${interruptedStudent?.name || 'peer'} was presenting.`);
       setTimeout(() => setInterruptionWarning(null), 5000);
     }
 
     const newEntry: TranscriptEntry = {
       id: `t-user-${Date.now()}`,
-      sessionId: session.id,
+      sessionId: session?.id || 'session-default',
       speakerId: userStudent.id,
       speakerName: userStudent.name,
       seatNumber: userStudent.seatNumber,
@@ -1161,7 +1165,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // If no one speaks initially, AI Facilitator calls upon a student referencing their previous presentation
   const handleInitiateOpeningSpeaker = () => {
     if (rtcSimulationMode) return;
-    if (!isSessionActive || hasRealStudentPeers || hasInitiatedOpeningRef.current || session.isFacilitatorSpeaking || session.currentSpeakerId) return;
+    if (!isSessionActive || hasRealStudentPeers || hasInitiatedOpeningRef.current || session?.isFacilitatorSpeaking || session?.currentSpeakerId) return;
 
     const studentTranscripts = transcripts.filter((t) => !t.isFacilitator);
     if (studentTranscripts.length > 0) {
@@ -1172,10 +1176,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     hasInitiatedOpeningRef.current = true;
 
     // Select candidate to initiate (Seat 1 or first available student)
-    const openingCandidate = session.students.find((s) => !s.isEmptySeat) || session.students[0];
+    const openingCandidate = (session?.students || []).find((s) => !s.isEmptySeat) || session?.students?.[0];
     if (!openingCandidate) return;
 
-    const initiationPrompt = generateInitiationPrompt(openingCandidate, session.topic);
+    const initiationPrompt = generateInitiationPrompt(openingCandidate, session?.topic || 'Discussion');
 
     speakFacilitator(initiationPrompt, 'initiate_opening_speaker', 'intro', () => {
       if (openingCandidate.isUser) {
@@ -1186,7 +1190,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         });
       } else if (autoSimulatePeers && !hasRealStudentPeers) {
         setTimeout(() => {
-          const openingStmt = generateStudentOpeningStatement(openingCandidate, session.topic);
+          const openingStmt = generateStudentOpeningStatement(openingCandidate, session?.topic || 'Discussion');
           startPeerSpeech(openingCandidate, openingStmt);
         }, 1200);
       }
@@ -1196,17 +1200,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // If silence occurs during discussion, AI Facilitator asks a targeted question explicitly mentioning the candidate by name
   const handleFacilitatorTargetedProbe = () => {
     if (rtcSimulationMode) return;
-    if (!isSessionActive || hasRealStudentPeers || session.isFacilitatorSpeaking || session.currentSpeakerId || isTransitioningTurnRef.current) return;
+    if (!isSessionActive || hasRealStudentPeers || session?.isFacilitatorSpeaking || session?.currentSpeakerId || isTransitioningTurnRef.current) return;
     if (Date.now() - lastFacilitatorInterventionTimeRef.current < 12000) return;
 
     lastFacilitatorInterventionTimeRef.current = Date.now();
 
     // Prioritize student who hasn't spoken yet, or lowest turn count
-    const targetStudent = getNextTurnSpeaker(session.students, null) || session.students[0];
+    const targetStudent = getNextTurnSpeaker(session?.students || [], null) || session?.students?.[0];
     if (!targetStudent) return;
 
     const latestStudentTranscript = transcripts.slice().reverse().find((t) => !t.isFacilitator);
-    const targetedQuestion = generateTargetedQuestionForStudent(targetStudent, session.topic, latestStudentTranscript);
+    const targetedQuestion = generateTargetedQuestionForStudent(targetStudent, session?.topic || 'Discussion', latestStudentTranscript);
 
     speakFacilitator(targetedQuestion, 'targeted_question_student', 'probing', () => {
       if (targetStudent.isUser) {
@@ -1217,7 +1221,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         });
       } else if (autoSimulatePeers) {
         setTimeout(() => {
-          const ansStmt = generateStudentFollowUpStatement(targetStudent, session.topic, { name: 'Facilitator' }, targetedQuestion);
+          const ansStmt = generateStudentFollowUpStatement(targetStudent, session?.topic || 'Discussion', { name: 'Facilitator' }, targetedQuestion);
           startPeerSpeech(targetStudent, ansStmt);
         }, 1200);
       }
@@ -1233,32 +1237,32 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
     // 1. Opening silence (if no one speaks within 8 seconds of commencing)
     if (studentTranscripts.length === 0 && !hasInitiatedOpeningRef.current) {
-      if (session.silenceTimerSeconds >= 8 || elapsedSeconds >= 8) {
+      if ((session?.silenceTimerSeconds || 0) >= 8 || elapsedSeconds >= 8) {
         handleInitiateOpeningSpeaker();
         return;
       }
     }
 
     // 2. Mid-discussion silence (if floor is silent for 10 seconds, ask question mentioning student by name)
-    if (studentTranscripts.length > 0 && !session.currentSpeakerId && !session.isFacilitatorSpeaking && !isTransitioningTurnRef.current) {
-      if (session.silenceTimerSeconds >= 10) {
+    if (studentTranscripts.length > 0 && !session?.currentSpeakerId && !session?.isFacilitatorSpeaking && !isTransitioningTurnRef.current) {
+      if ((session?.silenceTimerSeconds || 0) >= 10) {
         handleFacilitatorTargetedProbe();
         return;
       }
     }
   }, [
     isSessionActive,
-    session.silenceTimerSeconds,
+    session?.silenceTimerSeconds,
     elapsedSeconds,
-    session.currentSpeakerId,
-    session.isFacilitatorSpeaking,
+    session?.currentSpeakerId,
+    session?.isFacilitatorSpeaking,
     transcripts.length,
     rtcSimulationMode,
   ]);
 
   // Reset initiation flag when a session is freshly started or restarted
   useEffect(() => {
-    if (session.status === 'active') {
+    if (session?.status === 'active') {
       const studentTranscripts = transcripts.filter((t) => !t.isFacilitator);
       if (studentTranscripts.length === 0) {
         hasInitiatedOpeningRef.current = false;
@@ -1267,13 +1271,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       hasInitiatedOpeningRef.current = false;
       setInvitedStudentPrompt(null);
     }
-  }, [session.status, session.startedAt]);
+  }, [session?.status, session?.startedAt]);
 
   const handleRaiseHandToggle = () => {
-    const userStudent = session.students.find((s) => s.isUser) || session.students[0];
+    const userStudent = (session?.students || []).find((s) => s.isUser) || session?.students?.[0];
+    if (!userStudent) return;
     setSession((prev) => ({
-      ...prev,
-      students: prev.students.map((s) =>
+      ...(prev || DEFAULT_GD_SESSION),
+      students: (prev?.students || []).map((s) =>
         s.id === userStudent.id ? { ...s, hasRaisedHand: !s.hasRaisedHand } : s
       ),
     }));
@@ -1802,7 +1807,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                         )}
                         <div className="w-18 h-18 sm:w-22 sm:h-22 rounded-2xl overflow-hidden border-3 border-indigo-500 dark:border-indigo-400 ring-4 ring-indigo-500/30 shadow-xl relative bg-slate-900">
                           <StudentVideoFrame
-                            student={currentSpeakerStudent || session.students[0]}
+                            student={currentSpeakerStudent || session?.students?.[0] || activeDisplayStudents[0]}
                             isCurrentSpeaker={isSpeakingLive}
                             isUserCameraOn={isCameraOn}
                             videoStream={videoStream}
@@ -1937,7 +1942,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                       )}
                       <div className="w-18 h-18 sm:w-22 sm:h-22 rounded-2xl overflow-hidden border-2 border-indigo-400 ring-4 ring-indigo-500/20 shadow-lg relative bg-slate-900">
                         <StudentVideoFrame
-                          student={currentSpeakerStudent || session.students[0]}
+                          student={currentSpeakerStudent || session?.students?.[0] || activeDisplayStudents[0]}
                           isCurrentSpeaker={isSpeakingLive}
                           isUserCameraOn={isCameraOn}
                           videoStream={videoStream}
@@ -2104,7 +2109,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 </div>
               ) : (
                 (() => {
-                  const activeStudent = session.students.find((s) => s.isUser) || session.students[0];
+                  const activeStudent = (session?.students || []).find((s) => s.isUser) || session?.students?.[0] || activeDisplayStudents.find((s) => s.isUser);
                   return (
                     <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400">
                       <div className="flex items-center gap-2">
