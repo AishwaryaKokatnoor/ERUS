@@ -378,7 +378,7 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
                   setIdentifier(student.studentId || student.email || '');
                   setPassword('password123');
                   setError(null);
-                  setSuccessMsg(null);
+                  setSuccessMsg(`Selected demo credentials for ${student.name || 'Student'} (${student.studentId || student.email})`);
                 }}
                 className="flex items-center justify-between gap-3 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/60 hover:border-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition-all text-left cursor-pointer"
               >
@@ -411,7 +411,7 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({
                   type="text"
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
-                  placeholder="e.g. rahul.kumar@dit.edu.in or STU-2022-041"
+                  placeholder="e.g. STU-2026-01 or student@vit.in"
                   className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
                   required
                 />

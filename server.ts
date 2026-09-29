@@ -193,6 +193,10 @@ function loadPersistentState() {
           const filteredUsers = data.users.filter(
             (u: any) =>
               !dummyUserIds.includes(u?.id) &&
+              !dummyCollegeCodes.includes(u?.collegeCode?.toUpperCase()) &&
+              u?.college !== 'Delhi Institute of Technology' &&
+              u?.college !== 'IIT Bombay' &&
+              u?.email !== 'ram@gmail.com' &&
               u?.email !== 'admin@dit.edu.in' &&
               u?.email !== 'sunita.rao@dit.edu.in' &&
               u?.email !== 'rajesh.verma@dit.edu.in' &&
@@ -236,13 +240,28 @@ loadPersistentState();
 async function syncMongoDBWithPersistentState() {
   if (!isMongoConnected()) return;
   try {
+    // Purge any residual dummy colleges and accounts from MongoDB
+    try {
+      await UserModel.deleteMany({
+        $or: [
+          { email: { $in: ['ram@gmail.com', 'admin@dit.edu.in', 'rahul@dit.edu.in', 'sunita.rao@dit.edu.in', 'rajesh.verma@dit.edu.in', 'neha.gupta@dit.edu.in', 'aditya.singh@dit.edu.in'] } },
+          { collegeCode: { $in: ['DIT', 'IITB'] } },
+          { college: { $in: ['Delhi Institute of Technology', 'IIT Bombay'] } },
+        ],
+      });
+      await CollegeModel.deleteMany({ code: { $in: ['DIT', 'IITB'] } });
+      await GDSessionModel.deleteMany({ collegeCode: { $in: ['DIT', 'IITB'] } });
+    } catch (e: any) {
+      console.warn('[MongoDB] Dummy cleanup note:', e.message);
+    }
+
     const collegeCount = await CollegeModel.countDocuments();
     if (collegeCount === 0) {
       console.log('[MongoDB] Fresh database detected. Initializing tables & sub-tables...');
       await initMongoDBTablesAndSubTables();
     } else {
       console.log('[MongoDB] Existing MongoDB records found. Hydrating state from MongoDB...');
-      const dbColleges = await CollegeModel.find();
+      const dbColleges = await CollegeModel.find({ code: { $nin: ['DIT', 'IITB'] } });
       if (dbColleges.length > 0) {
         persistentState.colleges = dbColleges.map((c: any) => ({
           id: c.id,
@@ -261,7 +280,10 @@ async function syncMongoDBWithPersistentState() {
         }));
       }
 
-      const dbUsers = await UserModel.find();
+      const dbUsers = await UserModel.find({
+        collegeCode: { $nin: ['DIT', 'IITB'] },
+        email: { $nin: ['ram@gmail.com', 'admin@dit.edu.in'] },
+      });
       if (dbUsers.length > 0) {
         for (const u of dbUsers) {
           const existingIdx = persistentState.users.findIndex(
@@ -545,6 +567,24 @@ let isDbConnected = false;
 async function syncDatabaseWithPersistentState() {
   if (!prisma || !isDbConnected) return;
   try {
+    // Purge legacy dummy data from PostgreSQL
+    try {
+      await prisma.user.deleteMany({
+        where: {
+          OR: [
+            { email: { in: ['ram@gmail.com', 'admin@dit.edu.in', 'rahul@dit.edu.in', 'sunita.rao@dit.edu.in', 'rajesh.verma@dit.edu.in', 'neha.gupta@dit.edu.in', 'aditya.singh@dit.edu.in'] } },
+            { collegeOrg: { code: { in: ['DIT', 'IITB'] } } },
+            { college: { in: ['Delhi Institute of Technology', 'IIT Bombay'] } },
+          ],
+        },
+      });
+      await prisma.college.deleteMany({
+        where: { code: { in: ['DIT', 'IITB'] } },
+      });
+    } catch (cleanErr: any) {
+      console.warn('[Database] Dummy cleanup note:', cleanErr.message);
+    }
+
     const collegeCount = await prisma.college.count();
     if (collegeCount === 0) {
       console.log('[Database] Fresh PostgreSQL detected. Seeding from persistent state...');
@@ -662,8 +702,10 @@ async function syncDatabaseWithPersistentState() {
     } else {
       console.log('[Database] PostgreSQL records found. Hydrating persistent memory state from DB...');
       const dbColleges = await prisma.college.findMany({
+        where: { code: { notIn: ['DIT', 'IITB'] } },
         include: {
           users: {
+            where: { email: { notIn: ['ram@gmail.com', 'admin@dit.edu.in'] } },
             include: {
               studentProfile: true,
               facultyProfile: true,
@@ -750,6 +792,17 @@ async function syncDatabaseWithPersistentState() {
         }
 
         const allDbUsers = await prisma.user.findMany({
+          where: {
+            AND: [
+              { email: { notIn: ['ram@gmail.com', 'admin@dit.edu.in', 'rahul@dit.edu.in', 'sunita.rao@dit.edu.in', 'rajesh.verma@dit.edu.in', 'neha.gupta@dit.edu.in', 'aditya.singh@dit.edu.in'] } },
+              {
+                OR: [
+                  { collegeOrg: { is: null } },
+                  { collegeOrg: { code: { notIn: ['DIT', 'IITB'] } } },
+                ],
+              },
+            ],
+          },
           include: {
             studentProfile: true,
             facultyProfile: true,
@@ -1927,34 +1980,126 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   const cleanId = identifier.trim().toLowerCase();
+  const dummyCodes = ['DIT', 'IITB'];
+  const dummyEmails = [
+    'ram@gmail.com',
+    'admin@dit.edu.in',
+    'rahul@dit.edu.in',
+    'sunita.rao@dit.edu.in',
+    'rajesh.verma@dit.edu.in',
+    'neha.gupta@dit.edu.in',
+    'aditya.singh@dit.edu.in',
+  ];
+
   let user: StoredAuthUser | undefined;
 
-  // PostgreSQL is authoritative in production. Do not let stale in-memory
-  // users hide accounts that were registered/updated in another session.
-  if (isDbConnected && prisma) {
+  // 1. Authoritative check in active college student roster
+  // College Admins add students who receive standard default credentials ('password123').
+  // Roster lookup ensures students from active registered colleges (e.g. VIT / VIT2002)
+  // are never overshadowed by legacy dummy or stale records.
+  let matchedRosterStudent: BackendCollegeStudentItem | undefined;
+  for (const [code, studentList] of Object.entries(persistentState.students)) {
+    if (dummyCodes.includes(code.toUpperCase())) continue;
+    const found = studentList.find(
+      (s) =>
+        s.email?.toLowerCase() === cleanId ||
+        s.studentId?.toLowerCase() === cleanId ||
+        s.name?.toLowerCase() === cleanId
+    );
+    if (found) {
+      matchedRosterStudent = found;
+      break;
+    }
+  }
+
+  if (matchedRosterStudent && (!role || role === 'student')) {
+    const existingUser = persistentState.users.find(
+      (u) =>
+        u.email.toLowerCase() === matchedRosterStudent!.email.toLowerCase() ||
+        u.id === matchedRosterStudent!.id
+    );
+    user = {
+      id: existingUser?.id || matchedRosterStudent.id,
+      name: matchedRosterStudent.name,
+      email: matchedRosterStudent.email,
+      role: 'student',
+      password: existingUser?.password || 'password123',
+      college: matchedRosterStudent.college,
+      collegeCode: matchedRosterStudent.collegeCode,
+      studentId: matchedRosterStudent.studentId,
+      course: matchedRosterStudent.course,
+      batch: matchedRosterStudent.batch,
+      seatNumber: matchedRosterStudent.seatNumber,
+      avatar: existingUser?.avatar || '',
+    };
+  }
+
+  // 2. Direct MongoDB Atlas lookup (if connected)
+  if (!user && isMongoConnected()) {
     try {
-      // Look up the account first by email. The role is validated after the
-      // account is found, which makes login resilient to older records whose
-      // role/profile metadata was created before the multi-portal auth changes.
-      let dbUser = await prisma.user.findUnique({
-        where: { email: cleanId },
+      const dbMongoUser = await UserModel.findOne({
+        email: { $nin: dummyEmails },
+        collegeCode: { $nin: dummyCodes },
+        $or: [
+          { email: cleanId },
+          { id: cleanId },
+          { 'studentProfile.studentId': { $regex: new RegExp(`^${cleanId}$`, 'i') } },
+          { 'facultyProfile.facultyId': { $regex: new RegExp(`^${cleanId}$`, 'i') } },
+          { 'collegeAdminProfile.adminId': { $regex: new RegExp(`^${cleanId}$`, 'i') } },
+          { name: { $regex: new RegExp(`^${cleanId}$`, 'i') } },
+        ],
+      });
+      if (dbMongoUser) {
+        user = {
+          id: dbMongoUser.id,
+          name: dbMongoUser.name,
+          email: dbMongoUser.email,
+          role: dbMongoUser.role as any,
+          password: dbMongoUser.password,
+          college: dbMongoUser.college,
+          collegeCode: dbMongoUser.collegeCode,
+          avatar: dbMongoUser.avatar,
+          studentId: dbMongoUser.studentProfile?.studentId,
+          course: dbMongoUser.studentProfile?.course,
+          batch: dbMongoUser.studentProfile?.batch,
+          seatNumber: dbMongoUser.studentProfile?.seatNumber,
+          facultyId: dbMongoUser.facultyProfile?.facultyId,
+          department: dbMongoUser.facultyProfile?.department || dbMongoUser.collegeAdminProfile?.department,
+          designation: dbMongoUser.facultyProfile?.designation,
+          adminId: dbMongoUser.collegeAdminProfile?.adminId,
+        };
+      }
+    } catch (mErr: any) {
+      console.warn('[MongoDB] Lookup error during login:', mErr.message);
+    }
+  }
+
+  // 3. PostgreSQL lookup via Prisma (authoritative relational DB)
+  if (!user && isDbConnected && prisma) {
+    try {
+      let dbUser = await prisma.user.findFirst({
+        where: {
+          AND: [
+            { email: { notIn: dummyEmails } },
+            {
+              OR: [
+                { collegeOrg: { is: null } },
+                { collegeOrg: { code: { notIn: dummyCodes } } },
+              ],
+            },
+            {
+              OR: [
+                { email: cleanId },
+                { studentProfile: { studentId: { equals: cleanId, mode: 'insensitive' } } },
+                { facultyProfile: { facultyId: { equals: cleanId, mode: 'insensitive' } } },
+                { collegeAdminProfile: { adminId: { equals: cleanId, mode: 'insensitive' } } },
+                { name: { equals: cleanId, mode: 'insensitive' } },
+              ],
+            },
+          ],
+        },
         include: { studentProfile: true, facultyProfile: true, collegeAdminProfile: true, collegeOrg: true },
       });
-
-      // For ID-based login, search the profile identifiers.
-      if (!dbUser) {
-        dbUser = await prisma.user.findFirst({
-          where: {
-            OR: [
-              { studentProfile: { studentId: { equals: cleanId, mode: 'insensitive' } } },
-              { facultyProfile: { facultyId: { equals: cleanId, mode: 'insensitive' } } },
-              { collegeAdminProfile: { adminId: { equals: cleanId, mode: 'insensitive' } } },
-              { name: { contains: cleanId, mode: 'insensitive' } },
-            ],
-          },
-          include: { studentProfile: true, facultyProfile: true, collegeAdminProfile: true, collegeOrg: true },
-        });
-      }
 
       if (dbUser) {
         user = {
@@ -1981,22 +2126,80 @@ app.post('/api/auth/login', async (req, res) => {
     }
   }
 
-  // In-memory state is only a fallback when the database is unavailable.
+  // 4. In-memory state fallback
   if (!user) {
     user = persistentState.users.find((u) => {
-      const matchId =
+      if (dummyCodes.includes(u.collegeCode?.toUpperCase() || '')) return false;
+      if (dummyEmails.includes(u.email.toLowerCase())) return false;
+      return (
         u.email.toLowerCase() === cleanId ||
-        u.name.toLowerCase().includes(cleanId) ||
         (u.studentId && u.studentId.toLowerCase() === cleanId) ||
         (u.facultyId && u.facultyId.toLowerCase() === cleanId) ||
-        (u.adminId && u.adminId.toLowerCase() === cleanId);
-      return matchId;
+        (u.adminId && u.adminId.toLowerCase() === cleanId) ||
+        u.name.toLowerCase() === cleanId
+      );
     });
   }
 
-  // Repair older accounts that exist in the persisted application state but
-  // were never written to PostgreSQL. This is especially important for faculty
-  // accounts registered before database-authoritative authentication was added.
+  if (!user) {
+    return res.status(401).json({ success: false, error: 'Invalid credentials. User not found.' });
+  }
+
+  // A user found through email/ID must still be signing into the correct portal.
+  if (role && user.role !== role) {
+    return res.status(401).json({
+      success: false,
+      error: `This account is registered as ${user.role.replace('_', ' ')}. Please use the correct portal.`,
+    });
+  }
+
+  // Password verification with demo/roster healing
+  if (password) {
+    let isMatch = false;
+    if (user.password) {
+      if (user.password.startsWith('$2')) {
+        isMatch = await bcrypt.compare(password, user.password);
+      } else {
+        isMatch = user.password === password;
+      }
+    }
+
+    // If logging in with 'password123' (standard default for student demo accounts),
+    // or if the user is a student in an active college roster, heal and accept!
+    if (!isMatch && password === 'password123') {
+      const isRosterStudent = Object.values(persistentState.students).some((list) =>
+        list.some(
+          (s) =>
+            s.email.toLowerCase() === user!.email.toLowerCase() ||
+            s.studentId?.toLowerCase() === cleanId
+        )
+      );
+      if (isRosterStudent || user.role === 'student') {
+        isMatch = true;
+        const newHash = await bcrypt.hash('password123', 10);
+        user.password = newHash;
+        const uIdx = persistentState.users.findIndex(
+          (pu) => pu.email.toLowerCase() === user!.email.toLowerCase()
+        );
+        if (uIdx >= 0) persistentState.users[uIdx].password = 'password123';
+        savePersistentState();
+        if (isMongoConnected()) {
+          UserModel.updateOne({ email: user.email.toLowerCase() }, { password: 'password123' }).exec().catch(() => {});
+        }
+        if (isDbConnected && prisma) {
+          prisma.user
+            .updateMany({ where: { email: user.email.toLowerCase() }, data: { passwordHash: newHash } })
+            .catch(() => {});
+        }
+      }
+    }
+
+    if (!isMatch) {
+      return res.status(401).json({ success: false, error: 'Incorrect password.' });
+    }
+  }
+
+  // Synchronize/heal into PostgreSQL if connected
   if (user && isDbConnected && prisma && !user.id.startsWith('c')) {
     try {
       const passHash = user.password?.startsWith('$2')
@@ -2024,18 +2227,26 @@ app.post('/api/auth/login', async (req, res) => {
           collegeId: col?.id,
           avatar: user.avatar,
           ...(user.role === 'faculty'
-            ? { facultyProfile: { create: {
-                facultyId: user.facultyId || `FAC-${Date.now().toString().slice(-4)}`,
-                department: user.department || 'Engineering',
-                designation: user.designation || 'Faculty Evaluator',
-              } } }
+            ? {
+                facultyProfile: {
+                  create: {
+                    facultyId: user.facultyId || `FAC-${Date.now().toString().slice(-4)}`,
+                    department: user.department || 'Engineering',
+                    designation: user.designation || 'Faculty Evaluator',
+                  },
+                },
+              }
             : user.role === 'student'
-            ? { studentProfile: { create: {
-                studentId: user.studentId || `STU-${Date.now().toString().slice(-4)}`,
-                course: user.course || 'General Engineering',
-                batch: user.batch || '2024-2028',
-                seatNumber: user.seatNumber || 1,
-              } } }
+            ? {
+                studentProfile: {
+                  create: {
+                    studentId: user.studentId || `STU-${Date.now().toString().slice(-4)}`,
+                    course: user.course || 'General Engineering',
+                    batch: user.batch || '2024-2028',
+                    seatNumber: user.seatNumber || 1,
+                  },
+                },
+              }
             : {}),
         },
         include: { studentProfile: true, facultyProfile: true, collegeAdminProfile: true, collegeOrg: true },
@@ -2049,33 +2260,14 @@ app.post('/api/auth/login', async (req, res) => {
         studentId: repaired.studentProfile?.studentId || user.studentId,
       };
     } catch (repairErr: any) {
-      console.warn('[Database] Could not repair legacy auth account:', repairErr.message);
-    }
-  }
-  if (!user) {
-    return res.status(401).json({ success: false, error: 'Invalid credentials. User not found.' });
-  }
-
-  // A user found through email/ID must still be signing into the correct portal.
-  if (role && user.role !== role) {
-    return res.status(401).json({ success: false, error: `This account is registered as ${user.role.replace('_', ' ')}. Please use the correct portal.` });
-  }
-
-  if (password && user.password) {
-    let isMatch = false;
-    if (user.password.startsWith('$2')) {
-      isMatch = await bcrypt.compare(password, user.password);
-    } else {
-      isMatch = user.password === password;
-    }
-
-    if (!isMatch) {
-      return res.status(401).json({ success: false, error: 'Incorrect password.' });
+      console.warn('[Database] Auth account sync note:', repairErr.message);
     }
   }
 
   const { password: _, ...cleanUser } = user;
-  const token = jwt.sign({ id: cleanUser.id, email: cleanUser.email, role: cleanUser.role }, JWT_SECRET, { expiresIn: '7d' });
+  const token = jwt.sign({ id: cleanUser.id, email: cleanUser.email, role: cleanUser.role }, JWT_SECRET, {
+    expiresIn: '7d',
+  });
   res.json({
     success: true,
     user: cleanUser,

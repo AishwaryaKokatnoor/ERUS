@@ -223,7 +223,7 @@ export const FacultyLogin: React.FC<FacultyLoginProps> = ({
                   type="text"
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
-                  placeholder="e.g. sunita.rao@dit.edu.in or FAC-CSE-102"
+                  placeholder="e.g. faculty@college.edu or FAC-2026-01"
                   className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all"
                   required
                 />
