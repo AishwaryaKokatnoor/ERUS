@@ -251,15 +251,22 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
 
                     {/* Action Buttons: Enter GD Room & Revive/Release Slot */}
                     <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
-                      <button
-                        type="button"
-                        onClick={() => onEnterRoom(bSlot.id)}
-                        className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm shadow-md shadow-emerald-600/30 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
-                      >
-                        <Radio className="w-4 h-4 animate-pulse" />
-                        <span>Enter Discussion Room</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </button>
+                      {bSlot.status === 'active' ? (
+                        <button
+                          type="button"
+                          onClick={() => onEnterRoom(bSlot.id)}
+                          className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm shadow-md shadow-emerald-600/30 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer animate-pulse"
+                        >
+                          <Radio className="w-4 h-4 text-emerald-200" />
+                          <span>GD is Live — Join Room</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-xs sm:text-sm font-semibold shadow-xs">
+                          <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400 animate-spin [animation-duration:4s]" />
+                          <span>Waiting for Faculty to Start GD</span>
+                        </div>
+                      )}
 
                       {/* Revive Slot Button with 1-Hour Guard */}
                       {isLockedDueToTime ? (
@@ -595,14 +602,22 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                       <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2">
                         {isThisBooked ? (
                           <div className="w-full flex items-center gap-2 flex-wrap">
-                            <button
-                              type="button"
-                              onClick={() => onEnterRoom(slot.id)}
-                              className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                            >
-                              <span>Enter GD Room</span>
-                              <ArrowRight className="w-3.5 h-3.5" />
-                            </button>
+                            {slot.status === 'active' ? (
+                              <button
+                                type="button"
+                                onClick={() => onEnterRoom(slot.id)}
+                                className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer animate-pulse"
+                              >
+                                <Radio className="w-3.5 h-3.5" />
+                                <span>GD Live — Join Room</span>
+                                <ArrowRight className="w-3.5 h-3.5" />
+                              </button>
+                            ) : (
+                              <div className="flex-1 py-2 px-3 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300 font-semibold text-xs flex items-center justify-center gap-1.5 shadow-2xs">
+                                <Clock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 animate-spin [animation-duration:4s]" />
+                                <span>Waiting for Faculty</span>
+                              </div>
+                            )}
 
                             {isReviveLockedByTime ? (
                               <button

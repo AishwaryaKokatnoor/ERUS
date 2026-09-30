@@ -86,6 +86,9 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
       .catch(() => {});
   }, [collegeCode]);
 
+  // Helper for current date
+  const todayDateStr = new Date().toISOString().split('T')[0];
+
   // Multiple slots state for this topic
   const [slots, setSlots] = useState<SlotScheduleItem[]>([
     {
@@ -93,7 +96,7 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
       slotName: 'Slot 1 - Morning Batch',
       startTime: '09:30 AM',
       endTime: '10:00 AM',
-      slotDate: 'Today',
+      slotDate: todayDateStr,
       participantCount: 8,
     },
     {
@@ -101,7 +104,7 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
       slotName: 'Slot 2 - Afternoon Batch',
       startTime: '02:30 PM',
       endTime: '03:00 PM',
-      slotDate: 'Today',
+      slotDate: todayDateStr,
       participantCount: 8,
     },
   ]);
@@ -110,12 +113,13 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
 
   const handleAddSlot = (preset?: { start: string; end: string; label: string }) => {
     const nextIdx = slots.length + 1;
+    const lastDate = slots[slots.length - 1]?.slotDate || todayDateStr;
     const newSlot: SlotScheduleItem = {
       id: `slot-cfg-${Date.now()}-${nextIdx}`,
       slotName: preset ? `Slot ${nextIdx} - ${preset.label} Batch` : `Slot ${nextIdx} - Batch ${String.fromCharCode(64 + nextIdx)}`,
       startTime: preset ? preset.start : '04:30 PM',
       endTime: preset ? preset.end : '05:00 PM',
-      slotDate: 'Today',
+      slotDate: lastDate,
       participantCount: 8,
     };
     setSlots((prev) => [...prev, newSlot]);
@@ -504,7 +508,7 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
 
                   <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
                     {/* Slot Name */}
-                    <div className="sm:col-span-5 space-y-1">
+                    <div className="sm:col-span-3 space-y-1">
                       <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
                         Slot Name / Batch:
                       </label>
@@ -515,6 +519,26 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
                         placeholder="e.g. Slot 1 - Morning Batch"
                         required
                         className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
+
+                    {/* Scheduled Date */}
+                    <div className="sm:col-span-3 space-y-1">
+                      <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                        <span className="flex items-center gap-1">
+                          <Calendar className="w-3 h-3 text-amber-500" />
+                          <span>Slot Date:</span>
+                        </span>
+                        <span className="text-[9px] text-amber-600 dark:text-amber-400 font-mono">
+                          {slot.slotDate === todayDateStr ? 'Today' : ''}
+                        </span>
+                      </label>
+                      <input
+                        type="date"
+                        value={slot.slotDate}
+                        onChange={(e) => handleUpdateSlot(slot.id, 'slotDate', e.target.value)}
+                        required
+                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl px-2 py-1.5 text-xs text-slate-900 dark:text-white font-mono focus:ring-2 focus:ring-amber-500"
                       />
                     </div>
 
@@ -530,7 +554,7 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
                         onChange={(e) => handleUpdateSlot(slot.id, 'startTime', e.target.value)}
                         placeholder="09:30 AM"
                         required
-                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-900 dark:text-white font-mono focus:ring-2 focus:ring-amber-500"
+                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl px-2 py-1.5 text-xs text-slate-900 dark:text-white font-mono focus:ring-2 focus:ring-amber-500"
                       />
                     </div>
 
@@ -545,36 +569,36 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
                         onChange={(e) => handleUpdateSlot(slot.id, 'endTime', e.target.value)}
                         placeholder="10:00 AM"
                         required
-                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-900 dark:text-white font-mono focus:ring-2 focus:ring-amber-500"
+                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl px-2 py-1.5 text-xs text-slate-900 dark:text-white font-mono focus:ring-2 focus:ring-amber-500"
                       />
                     </div>
 
                     {/* Custom Capacity Option */}
-                    <div className="sm:col-span-3 space-y-1">
+                    <div className="sm:col-span-2 space-y-1">
                       <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-300 flex items-center justify-between">
                         <span className="flex items-center gap-1">
                           <Users className="w-3 h-3 text-amber-500" />
-                          <span>No. of Students:</span>
+                          <span>Seats:</span>
                         </span>
                         <span className="text-[9px] font-bold text-amber-600 dark:text-amber-400 font-mono">
-                          {slot.participantCount} seats
+                          {slot.participantCount}
                         </span>
                       </label>
                       <select
                         value={slot.participantCount}
                         onChange={(e) => handleUpdateSlot(slot.id, 'participantCount', e.target.value)}
-                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-900 dark:text-white cursor-pointer focus:ring-2 focus:ring-amber-500 font-medium"
+                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl px-2 py-1.5 text-xs text-slate-900 dark:text-white cursor-pointer focus:ring-2 focus:ring-amber-500 font-medium"
                       >
-                        <option value={4}>4 Students (Mini GD)</option>
-                        <option value={6}>6 Students (Focused)</option>
-                        <option value={8}>8 Students (Standard GD)</option>
-                        <option value={10}>10 Students</option>
-                        <option value={12}>12 Students</option>
-                        <option value={15}>15 Students</option>
-                        <option value={18}>18 Students</option>
-                        <option value={20}>20 Students</option>
-                        <option value={24}>24 Students</option>
-                        <option value={30}>30 Students (Max)</option>
+                        <option value={4}>4 (Mini)</option>
+                        <option value={6}>6 (Focused)</option>
+                        <option value={8}>8 (Standard)</option>
+                        <option value={10}>10 Seats</option>
+                        <option value={12}>12 Seats</option>
+                        <option value={15}>15 Seats</option>
+                        <option value={18}>18 Seats</option>
+                        <option value={20}>20 Seats</option>
+                        <option value={24}>24 Seats</option>
+                        <option value={30}>30 (Max)</option>
                       </select>
                     </div>
                   </div>

@@ -232,6 +232,7 @@ function GDAppContent() {
           const mappedSlots = slots.map((fresh: any) => ({
             ...DEFAULT_GD_SESSION,
             ...fresh,
+            slotDate: fresh.slotDate || (fresh.rawSession && fresh.rawSession.slotDate) || 'Today',
             students: fresh.students && fresh.students.length > 0 ? fresh.students : generateSlotParticipants(fresh.enrolledCount || 8),
             status: fresh.status === 'active' ? 'active' : fresh.status === 'completed' ? 'completed' : 'waiting',
           }));
@@ -245,6 +246,7 @@ function GDAppContent() {
             return {
               ...(prev || DEFAULT_GD_SESSION),
               ...fresh,
+              slotDate: fresh.slotDate || prev?.slotDate || 'Today',
               status: fresh.status === 'active' ? 'active' : fresh.status === 'completed' ? 'completed' : 'waiting',
             };
           });
@@ -253,6 +255,25 @@ function GDAppContent() {
     }, 2000);
     return () => clearInterval(timer);
   }, [currentUser]);
+
+  // Auto-enter GD Room for student when faculty starts their booked slot
+  useEffect(() => {
+    if (currentUser?.role !== 'student' || currentTab !== 'topics') return;
+    const bookedIds = new Set([
+      ...(studentBookedSlotId ? [studentBookedSlotId] : []),
+      ...Object.values(studentBookedSlotsByTopic || {}),
+    ]);
+    if (bookedIds.size === 0) return;
+
+    const activeBookedSlot = (availableSlots || []).find(
+      (s) => s && bookedIds.has(s.id) && s.status === 'active'
+    );
+
+    if (activeBookedSlot) {
+      handleSelectSlot(activeBookedSlot.id);
+      setCurrentTab('room');
+    }
+  }, [availableSlots, studentBookedSlotId, studentBookedSlotsByTopic, currentUser, currentTab]);
 
   // Reset slots back to clean demo defaults
   const handleResetSlots = () => {
@@ -294,6 +315,7 @@ function GDAppContent() {
           description: s.description || '',
           slotName: s.slotName || s.topic || 'Slot',
           slotTiming: s.slotTiming || '',
+          slotDate: s.slotDate || (s.rawSession && s.rawSession.slotDate) || 'Today',
           durationMinutes: s.durationMinutes || 15,
           difficulty: s.difficulty || 'Intermediate',
           assessmentRubric: s.assessmentRubric || 'Standard Academic 7-Parameter Rubric',

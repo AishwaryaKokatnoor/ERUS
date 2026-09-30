@@ -92,6 +92,7 @@ interface BackendCollegeSlotItem {
   assignedFacultyEmail?: string;
   assignedFacultyDept?: string;
   collegeCode: string;
+  slotDate?: string;
   createdAt: string;
 }
 
@@ -479,6 +480,7 @@ async function persistSlotToMongoDB(slot: BackendCollegeSlotItem) {
         topic: slot.topic,
         description: slot.description || '',
         slotTiming: slot.slotTiming || '10:00 AM - 10:30 AM',
+        slotDate: slot.slotDate || 'Today',
         status: (slot.status as any) || 'scheduled',
         durationMinutes: slot.durationMinutes || 25,
         enrolledCount: slot.enrolledCount || 0,
@@ -1303,6 +1305,7 @@ app.get('/api/college/slots', async (req, res) => {
           assignedFacultyEmail: s.assignedFacultyEmail || '',
           assignedFacultyDept: s.assignedFacultyDept || '',
           collegeCode: s.collegeCode || code || 'GENERAL',
+          slotDate: s.slotDate || (existing as any).slotDate || 'Today',
           createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString(),
         });
       }
@@ -1339,6 +1342,7 @@ app.get('/api/college/slots', async (req, res) => {
               assignedFacultyEmail: s.assignedFacultyEmail || '',
               assignedFacultyDept: s.assignedFacultyDept || '',
               collegeCode: s.collegeCode || 'GENERAL',
+              slotDate: s.slotDate || 'Today',
               createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString(),
             });
           }
@@ -1410,6 +1414,7 @@ app.post('/api/college/slots', async (req, res) => {
     assignedFacultyEmail: assignedFaculty?.email || (existingTopicSlot?.assignedFacultyEmail || payload.assignedFacultyEmail),
     assignedFacultyDept: assignedFaculty?.department || (existingTopicSlot?.assignedFacultyDept || payload.assignedFacultyDept),
     collegeCode: code,
+    slotDate: payload.slotDate || payload.date || 'Today',
     createdAt: new Date().toISOString(),
   };
 
@@ -1759,6 +1764,7 @@ app.get('/api/faculty/sessions', async (req, res) => {
             assignedFacultyEmail: s.assignedFacultyEmail || faculty.email,
             assignedFacultyDept: s.assignedFacultyDept || faculty.department,
             collegeCode: s.collegeCode || facultyCollegeCode,
+            slotDate: s.slotDate || 'Today',
             createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString(),
           });
         }

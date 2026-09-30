@@ -113,6 +113,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
       topic: s.topic,
       description: s.description || s.topic,
       slotTiming: s.slotTiming || '10:30 AM - 10:45 AM',
+      slotDate: s.slotDate || (s as any).rawSession?.slotDate || 'Today',
       status: s.status || 'scheduled',
       durationMinutes: s.durationMinutes || 15,
       enrolledCount: s.enrolledCount ?? s.students?.length ?? 8,
@@ -128,6 +129,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     durationMinutes: 15,
     difficulty: 'Intermediate',
     slotTiming: '10:30 AM - 10:45 AM',
+    slotDate: new Date().toISOString().split('T')[0],
     participantCount: 8,
     maxCapacity: 15,
     assignedFacultyId: '',
@@ -412,6 +414,7 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
       status: 'scheduled',
       slotName: newSlot.slotName,
       slotTiming: newSlot.slotTiming,
+      slotDate: newSlot.slotDate || new Date().toISOString().split('T')[0],
       maxCapacity: requestedCount,
       enrolledCount: 0,
       assignedFacultyId: newSlot.assignedFacultyId,
@@ -840,8 +843,9 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
               >
                 <div>
                   <div className="flex items-center justify-between mb-3">
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                      {sl.slotTiming || '10:30 AM - 10:45 AM'}
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1">
+                      <Calendar className="w-2.5 h-2.5 shrink-0" />
+                      <span>{sl.slotDate || (sl as any).rawSession?.slotDate || 'Today'} • {sl.slotTiming || '10:30 AM - 10:45 AM'}</span>
                     </span>
                     <span
                       className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${
@@ -1244,7 +1248,20 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div>
+                  <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1 flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Scheduled Date</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={newSlot.slotDate}
+                    onChange={(e) => setNewSlot({ ...newSlot, slotDate: e.target.value })}
+                    required
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 font-mono text-xs"
+                  />
+                </div>
                 <div>
                   <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">Scheduled Timing</label>
                   <input
@@ -1256,7 +1273,7 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                   />
                 </div>
                 <div>
-                  <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">Duration (Minutes)</label>
+                  <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">Duration (Min)</label>
                   <input
                     type="number"
                     value={newSlot.durationMinutes}

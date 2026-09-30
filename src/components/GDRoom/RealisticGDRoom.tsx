@@ -1379,10 +1379,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               </span>
 
               {/* Slot Details */}
-              {session?.slotTiming && (
+              {(session?.slotTiming || session?.slotDate) && (
                 <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 dark:bg-blue-950/70 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 flex items-center gap-1.5 shadow-2xs">
-                  <Clock className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                  <span>Slot Details: {session.slotTiming}</span>
+                  <Calendar className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                  <span>{session.slotDate ? `${session.slotDate} • ` : ''}{session.slotTiming || 'Scheduled Slot'}</span>
                 </span>
               )}
 
