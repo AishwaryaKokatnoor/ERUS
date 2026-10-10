@@ -811,7 +811,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     }
   }, [isFaculty, rtcSetMicEnabled]);
 
-  const toggleMicRecognition = () => {
+  const toggleMicRecognition = async () => {
     if (isListeningMic) {
       // User muting: auto-commit any pending speech immediately so words are not lost
       if (speechPauseTimerRef.current) {
@@ -832,7 +832,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         }
       }
       setIsListeningMic(false);
-      rtcSetMicEnabled(false);
+      await rtcSetMicEnabled(false);
       if (!isFaculty) {
         setSession((prev) => ({
           ...prev,
@@ -843,6 +843,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       liveTranscriptRef.current = '';
       setLiveSpeechTranscript('');
       isListeningMicRef.current = true;
+      setIsListeningMic(true);
+      await rtcSetMicEnabled(true);
       if (recognitionRef.current) {
         try {
           recognitionRef.current.start();
@@ -850,8 +852,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           console.warn('Speech recognition start error (WebRTC audio will still stream):', e);
         }
       }
-      setIsListeningMic(true);
-      rtcSetMicEnabled(true);
       if (!isFaculty) {
         setSession((prev) => ({
           ...prev,

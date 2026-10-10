@@ -179,7 +179,7 @@ export function useWebRTCRoom({
     if (localStreamRef.current) {
       const audioTrack = localStreamRef.current.getAudioTracks()[0];
       if (audioTrack) {
-        const audioTransceiver = pc.getTransceivers().find((t) => t.receiver.track.kind === 'audio');
+        const audioTransceiver = pc.getTransceivers().find((t) => t.receiver.track.kind === 'audio' || t.sender.track?.kind === 'audio');
         if (audioTransceiver && audioTransceiver.sender) {
           audioTransceiver.sender.replaceTrack(audioTrack).catch(() => {});
         } else {
@@ -261,6 +261,9 @@ export function useWebRTCRoom({
 
   // 4. Initialize Local Microphone & Real-time Volume Analyzer
   const initLocalMicrophone = useCallback(async () => {
+    if (localStreamRef.current) {
+      return localStreamRef.current;
+    }
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Microphone access is not supported by your browser.');
@@ -291,7 +294,8 @@ export function useWebRTCRoom({
         peerConnectionsRef.current.forEach(async (pc) => {
           try {
             const senders = pc.getSenders();
-            const audioSender = senders.find((s) => s.track?.kind === 'audio' || (s as any).kind === 'audio');
+            const audioTransceiver = pc.getTransceivers().find((t) => t.receiver.track.kind === 'audio' || t.sender.track?.kind === 'audio');
+            const audioSender = audioTransceiver?.sender || senders.find((s) => s.track?.kind === 'audio');
             if (audioSender) {
               await audioSender.replaceTrack(audioTrack);
             } else {
@@ -305,7 +309,7 @@ export function useWebRTCRoom({
 
       // Setup Web Audio Analyser for speaking detection & audio visualizer
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioCtx) {
+      if (AudioCtx && !audioContextRef.current) {
         const audioCtx = new AudioCtx();
         audioContextRef.current = audioCtx;
         if (audioCtx.state === 'suspended') {
@@ -369,13 +373,14 @@ export function useWebRTCRoom({
         checkVolume();
       }
 
+      setError(null);
       return stream;
     } catch (err: any) {
       console.warn('[Microphone init note]:', err.message);
       setError(err.message || 'Microphone access denied or unavailable.');
       return null;
     }
-  }, [slotId, isMicMuted]);
+  }, [slotId]);
 
   // 5. Connect to Socket.IO Server & Room Signaling
   useEffect(() => {
@@ -658,7 +663,7 @@ export function useWebRTCRoom({
 
       socket.disconnect();
     };
-  }, [slotId, currentUser, initLocalMicrophone, getOrCreatePeerConnection, detachRemoteAudio]);
+  }, [slotId, currentUser?.id, initLocalMicrophone, getOrCreatePeerConnection, detachRemoteAudio]);
 
   // Global user gesture unlocker: resumes AudioContext & plays any paused peer audio elements
   useEffect(() => {
@@ -683,34 +688,8 @@ export function useWebRTCRoom({
     };
   }, []);
 
-  // Toggle local microphone mute
-  const toggleMute = useCallback(() => {
-    const nextMuted = !isMicMutedRef.current;
-    desiredMicEnabledRef.current = !nextMuted;
-    isMicMutedRef.current = nextMuted;
-    setIsMicMuted(nextMuted);
-
-    if (!nextMuted && audioContextRef.current && audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume().catch(() => {});
-    }
-    if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach((track) => {
-        track.enabled = !nextMuted;
-      });
-
-      if (socketRef.current) {
-        socketRef.current.emit('peer-speaking-state', {
-          slotId,
-          isSpeaking: !nextMuted,
-          micActive: !nextMuted,
-          volumeLevel: 0,
-        });
-      }
-    }
-  }, [slotId]);
-
   // Set explicit microphone enabled state (true = unmuted, false = muted)
-  const setMicEnabled = useCallback((enabled: boolean) => {
+  const setMicEnabled = useCallback(async (enabled: boolean) => {
     desiredMicEnabledRef.current = enabled;
     isMicMutedRef.current = !enabled;
     setIsMicMuted(!enabled);
@@ -718,6 +697,11 @@ export function useWebRTCRoom({
     if (enabled && audioContextRef.current && audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume().catch(() => {});
     }
+
+    if (enabled && !localStreamRef.current) {
+      await initLocalMicrophone();
+    }
+
     if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach((track) => {
         track.enabled = enabled;
@@ -733,7 +717,13 @@ export function useWebRTCRoom({
         });
       }
     }
-  }, [slotId, localVolume]);
+  }, [slotId, localVolume, initLocalMicrophone]);
+
+  // Toggle local microphone mute
+  const toggleMute = useCallback(async () => {
+    const nextMuted = !isMicMutedRef.current;
+    await setMicEnabled(!nextMuted);
+  }, [setMicEnabled]);
 
   // Synchronize local webcam video track to all active WebRTC peer connections
   useEffect(() => {
