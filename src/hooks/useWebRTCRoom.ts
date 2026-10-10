@@ -106,6 +106,8 @@ export function useWebRTCRoom({
   const speakingStateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const floorSpeakerIdRef = useRef<string | null>(null);
   const handledAiTranscriptIdsRef = useRef<Set<string>>(new Set());
+  const isMicMutedRef = useRef<boolean>(true);
+  const desiredMicEnabledRef = useRef<boolean>(false);
 
   // Keep the latest UI callbacks without recreating the Socket.IO connection on every React render.
   // The GD room receives frequent transcript/floor updates, so reconnecting on each render can
@@ -126,6 +128,7 @@ export function useWebRTCRoom({
     if (!audioEl) {
       audioEl = document.createElement('audio');
       audioEl.id = `remote-audio-${peerSocketId}`;
+      audioEl.style.display = 'none';
       audioEl.autoplay = true;
       audioEl.volume = 1.0;
       audioEl.muted = false;
@@ -274,11 +277,13 @@ export function useWebRTCRoom({
 
       localStreamRef.current = stream;
 
-      // Start with audio tracks muted by default until user explicitly activates mic
+      // Apply initial desired mic enabled state if specified before stream acquired
+      const initialEnabled = desiredMicEnabledRef.current;
       stream.getAudioTracks().forEach((track) => {
-        track.enabled = false;
+        track.enabled = initialEnabled;
       });
-      setIsMicMuted(true);
+      isMicMutedRef.current = !initialEnabled;
+      setIsMicMuted(!initialEnabled);
 
       // Attach tracks to any peer connections that were established before mic was ready
       const audioTrack = stream.getAudioTracks()[0];
@@ -303,6 +308,9 @@ export function useWebRTCRoom({
       if (AudioCtx) {
         const audioCtx = new AudioCtx();
         audioContextRef.current = audioCtx;
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume().catch(() => {});
+        }
         const source = audioCtx.createMediaStreamSource(stream);
         const analyser = audioCtx.createAnalyser();
         analyser.fftSize = 256;
@@ -320,10 +328,12 @@ export function useWebRTCRoom({
             sum += dataArray[i];
           }
           const avg = sum / dataArray.length;
-          setLocalVolume(Math.min(100, Math.round((avg / 128) * 100)));
+          const volLevel = Math.min(100, Math.round((avg / 128) * 100));
+          setLocalVolume(volLevel);
 
-          // Detect speaking when volume exceeds threshold (value > 12)
-          const speakingNow = avg > 12 && !isMicMuted;
+          // Detect speaking when volume exceeds threshold (value > 8) and mic is not muted
+          const isMuted = isMicMutedRef.current;
+          const speakingNow = avg > 8 && !isMuted;
           setIsSpeakingLive(speakingNow);
 
           if (speakingNow) {
@@ -335,7 +345,7 @@ export function useWebRTCRoom({
               socketRef.current.emit('peer-speaking-state', {
                 slotId,
                 isSpeaking: true,
-                micActive: !isMicMuted,
+                micActive: !isMuted,
                 volumeLevel: Math.round(avg),
               });
             }
@@ -345,7 +355,7 @@ export function useWebRTCRoom({
                 socketRef.current?.emit('peer-speaking-state', {
                   slotId,
                   isSpeaking: false,
-                  micActive: !isMicMuted,
+                  micActive: !isMuted,
                   volumeLevel: 0,
                 });
                 speakingStateTimeoutRef.current = null;
@@ -675,30 +685,36 @@ export function useWebRTCRoom({
 
   // Toggle local microphone mute
   const toggleMute = useCallback(() => {
-    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+    const nextMuted = !isMicMutedRef.current;
+    desiredMicEnabledRef.current = !nextMuted;
+    isMicMutedRef.current = nextMuted;
+    setIsMicMuted(nextMuted);
+
+    if (!nextMuted && audioContextRef.current && audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume().catch(() => {});
     }
     if (localStreamRef.current) {
-      const audioTrack = localStreamRef.current.getAudioTracks()[0];
-      if (audioTrack) {
-        const nextMuted = audioTrack.enabled; // If enabled, toggles to muted (disabled)
-        audioTrack.enabled = !nextMuted;
-        setIsMicMuted(!nextMuted);
+      localStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = !nextMuted;
+      });
 
-        if (socketRef.current) {
-          socketRef.current.emit('peer-speaking-state', {
-            slotId,
-            isSpeaking: false,
-            micActive: !nextMuted,
-            volumeLevel: 0,
-          });
-        }
+      if (socketRef.current) {
+        socketRef.current.emit('peer-speaking-state', {
+          slotId,
+          isSpeaking: !nextMuted,
+          micActive: !nextMuted,
+          volumeLevel: 0,
+        });
       }
     }
   }, [slotId]);
 
   // Set explicit microphone enabled state (true = unmuted, false = muted)
   const setMicEnabled = useCallback((enabled: boolean) => {
+    desiredMicEnabledRef.current = enabled;
+    isMicMutedRef.current = !enabled;
+    setIsMicMuted(!enabled);
+
     if (enabled && audioContextRef.current && audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume().catch(() => {});
     }
@@ -706,7 +722,6 @@ export function useWebRTCRoom({
       localStreamRef.current.getAudioTracks().forEach((track) => {
         track.enabled = enabled;
       });
-      setIsMicMuted(!enabled);
 
       if (socketRef.current) {
         socketRef.current.emit('peer-speaking-state', {

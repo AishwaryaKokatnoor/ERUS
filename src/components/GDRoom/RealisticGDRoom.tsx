@@ -179,9 +179,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     videoStream,
     toggleCamera,
     cameraError,
-    audioLevel,
-    startAudioAnalyser,
-    stopAudioAnalyser,
   } = useUserMedia();
 
   const [isRoomAudioMuted, setIsRoomAudioMuted] = useState(false);
@@ -224,7 +221,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     silenceTimerSeconds: rtcSilenceTimer,
     isMicMuted: rtcIsMicMuted,
     isSpeakingLive: rtcIsSpeakingLive,
-    localVolume: rtcLocalVolume,
+    localVolume: audioLevel,
     toggleMute: rtcToggleMute,
     setMicEnabled: rtcSetMicEnabled,
     broadcastTranscript: rtcBroadcastTranscript,
@@ -442,31 +439,35 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       const mySeat = rtcAssignedSeat || (currentUser && 'seatNumber' in currentUser ? (currentUser as any).seatNumber : 1) || 1;
 
       const realPeersMap = new Map<number, Student>();
+      const previousStudentsMap = new Map<string, Student>((prev.students || []).map((s) => [s.id, s]));
 
       // 1. Current user themselves (if student)
       if (!isFaculty && currentUser) {
+        const existingUser = previousStudentsMap.get(currentUser.id) || (prev.students || []).find((s) => s.isUser);
         realPeersMap.set(mySeat, {
           id: currentUser.id,
           name: currentUser.name || 'Participant',
           seatNumber: mySeat,
           college: currentUser.college || 'Campus Participant',
-          course: (currentUser as any).course || '',
-          batch: (currentUser as any).batch || '',
-          avatar: currentUser.avatar || '',
+          course: (currentUser as any).course || existingUser?.course || '',
+          batch: (currentUser as any).batch || existingUser?.batch || '',
+          avatar: currentUser.avatar || existingUser?.avatar || '',
           isUser: true,
           micActive: isListeningMic || !rtcIsMicMuted,
           isSpeaking: isListeningMic || rtcIsSpeakingLive,
-          hasRaisedHand: false,
+          hasRaisedHand: existingUser?.hasRaisedHand || false,
           cameraActive: isCameraOn,
-          speakingDurationSeconds: 0,
-          speakingTurns: 0,
-          interruptionCount: 0,
-          questionsAnswered: 0,
-          questionsInitiated: 0,
-          sentiment: 'neutral',
+          speakingDurationSeconds: existingUser?.speakingDurationSeconds || 0,
+          speakingTurns: existingUser?.speakingTurns || 0,
+          interruptionCount: existingUser?.interruptionCount || 0,
+          questionsAnswered: existingUser?.questionsAnswered || 0,
+          questionsInitiated: existingUser?.questionsInitiated || 0,
+          sentiment: existingUser?.sentiment || 'neutral',
+          lastSpokenAt: existingUser?.lastSpokenAt,
           isEmptySeat: false,
           isRealPeer: false,
           isDemoAI: false,
+          videoStream: isCameraOn ? videoStream : null,
         });
       }
 
@@ -482,28 +483,33 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             }
           }
         }
+        const existingPeer = previousStudentsMap.get(p.userId) || (prev.students || []).find((s) => s.seatNumber === sNum);
+        const peerStream = rtcPeerStreams.get(p.socketId) || null;
+
         realPeersMap.set(sNum, {
           id: p.userId,
           name: p.name,
           seatNumber: sNum,
           college: p.college || 'Campus Participant',
-          course: '',
-          batch: '',
+          course: existingPeer?.course || '',
+          batch: existingPeer?.batch || '',
           avatar: p.avatar,
           isUser: false,
           micActive: p.micActive,
           isSpeaking: p.isSpeaking,
-          hasRaisedHand: false,
+          hasRaisedHand: existingPeer?.hasRaisedHand || false,
           cameraActive: p.cameraActive,
-          speakingDurationSeconds: p.speakingDurationSeconds || 0,
-          speakingTurns: p.speakingTurns || 0,
-          interruptionCount: p.interruptionCount || 0,
-          questionsAnswered: 0,
-          questionsInitiated: 0,
-          sentiment: 'neutral',
+          speakingDurationSeconds: Math.max(existingPeer?.speakingDurationSeconds || 0, p.speakingDurationSeconds || 0),
+          speakingTurns: Math.max(existingPeer?.speakingTurns || 0, p.speakingTurns || 0),
+          interruptionCount: Math.max(existingPeer?.interruptionCount || 0, p.interruptionCount || 0),
+          questionsAnswered: existingPeer?.questionsAnswered || 0,
+          questionsInitiated: existingPeer?.questionsInitiated || 0,
+          sentiment: existingPeer?.sentiment || 'neutral',
+          lastSpokenAt: existingPeer?.lastSpokenAt,
           isEmptySeat: false,
           isRealPeer: true,
           isDemoAI: false,
+          videoStream: peerStream,
         });
       });
 
@@ -541,7 +547,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       seats.sort((a, b) => (a.seatNumber || 0) - (b.seatNumber || 0));
       return { ...prev, students: seats };
     });
-  }, [session?.id, session?.maxCapacity, rtcPeers, rtcAssignedSeat, currentUser, isFaculty, isListeningMic, rtcIsMicMuted, rtcIsSpeakingLive, isCameraOn, setSession]);
+  }, [session?.id, session?.maxCapacity, rtcPeers, rtcPeerStreams, rtcAssignedSeat, currentUser, isFaculty, isListeningMic, rtcIsMicMuted, rtcIsSpeakingLive, isCameraOn, videoStream, setSession]);
 
   // Active display students: merge connected user with live connected WebRTC peers & available desks
   const activeDisplayStudents = useMemo(() => {
@@ -770,48 +776,40 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         };
 
         recognition.onerror = (event: any) => {
-          console.warn('Speech recognition error:', event.error);
-          if (event.error === 'no-speech') {
-            return;
-          }
-          setIsListeningMic(false);
-          isListeningMicRef.current = false;
-          stopAudioAnalyser();
-          rtcSetMicEnabled(false);
-          if (!isFaculty) {
-            setSession((prev) => ({
-              ...prev,
-              students: prev.students.map((s) => (s.isUser ? { ...s, micActive: false } : s)),
-            }));
-          }
+          console.warn('Speech recognition warning:', event.error);
+          // Keep WebRTC microphone streaming active regardless of SpeechRecognition interim status
         };
 
         recognition.onend = () => {
-          // If mic is supposed to remain on (user didn't mute), restart recognition like Google Meet
+          // If mic is supposed to remain on (user didn't mute), attempt automatic restart with delay
           if (isListeningMicRef.current && !aiVoicePausedMicRef.current) {
-            try {
-              recognition.start();
-              return;
-            } catch {
-              // ignore
-            }
+            setTimeout(() => {
+              if (isListeningMicRef.current && !aiVoicePausedMicRef.current && recognitionRef.current) {
+                try {
+                  recognitionRef.current.start();
+                } catch {
+                  // ignore if already active
+                }
+              }
+            }, 300);
+            return;
           }
-          setIsListeningMic(false);
-          isListeningMicRef.current = false;
-          stopAudioAnalyser();
-          rtcSetMicEnabled(false);
-          if (!isFaculty) {
-            setSession((prev) => ({
-              ...prev,
-              students: prev.students.map((s) => (s.isUser ? { ...s, micActive: false } : s)),
-            }));
+          if (!isListeningMicRef.current) {
+            setIsListeningMic(false);
+            rtcSetMicEnabled(false);
+            if (!isFaculty) {
+              setSession((prev) => ({
+                ...prev,
+                students: prev.students.map((s) => (s.isUser ? { ...s, micActive: false } : s)),
+              }));
+            }
           }
         };
 
         recognitionRef.current = recognition;
       }
     }
-  }, [isFaculty, stopAudioAnalyser, rtcSetMicEnabled]);
+  }, [isFaculty, rtcSetMicEnabled]);
 
   const toggleMicRecognition = () => {
     if (isListeningMic) {
@@ -834,7 +832,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         }
       }
       setIsListeningMic(false);
-      stopAudioAnalyser();
       rtcSetMicEnabled(false);
       if (!isFaculty) {
         setSession((prev) => ({
@@ -854,7 +851,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         }
       }
       setIsListeningMic(true);
-      startAudioAnalyser();
       rtcSetMicEnabled(true);
       if (!isFaculty) {
         setSession((prev) => ({
