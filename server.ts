@@ -478,17 +478,17 @@ async function syncMongoDBWithPersistentState() {
     // 4. Hydrate Slots (Parent Table: gd_sessions) from MongoDB
     persistentState.slots = {};
     const deletedSet = new Set(persistentState.deletedSlotIds || []);
-    if (deletedSet.size > 0) {
-      await GDSessionModel.deleteMany({ id: { $in: Array.from(deletedSet) } }).catch(() => null);
-    }
+    // Tombstones hide intentionally deleted slots from normal views, but do not
+    // physically erase database history during routine startup synchronization.
     const dbSessions = await GDSessionModel.find();
     if (dbSessions.length > 0) {
       for (const s of dbSessions) {
         if (!s?.id || deletedSet.has(s.id)) continue;
-        const colCode = normalizeCollegeCode(s.collegeCode);
-        if (!colCode || !activeCollegeSet.has(colCode)) {
-          await GDSessionModel.deleteOne({ id: s.id }).catch(() => null);
-          continue;
+        // Preserve sessions even when their college record is missing. A temporary
+        // college-sync mismatch must never cascade into irreversible session deletion.
+        const colCode = normalizeCollegeCode(s.collegeCode) || 'UNASSIGNED';
+        if (!activeCollegeSet.has(colCode)) {
+          console.warn(`[MongoDB] Session ${s.id} references missing college ${colCode}; preserving the session record.`);
         }
         if (!persistentState.slots[colCode]) persistentState.slots[colCode] = [];
         persistentState.slotsInitializedColleges[colCode] = true;
