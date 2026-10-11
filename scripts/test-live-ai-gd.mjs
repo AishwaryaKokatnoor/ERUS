@@ -4,8 +4,25 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const BASE_URL = 'https://erus-production.up.railway.app';
-const MONGO_URI = process.env.MONGODB_URI;
+const BASE_URL = process.env.ERUS_TEST_BASE_URL;
+const MONGO_URI = process.env.ERUS_TEST_MONGODB_URI;
+if (!BASE_URL) {
+  console.error('Set ERUS_TEST_BASE_URL to an explicit disposable HTTPS test/staging server URL before running this write-capable test.');
+  process.exit(1);
+}
+const testTarget = new URL(BASE_URL);
+if (testTarget.protocol !== 'https:') {
+  console.error('ERUS_TEST_BASE_URL must use HTTPS for this live AI integration test.');
+  process.exit(1);
+}
+if (testTarget.hostname === 'erus-production.up.railway.app' && process.env.ERUS_ALLOW_PRODUCTION_TESTS !== 'true') {
+  console.error('Refusing to run write-capable live AI tests against production. Set ERUS_ALLOW_PRODUCTION_TESTS=true only for an intentional production test.');
+  process.exit(1);
+}
+if (MONGO_URI && /mongodb(?:\+srv)?:\/\/[^/]*@?[^/]*(?:mongodb\.net|atlas)/i.test(MONGO_URI) && process.env.ERUS_ALLOW_PRODUCTION_TESTS !== 'true') {
+  console.error('Refusing to use an Atlas-like MongoDB URI in the live test. Use ERUS_TEST_MONGODB_URI for a disposable test database.');
+  process.exit(1);
+}
 
 function postJson(path, body) {
   return new Promise((resolve, reject) => {
