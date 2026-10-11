@@ -121,34 +121,26 @@ export function createBaselinePreviousReport(currentReport: StudentAssessmentRep
   };
 }
 
+// In-memory student report history cache synced directly with MongoDB
+const inMemoryReportHistory = new Map<string, StudentAssessmentReport[]>();
+let inMemoryActiveReport: StudentAssessmentReport | null = null;
+
 export function getStudentReportHistory(studentIdentifier: string, currentReport?: StudentAssessmentReport): StudentAssessmentReport[] {
-  try {
-    const key = getStorageKey(studentIdentifier);
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        // Sort or prefer non-zero reports if duplicate exists
-        return parsed;
-      }
-    }
-    // Fallback check in erus_active_report_v1
-    const activeRaw = localStorage.getItem('erus_active_report_v1');
-    if (activeRaw) {
-      const activeParsed = JSON.parse(activeRaw);
-      if (
-        activeParsed &&
-        typeof activeParsed === 'object' &&
-        (activeParsed.overallScore || 0) > 0 &&
-        (!studentIdentifier ||
-          String(activeParsed.studentId || '').toLowerCase() === studentIdentifier.toLowerCase() ||
-          String(activeParsed.studentName || '').toLowerCase() === studentIdentifier.toLowerCase())
-      ) {
-        return [activeParsed];
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to load report history:', e);
+  const key = getStorageKey(studentIdentifier);
+  const existing = inMemoryReportHistory.get(key);
+  if (existing && existing.length > 0) {
+    return existing;
+  }
+
+  // Fallback to in-memory active report
+  if (
+    inMemoryActiveReport &&
+    (inMemoryActiveReport.overallScore || 0) > 0 &&
+    (!studentIdentifier ||
+      String(inMemoryActiveReport.studentId || '').toLowerCase() === studentIdentifier.toLowerCase() ||
+      String(inMemoryActiveReport.studentName || '').toLowerCase() === studentIdentifier.toLowerCase())
+  ) {
+    return [inMemoryActiveReport];
   }
 
   // If no stored history and currentReport is provided with non-zero score, initialize with current report
@@ -163,12 +155,8 @@ export function getStudentReportHistory(studentIdentifier: string, currentReport
 
 export function saveStudentReportHistory(studentIdentifier: string, reports: StudentAssessmentReport[]): void {
   if (!studentIdentifier) return;
-  try {
-    const key = getStorageKey(studentIdentifier);
-    localStorage.setItem(key, JSON.stringify(reports));
-  } catch (e) {
-    console.warn('Failed to save report history:', e);
-  }
+  const key = getStorageKey(studentIdentifier);
+  inMemoryReportHistory.set(key, reports);
 }
 
 export function addReportToStudentHistory(report: StudentAssessmentReport): StudentAssessmentReport[] {
@@ -193,7 +181,7 @@ export function addReportToStudentHistory(report: StudentAssessmentReport): Stud
       (r.topic && report.topic && r.topic === report.topic)
   );
 
-  // CRITICAL: Never overwrite an existing non-zero report with a 0-score fallback report on page refresh!
+  // Never overwrite an existing non-zero report with a 0-score fallback report on page refresh
   if (existingIndex >= 0) {
     const prevReport = existing[existingIndex];
     if ((prevReport.overallScore || 0) > 0 && (report.overallScore || 0) <= 0) {
@@ -215,13 +203,8 @@ export function addReportToStudentHistory(report: StudentAssessmentReport): Stud
     saveStudentReportHistory(k, updated);
   }
 
-  if ((report.overallScore || 0) > 0 && typeof window !== 'undefined') {
-    try {
-      localStorage.setItem('erus_active_report_v1', JSON.stringify(report));
-      if (report.sessionId) {
-        localStorage.setItem(`erus_slot_report_${report.sessionId}`, JSON.stringify(report));
-      }
-    } catch {}
+  if ((report.overallScore || 0) > 0) {
+    inMemoryActiveReport = report;
   }
 
   return updated;

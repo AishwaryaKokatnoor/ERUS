@@ -131,15 +131,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // a real participant is speaking, so it is disabled for live GDs.
   const [autoSimulatePeers, setAutoSimulatePeers] = useState(false);
   const [invitedStudentPrompt, setInvitedStudentPrompt] = useState<{ student: Student; reason: string; promptText?: string } | null>(null);
-  const [currentLayout, setCurrentLayout] = useState<GDRoomLayoutType>(() => {
-    try {
-      const saved = localStorage.getItem('erus_gd_room_layout');
-      if (saved && ['round_table', 'speaker_middle', 'classroom'].includes(saved)) {
-        return saved as GDRoomLayoutType;
-      }
-    } catch {}
-    return session.roomLayout || 'round_table';
-  });
+  const [currentLayout, setCurrentLayout] = useState<GDRoomLayoutType>(session.roomLayout || 'round_table');
 
   const hasInitiatedOpeningRef = useRef<boolean>(false);
   const isTransitioningTurnRef = useRef<boolean>(false);
@@ -248,12 +240,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   useEffect(() => {
     if (session.roomLayout && session.roomLayout !== currentLayout) {
-      try {
-        const saved = localStorage.getItem('erus_gd_room_layout');
-        if (saved && saved !== session.roomLayout) {
-          return;
-        }
-      } catch {}
       setCurrentLayout(session.roomLayout);
     }
   }, [session.roomLayout, currentLayout]);
@@ -269,9 +255,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   const handleLayoutChange = (newLayout: GDRoomLayoutType) => {
     setCurrentLayout(newLayout);
-    try {
-      localStorage.setItem('erus_gd_room_layout', newLayout);
-    } catch {}
     setSession((prev) => ({ ...prev, roomLayout: newLayout }));
     if (onUpdateLayout) {
       onUpdateLayout(newLayout);

@@ -79,11 +79,6 @@ export async function uploadGDRecording(
     throw new Error(data.error || `Failed to upload recording (HTTP ${res.status})`);
   }
 
-  if (data.recordingUrl && typeof window !== 'undefined') {
-    try {
-      localStorage.setItem(`erus_recording_${slotId}`, data.recordingUrl);
-    } catch {}
-  }
 
   return data;
 }

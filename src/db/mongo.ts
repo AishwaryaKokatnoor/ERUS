@@ -463,6 +463,43 @@ export const GDBookingModel: Model<IGDBooking> =
   mongoose.models.GDBooking || mongoose.model<IGDBooking>('GDBooking', GDBookingSchema);
 
 // =========================================================================
+// 7. SYSTEM STATE & GLOBAL CONFIGURATION (MongoDB Persistence)
+// =========================================================================
+export interface ISystemState extends Document {
+  key: string; // 'global'
+  deletedSlotIds: string[];
+  slotsInitializedColleges: Record<string, boolean>;
+  studentBookings: Record<string, string>;
+  studentTopicBookings: Record<string, Record<string, string>>;
+  recordings: Record<string, any>;
+  systemSettings: {
+    dailyUserLimit: number;
+    maxConcurrentUsers: number;
+    enforceDailyLimit: boolean;
+    lastResetDate: string;
+    activeUsersToday: string[];
+    updatedAt: string;
+  };
+  updatedAt: Date;
+}
+
+const SystemStateSchema = new Schema<ISystemState>(
+  {
+    key: { type: String, required: true, unique: true, default: 'global', index: true },
+    deletedSlotIds: { type: [String], default: [] },
+    slotsInitializedColleges: { type: Schema.Types.Mixed, default: {} },
+    studentBookings: { type: Schema.Types.Mixed, default: {} },
+    studentTopicBookings: { type: Schema.Types.Mixed, default: {} },
+    recordings: { type: Schema.Types.Mixed, default: {} },
+    systemSettings: { type: Schema.Types.Mixed, default: {} },
+  },
+  { timestamps: true, collection: 'system_state', autoIndex: false }
+);
+
+export const SystemStateModel: Model<ISystemState> =
+  mongoose.models.SystemState || mongoose.model<ISystemState>('SystemState', SystemStateSchema);
+
+// =========================================================================
 // INITIALIZATION: CREATE TABLES, SUB-TABLES & SEED AUTHORITATIVE DATA
 // =========================================================================
 export async function initMongoDBTablesAndSubTables(): Promise<void> {
@@ -480,6 +517,7 @@ export async function initMongoDBTablesAndSubTables(): Promise<void> {
   console.log('[MongoDB] 4. Sub-Table:     gd_transcripts (Child of gd_sessions)');
   console.log('[MongoDB] 5. Sub-Table:     assessment_reports (Child of gd_sessions)');
   console.log('[MongoDB] 6. Sub-Table:     gd_bookings (Child of gd_sessions & users)');
+  console.log('[MongoDB] 7. System Table:  system_state (Global settings & bookings)');
   console.log('[MongoDB] ==========================================\n');
 
   try {

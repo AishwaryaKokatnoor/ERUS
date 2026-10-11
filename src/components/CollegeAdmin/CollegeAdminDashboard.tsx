@@ -57,7 +57,9 @@ import {
   deleteCollegeSlot,
   dispatchCredentials,
   allotSlotTopicAndFaculty,
-  generateCollegeSlots
+  generateCollegeSlots,
+  getDeletedSlotIds,
+  markSlotDeletedLocally
 } from '../../utils/authApi';
 import { formatSlotDate } from '../../utils/studentBooking';
 import { SlotStudentReportsView } from '../AssessmentReport/SlotStudentReportsView';
@@ -171,14 +173,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
   // Slots State
   const [slots, setSlots] = useState<any[]>([]);
   const [hasLoadedSlots, setHasLoadedSlots] = useState(false);
-  const [deletedSlotIds, setDeletedSlotIds] = useState<Set<string>>(() => {
-    try {
-      const raw = localStorage.getItem('erus_deleted_slot_ids');
-      return raw ? new Set(JSON.parse(raw)) : new Set();
-    } catch {
-      return new Set();
-    }
-  });
+  const [deletedSlotIds, setDeletedSlotIds] = useState<Set<string>>(() => getDeletedSlotIds());
   const [isScheduleSlotOpen, setIsScheduleSlotOpen] = useState(false);
 
   // Authoritative college slots: once loaded from backend, use slots directly (even if 0 remain after deletion)
@@ -193,13 +188,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
   const displaySlots = allRawSlots
     .filter((s) => {
       if (!s || !s.id || deletedSlotIds.has(s.id) || seenSlotIds.has(s.id)) return false;
-      try {
-        const rawDel = localStorage.getItem('erus_deleted_slot_ids');
-        if (rawDel) {
-          const parsed = JSON.parse(rawDel);
-          if (Array.isArray(parsed) && parsed.includes(s.id)) return false;
-        }
-      } catch {}
+      
       seenSlotIds.add(s.id);
       return true;
     })
@@ -325,11 +314,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
         }
       }
       if (slotData) {
-        let deletedIds = new Set<string>();
-        try {
-          const rawDel = localStorage.getItem('erus_deleted_slot_ids');
-          if (rawDel) deletedIds = new Set(JSON.parse(rawDel));
-        } catch {}
+        const deletedIds = getDeletedSlotIds();
         setSlots(slotData.filter((s: any) => !deletedIds.has(s.id) && !deletedSlotIds.has(s.id)));
         setHasLoadedSlots(true);
       }
@@ -819,14 +804,9 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
     );
     if (!confirmed) return;
 
-    // Immediately remove from local state and persist to localStorage so it never comes back
-    setDeletedSlotIds((prev) => {
-      const next = new Set([...prev, slot.id]);
-      try {
-        localStorage.setItem('erus_deleted_slot_ids', JSON.stringify(Array.from(next)));
-      } catch {}
-      return next;
-    });
+    // Immediately remove from local state
+    markSlotDeletedLocally(slot.id);
+    setDeletedSlotIds((prev) => new Set([...prev, slot.id]));
 
     setSlots((prev) => prev.filter((s) => s.id !== slot.id));
     setStats((prev) => ({

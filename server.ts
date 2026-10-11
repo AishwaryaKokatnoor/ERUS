@@ -25,6 +25,7 @@ import {
   TranscriptEntryModel,
   AssessmentReportModel,
   GDBookingModel,
+  SystemStateModel,
 } from './src/db/mongo.ts';
 import { sendCredentialsEmail, sendPasswordResetOtpEmail } from './src/services/mailer.ts';
 
@@ -268,145 +269,31 @@ function recordUserActivity(user: { id: string; name?: string; email?: string; r
 }
 
 function loadPersistentState() {
+  // Local file storage (.erus_backend_state.json) is disabled; all state is persisted in MongoDB.
   try {
     if (fs.existsSync(PERSIST_FILE)) {
-      const raw = fs.readFileSync(PERSIST_FILE, 'utf-8');
-      const data = JSON.parse(raw);
-      if (data && typeof data === 'object') {
-        const dummyCollegeCodes = ['DIT', 'IITB'];
-        const dummyUserIds = ['ca-1', 'fac-1', 'fac-2', 's1', 's2', 's3'];
-
-        if (Array.isArray(data.deletedSlotIds)) {
-          persistentState.deletedSlotIds = Array.from(new Set(data.deletedSlotIds.filter(Boolean)));
-        }
-        if (data.slotsInitializedColleges && typeof data.slotsInitializedColleges === 'object') {
-          persistentState.slotsInitializedColleges = { ...data.slotsInitializedColleges };
-        }
-        const deletedSet = new Set(persistentState.deletedSlotIds);
-
-        if (Array.isArray(data.colleges)) {
-          persistentState.colleges = data.colleges.filter(
-            (c: any) => !dummyCollegeCodes.includes(c?.code) && !['col-1', 'col-2'].includes(c?.id)
-          );
-        }
-        const validCollegeCodes = new Set(
-          persistentState.colleges.map((c: any) => (c?.code || '').trim().toUpperCase()).filter(Boolean)
-        );
-
-        if (data.students && typeof data.students === 'object') {
-          persistentState.students = {};
-          for (const [k, v] of Object.entries(data.students)) {
-            const kCode = k.trim().toUpperCase();
-            if (validCollegeCodes.has(kCode) && Array.isArray(v)) {
-              persistentState.students[kCode] = (v as any[]).filter(
-                (s: any) => !dummyUserIds.includes(s?.id)
-              );
-            }
-          }
-        }
-        if (data.faculty && typeof data.faculty === 'object') {
-          persistentState.faculty = {};
-          for (const [k, v] of Object.entries(data.faculty)) {
-            const kCode = k.trim().toUpperCase();
-            if (validCollegeCodes.has(kCode) && Array.isArray(v)) {
-              persistentState.faculty[kCode] = (v as any[]).filter(
-                (f: any) => !dummyUserIds.includes(f?.id)
-              );
-            }
-          }
-        }
-        if (data.slots && typeof data.slots === 'object') {
-          persistentState.slots = {};
-          for (const [k, v] of Object.entries(data.slots)) {
-            const kCode = k.trim().toUpperCase();
-            if (validCollegeCodes.has(kCode) && Array.isArray(v)) {
-              persistentState.slotsInitializedColleges[kCode] = true;
-              const registeredStudentIds = new Set(
-                (persistentState.students[kCode] || []).map((s: any) => String(s.id || '').toLowerCase())
-              );
-              const registeredStudentEmails = new Set(
-                (persistentState.students[kCode] || []).map((s: any) => String(s.email || '').toLowerCase())
-              );
-              persistentState.slots[kCode] = (v as any[])
-                .filter((slot: any) => slot?.id && !deletedSet.has(slot.id) && !['slot-dit-001', 'session-101', 'slot-teachers-1'].includes(slot?.id))
-                .map((slot: any) => {
-                  const cleanedStudents = (slot.students || []).filter((st: any) => {
-                    if (!st) return false;
-                    if (st.isUser) return true;
-                    const stId = String(st.id || '').toLowerCase();
-                    const stEmail = String(st.email || '').toLowerCase();
-                    return registeredStudentIds.has(stId) || registeredStudentEmails.has(stEmail);
-                  });
-                  return {
-                    ...slot,
-                    collegeCode: kCode,
-                    students: cleanedStudents,
-                    enrolledCount: cleanedStudents.length,
-                  };
-                });
-            }
-          }
-        }
-        if (Array.isArray(data.users)) {
-          const filteredUsers = data.users.filter(
-            (u: any) => {
-              if (dummyUserIds.includes(u?.id)) return false;
-              if (
-                u?.email === 'admin@dit.edu.in' ||
-                u?.email === 'sunita.rao@dit.edu.in' ||
-                u?.email === 'rajesh.verma@dit.edu.in' ||
-                u?.email === 'rahul.kumar@dit.edu.in' ||
-                u?.email === 'neha.gupta@dit.edu.in' ||
-                u?.email === 'aditya.singh@dit.edu.in'
-              ) return false;
-              if (u?.role === 'super_admin' || u?.email === 'superadmin@erus.ai') return true;
-              const uCode = (u?.collegeCode || '').trim().toUpperCase();
-              return validCollegeCodes.has(uCode);
-            }
-          );
-          if (!filteredUsers.some((u: any) => u.role === 'super_admin' || u.email === 'superadmin@erus.ai')) {
-            filteredUsers.push(...DEFAULT_USERS);
-          }
-          persistentState.users = filteredUsers;
-        }
-        if (data.studentBookings && typeof data.studentBookings === 'object') {
-          const bookings = { ...data.studentBookings };
-          delete bookings['s1'];
-          persistentState.studentBookings = bookings;
-        }
-        if (data.studentTopicBookings && typeof data.studentTopicBookings === 'object') {
-          persistentState.studentTopicBookings = data.studentTopicBookings;
-        }
-        if (data.recordings && typeof data.recordings === 'object') {
-          persistentState.recordings = { ...data.recordings };
-        }
-        if (data.reports && typeof data.reports === 'object') {
-          (persistentState as any).reports = { ...data.reports };
-        }
-        if (data.systemSettings && typeof data.systemSettings === 'object') {
-          persistentState.systemSettings = {
-            dailyUserLimit: typeof data.systemSettings.dailyUserLimit === 'number' ? data.systemSettings.dailyUserLimit : 100,
-            maxConcurrentUsers: typeof data.systemSettings.maxConcurrentUsers === 'number' ? data.systemSettings.maxConcurrentUsers : 50,
-            enforceDailyLimit: typeof data.systemSettings.enforceDailyLimit === 'boolean' ? data.systemSettings.enforceDailyLimit : true,
-            lastResetDate: data.systemSettings.lastResetDate || new Date().toISOString().slice(0, 10),
-            activeUsersToday: Array.isArray(data.systemSettings.activeUsersToday) ? data.systemSettings.activeUsersToday : [],
-            updatedAt: data.systemSettings.updatedAt || new Date().toISOString(),
-          };
-          checkAndResetDailyStats();
-        }
-      }
+      fs.unlinkSync(PERSIST_FILE);
     }
-  } catch (err) {
-    console.warn('[Backend State] Could not read persistent state file:', err);
-  }
+  } catch {}
 }
 
 function savePersistentState() {
-  try {
-    fs.writeFileSync(PERSIST_FILE, JSON.stringify(persistentState, null, 2), 'utf-8');
-  } catch (err) {
-    console.warn('[Backend State] Could not write persistent state file:', err);
-  }
+  if (!isMongoConnected()) return;
+  SystemStateModel.findOneAndUpdate(
+    { key: 'global' },
+    {
+      key: 'global',
+      deletedSlotIds: persistentState.deletedSlotIds || [],
+      slotsInitializedColleges: persistentState.slotsInitializedColleges || {},
+      studentBookings: persistentState.studentBookings || {},
+      studentTopicBookings: persistentState.studentTopicBookings || {},
+      recordings: persistentState.recordings || {},
+      systemSettings: persistentState.systemSettings,
+    },
+    { upsert: true, returnDocument: 'after' }
+  ).catch((err: any) => {
+    console.warn('[MongoDB] Could not save global system state:', err.message);
+  });
 }
 
 loadPersistentState();
@@ -431,22 +318,47 @@ function assignUniqueSeats<T extends { seatNumber?: number; email?: string }>(it
 async function syncMongoDBWithPersistentState() {
   if (!isMongoConnected()) return;
   try {
-    const hasLocalColleges = fs.existsSync(PERSIST_FILE) && persistentState.colleges.length > 0;
-    // 1. Colleges Sync: Read from MongoDB & merge with persistent state
+    // 0. Hydrate Global System State from MongoDB (system_state collection)
+    const sysDoc = await SystemStateModel.findOne({ key: 'global' });
+    if (sysDoc) {
+      if (Array.isArray(sysDoc.deletedSlotIds)) {
+        persistentState.deletedSlotIds = Array.from(new Set(sysDoc.deletedSlotIds.filter(Boolean)));
+      }
+      if (sysDoc.slotsInitializedColleges && typeof sysDoc.slotsInitializedColleges === 'object') {
+        persistentState.slotsInitializedColleges = { ...sysDoc.slotsInitializedColleges };
+      }
+      if (sysDoc.studentBookings && typeof sysDoc.studentBookings === 'object') {
+        persistentState.studentBookings = { ...sysDoc.studentBookings };
+      }
+      if (sysDoc.studentTopicBookings && typeof sysDoc.studentTopicBookings === 'object') {
+        persistentState.studentTopicBookings = { ...sysDoc.studentTopicBookings };
+      }
+      if (sysDoc.recordings && typeof sysDoc.recordings === 'object') {
+        persistentState.recordings = { ...sysDoc.recordings };
+      }
+      if (sysDoc.systemSettings && typeof sysDoc.systemSettings === 'object') {
+        persistentState.systemSettings = {
+          dailyUserLimit: typeof sysDoc.systemSettings.dailyUserLimit === 'number' ? sysDoc.systemSettings.dailyUserLimit : 100,
+          maxConcurrentUsers: typeof sysDoc.systemSettings.maxConcurrentUsers === 'number' ? sysDoc.systemSettings.maxConcurrentUsers : 50,
+          enforceDailyLimit: typeof sysDoc.systemSettings.enforceDailyLimit === 'boolean' ? sysDoc.systemSettings.enforceDailyLimit : true,
+          lastResetDate: sysDoc.systemSettings.lastResetDate || new Date().toISOString().slice(0, 10),
+          activeUsersToday: Array.isArray(sysDoc.systemSettings.activeUsersToday) ? sysDoc.systemSettings.activeUsersToday : [],
+          updatedAt: sysDoc.systemSettings.updatedAt || new Date().toISOString(),
+        };
+        checkAndResetDailyStats();
+      }
+    }
+
+    // 1. Colleges Sync: Read from MongoDB as sole authoritative store
+    persistentState.colleges = [];
     const dbColleges = await CollegeModel.find();
     if (dbColleges.length > 0) {
       for (const c of dbColleges) {
-        if (c.code === 'VIT2002') {
+        if (c.code === 'VIT2002' || ['DIT', 'IITB'].includes(c.code)) {
           await CollegeModel.deleteOne({ _id: c._id }).catch(() => null);
           continue;
         }
         const normCode = normalizeCollegeCode(c.code);
-        const existingIdx = persistentState.colleges.findIndex((col) => normalizeCollegeCode(col.code) === normCode);
-        if (hasLocalColleges && existingIdx < 0) {
-          // College was deleted in local state; remove stale record from MongoDB
-          await CollegeModel.deleteOne({ _id: c._id }).catch(() => null);
-          continue;
-        }
         const mappedCol: BackendCollege = {
           id: c.id,
           name: normCode === 'BMSIT' ? 'BMS Institute of Technology' : c.name,
@@ -464,48 +376,26 @@ async function syncMongoDBWithPersistentState() {
           adminPassword: c.adminPassword || '',
           createdAt: c.createdAt ? new Date(c.createdAt).toISOString() : new Date().toISOString(),
         };
+        const existingIdx = persistentState.colleges.findIndex((col) => normalizeCollegeCode(col.code) === normCode);
         if (existingIdx >= 0) {
-          const existingCol = persistentState.colleges[existingIdx];
-          const existingTime = new Date(existingCol.createdAt || 0).getTime();
-          const dbTime = new Date(mappedCol.createdAt || 0).getTime();
-          if (dbTime > existingTime) {
-            persistentState.colleges[existingIdx] = mappedCol;
-          }
+          persistentState.colleges[existingIdx] = mappedCol;
         } else {
           persistentState.colleges.push(mappedCol);
         }
       }
     }
-    // Clean up duplicate BMSIT2002 colleges in persistentState.colleges
-    persistentState.colleges = persistentState.colleges.filter(
-      (c, idx, self) => idx === self.findIndex((o) => normalizeCollegeCode(o.code) === normalizeCollegeCode(c.code))
-    ).map(c => ({ ...c, code: normalizeCollegeCode(c.code) }));
-
-    // Upsert local colleges into MongoDB
-    for (const col of persistentState.colleges) {
-      await persistCollegeToMongoDB(col);
-    }
 
     const activeCollegeSet = new Set(persistentState.colleges.map((c) => normalizeCollegeCode(c.code)));
-    const hasLocalUsers = fs.existsSync(PERSIST_FILE) && persistentState.users.length > 1;
 
-    // 2. Users Sync: Read all users from MongoDB
+    // 2. Users Sync: Read all users from MongoDB as sole authoritative store
+    persistentState.users = [...DEFAULT_USERS];
+    persistentState.students = {};
+    persistentState.faculty = {};
     const dbUsers = await UserModel.find();
     if (dbUsers.length > 0) {
       for (const u of dbUsers) {
         const uColCode = normalizeCollegeCode(u.collegeCode);
         if (u.role !== 'super_admin' && (!uColCode || !activeCollegeSet.has(uColCode))) {
-          await UserModel.deleteOne({ _id: u._id }).catch(() => null);
-          continue;
-        }
-        const existingIdx = persistentState.users.findIndex(
-          (pu) => pu.email.toLowerCase() === u.email.toLowerCase()
-        );
-        const inLocalRoster =
-          existingIdx >= 0 ||
-          (persistentState.students[uColCode] || []).some((s) => s.email?.toLowerCase() === u.email.toLowerCase()) ||
-          (persistentState.faculty[uColCode] || []).some((f) => f.email?.toLowerCase() === u.email.toLowerCase());
-        if (hasLocalUsers && !inLocalRoster && u.role !== 'super_admin') {
           await UserModel.deleteOne({ _id: u._id }).catch(() => null);
           continue;
         }
@@ -527,71 +417,18 @@ async function syncMongoDBWithPersistentState() {
           designation: u.facultyProfile?.designation,
           adminId: u.collegeAdminProfile?.adminId,
         };
+        const existingIdx = persistentState.users.findIndex(
+          (pu) => pu.email.toLowerCase() === u.email.toLowerCase()
+        );
         if (existingIdx >= 0) {
-          persistentState.users[existingIdx] = { ...mappedUser, ...persistentState.users[existingIdx] };
+          persistentState.users[existingIdx] = mappedUser;
         } else {
           persistentState.users.push(mappedUser);
         }
       }
     }
 
-    // Ensure any students or faculty from persistentState.students & persistentState.faculty exist in persistentState.users
-    for (const [colCode, stuList] of Object.entries(persistentState.students || {})) {
-      const normCode = normalizeCollegeCode(colCode);
-      for (const s of (stuList as any[])) {
-        const uIdx = persistentState.users.findIndex((u) => u.email.toLowerCase() === s.email.toLowerCase());
-        const userObj: StoredAuthUser = {
-          id: s.id || `stu-${Date.now()}`,
-          name: s.name,
-          email: s.email,
-          role: 'student',
-          password: s.password || s.defaultPassword || 'password123',
-          college: normCode === 'BMSIT' ? 'BMS Institute of Technology' : (s.college || normCode),
-          collegeCode: normCode,
-          course: s.course,
-          batch: s.batch,
-          seatNumber: s.seatNumber,
-          studentId: s.studentId,
-        };
-        if (uIdx < 0) {
-          persistentState.users.push(userObj);
-        } else {
-          persistentState.users[uIdx].collegeCode = normCode;
-          if (s.seatNumber) persistentState.users[uIdx].seatNumber = s.seatNumber;
-        }
-      }
-    }
-    for (const [colCode, facList] of Object.entries(persistentState.faculty || {})) {
-      const normCode = normalizeCollegeCode(colCode);
-      for (const f of (facList as any[])) {
-        const uIdx = persistentState.users.findIndex((u) => u.email.toLowerCase() === f.email.toLowerCase());
-        const userObj: StoredAuthUser = {
-          id: f.id || `fac-${Date.now()}`,
-          name: f.name,
-          email: f.email,
-          role: 'faculty',
-          password: f.password || f.defaultPassword || 'password123',
-          college: normCode === 'BMSIT' ? 'BMS Institute of Technology' : (f.college || normCode),
-          collegeCode: normCode,
-          department: f.department,
-          designation: f.designation,
-          facultyId: f.facultyId,
-        };
-        if (uIdx < 0) {
-          persistentState.users.push(userObj);
-        } else {
-          persistentState.users[uIdx].collegeCode = normCode;
-        }
-      }
-    }
-
-    // Normalize all user college codes
-    for (const u of persistentState.users) {
-      if (u.collegeCode) u.collegeCode = normalizeCollegeCode(u.collegeCode);
-      await persistUserToMongoDB(u);
-    }
-
-    // Hydrate students and faculty lists per college
+    // Hydrate students and faculty lists per college from MongoDB users
     for (const col of persistentState.colleges) {
       const normCode = normalizeCollegeCode(col.code);
       const colStudents = persistentState.users
@@ -608,21 +445,10 @@ async function syncMongoDBWithPersistentState() {
           collegeCode: normCode,
           password: u.password,
         }));
-      if (colStudents.length > 0) {
-        const existing = persistentState.students[normCode] || [];
-        for (const cs of colStudents) {
-          const idx = existing.findIndex((e) => e.email.toLowerCase() === cs.email.toLowerCase());
-          if (idx >= 0) {
-            existing[idx] = { ...existing[idx], ...cs };
-          } else {
-            existing.push(cs);
-          }
-        }
-        persistentState.students[normCode] = assignUniqueSeats(existing);
-        for (const st of persistentState.students[normCode]) {
-          const u = persistentState.users.find(u => u.email.toLowerCase() === st.email.toLowerCase());
-          if (u) u.seatNumber = st.seatNumber;
-        }
+      persistentState.students[normCode] = assignUniqueSeats(colStudents);
+      for (const st of persistentState.students[normCode]) {
+        const u = persistentState.users.find((u) => u.email.toLowerCase() === st.email.toLowerCase());
+        if (u) u.seatNumber = st.seatNumber;
       }
 
       const colFaculty = persistentState.users
@@ -639,21 +465,23 @@ async function syncMongoDBWithPersistentState() {
           assignedSlotsCount: 0,
           password: u.password,
         }));
-      if (colFaculty.length > 0) {
-        const existing = persistentState.faculty[normCode] || [];
-        for (const cf of colFaculty) {
-          const idx = existing.findIndex((e) => e.email.toLowerCase() === cf.email.toLowerCase());
-          if (idx >= 0) {
-            existing[idx] = { ...existing[idx], ...cf };
-          } else {
-            existing.push(cf);
-          }
+      persistentState.faculty[normCode] = colFaculty;
+    }
+
+    // 3. Hydrate Bookings (Sub-Table: gd_bookings)
+    const dbBookings = await GDBookingModel.find({ status: { $ne: 'CANCELLED' } });
+    for (const b of dbBookings) {
+      persistentState.studentBookings[b.studentId] = b.sessionId;
+      if (b.topic) {
+        if (!persistentState.studentTopicBookings[b.studentId]) {
+          persistentState.studentTopicBookings[b.studentId] = {};
         }
-        persistentState.faculty[normCode] = existing;
+        persistentState.studentTopicBookings[b.studentId][b.topic] = b.sessionId;
       }
     }
 
-    // Hydrate Slots (Parent Table: gd_sessions) from MongoDB
+    // 4. Hydrate Slots (Parent Table: gd_sessions) from MongoDB
+    persistentState.slots = {};
     const deletedSet = new Set(persistentState.deletedSlotIds || []);
     if (deletedSet.size > 0) {
       await GDSessionModel.deleteMany({ id: { $in: Array.from(deletedSet) } }).catch(() => null);
@@ -663,49 +491,35 @@ async function syncMongoDBWithPersistentState() {
       for (const s of dbSessions) {
         if (!s?.id || deletedSet.has(s.id)) continue;
         const colCode = normalizeCollegeCode(s.collegeCode);
-        if (!colCode || !persistentState.colleges.some((c) => normalizeCollegeCode(c.code) === colCode)) {
+        if (!colCode || !activeCollegeSet.has(colCode)) {
           await GDSessionModel.deleteOne({ id: s.id }).catch(() => null);
           continue;
         }
-        const collegeAlreadyInitialized =
-          Boolean(persistentState.slotsInitializedColleges?.[colCode]) ||
-          (Array.isArray(persistentState.slots[colCode]) && persistentState.slots[colCode].length > 0);
         if (!persistentState.slots[colCode]) persistentState.slots[colCode] = [];
-        const existingSlot = persistentState.slots[colCode]?.find((slot) => slot.id === s.id);
-        // Never resurrect orphaned historical MongoDB slots if local state already initialized this college's slots
-        if (collegeAlreadyInitialized && !existingSlot) {
-          if (!persistentState.deletedSlotIds.includes(s.id)) {
-            persistentState.deletedSlotIds.push(s.id);
-          }
-          deletedSet.add(s.id);
-          await GDSessionModel.deleteOne({ id: s.id }).catch(() => null);
-          continue;
-        }
+        persistentState.slotsInitializedColleges[colCode] = true;
         const savedRec = persistentState.recordings?.[s.id];
-        const rawStudents = (s as any).students && (s as any).students.length > 0
-          ? (s as any).students
-          : existingSlot?.students;
-        const resolvedRecordingUrl = (s as any).recordingUrl || existingSlot?.recordingUrl || savedRec?.recordingUrl || '';
-        const resolvedRecordingDuration = (s as any).recordingDurationSeconds || existingSlot?.recordingDurationSeconds || savedRec?.durationSeconds || 0;
-        const resolvedRecordingSize = (s as any).recordingFileSize || existingSlot?.recordingFileSize || savedRec?.fileSize || 0;
-        const resolvedRecordedAt = (s as any).recordedAt || existingSlot?.recordedAt || savedRec?.recordedAt || undefined;
+        const rawStudents = (s as any).students || [];
+        const resolvedRecordingUrl = (s as any).recordingUrl || savedRec?.recordingUrl || '';
+        const resolvedRecordingDuration = (s as any).recordingDurationSeconds || savedRec?.durationSeconds || 0;
+        const resolvedRecordingSize = (s as any).recordingFileSize || savedRec?.fileSize || 0;
+        const resolvedRecordedAt = (s as any).recordedAt ? new Date((s as any).recordedAt).toISOString() : savedRec?.recordedAt || undefined;
         let slotItem: BackendCollegeSlotItem = {
           id: s.id,
-          slotName: existingSlot?.slotName || s.slotName,
-          topic: existingSlot?.topic ?? s.topic,
-          description: existingSlot?.description ?? s.description ?? '',
-          slotTiming: existingSlot?.slotTiming || s.slotTiming || '10:00 AM - 10:30 AM',
-          slotDate: existingSlot?.slotDate || s.slotDate || 'Today',
-          status: existingSlot?.status || s.status,
-          durationMinutes: existingSlot?.durationMinutes || s.durationMinutes,
-          enrolledCount: rawStudents && rawStudents.length > 0 ? rawStudents.length : s.enrolledCount,
-          maxCapacity: existingSlot?.maxCapacity || s.maxCapacity,
-          assignedFacultyId: existingSlot?.assignedFacultyId ?? s.assignedFacultyId,
-          assignedFacultyName: existingSlot?.assignedFacultyName ?? s.assignedFacultyName,
-          assignedFacultyEmail: existingSlot?.assignedFacultyEmail ?? s.assignedFacultyEmail,
-          assignedFacultyDept: existingSlot?.assignedFacultyDept ?? s.assignedFacultyDept,
+          slotName: s.slotName,
+          topic: s.topic,
+          description: s.description ?? '',
+          slotTiming: s.slotTiming || '10:00 AM - 10:30 AM',
+          slotDate: s.slotDate || 'Today',
+          status: s.status,
+          durationMinutes: s.durationMinutes,
+          enrolledCount: rawStudents.length > 0 ? rawStudents.length : s.enrolledCount,
+          maxCapacity: s.maxCapacity,
+          assignedFacultyId: s.assignedFacultyId,
+          assignedFacultyName: s.assignedFacultyName,
+          assignedFacultyEmail: s.assignedFacultyEmail,
+          assignedFacultyDept: s.assignedFacultyDept,
           collegeCode: colCode,
-          createdAt: existingSlot?.createdAt || (s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString()),
+          createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString(),
           students: rawStudents,
           recordingUrl: resolvedRecordingUrl || undefined,
           recordingDurationSeconds: resolvedRecordingDuration || undefined,
@@ -721,7 +535,7 @@ async function syncMongoDBWithPersistentState() {
             fileSize: resolvedRecordingSize,
             mimeType: savedRec?.mimeType || 'video/webm',
             recordedAt: resolvedRecordedAt || new Date().toISOString(),
-          };
+          } as any;
         }
         slotItem = ensureSlotParticipants(slotItem, colCode);
         const existingSlotIdx = persistentState.slots[colCode].findIndex((slot) => slot.id === s.id);
@@ -733,22 +547,7 @@ async function syncMongoDBWithPersistentState() {
       }
     }
 
-    // Persist all slots to MongoDB
-    for (const [colCode, slotList] of Object.entries(persistentState.slots)) {
-      for (const s of (slotList as any[])) {
-        if (!s?.id || deletedSet.has(s.id)) continue;
-        s.collegeCode = normalizeCollegeCode(s.collegeCode || colCode);
-        await persistSlotToMongoDB(s);
-      }
-    }
-
-    // Hydrate Bookings (Sub-Table: gd_bookings)
-    const dbBookings = await GDBookingModel.find({ status: { $ne: 'CANCELLED' } });
-    for (const b of dbBookings) {
-      persistentState.studentBookings[b.studentId] = b.sessionId;
-    }
-
-    // Hydrate Assessment Reports (Sub-Table: assessment_reports) — prefer non-zero reports
+    // 5. Hydrate Assessment Reports (Sub-Table: assessment_reports) — prefer non-zero reports
     if (!(persistentState as any).reports) (persistentState as any).reports = {};
     const dbReports = await AssessmentReportModel.find().sort({ overallScore: -1, createdAt: -1 });
     for (const r of dbReports) {
@@ -784,7 +583,7 @@ async function syncMongoDBWithPersistentState() {
         aiRecommendations: r.aiRecommendations || raw.aiRecommendations || [],
         generatedAt: r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString(),
         facultyEndorsement: raw.facultyEndorsement || { endorsed: false },
-        recordingUrl: r.recordingUrl || raw.recordingUrl || '',
+        recordingUrl: (r as any).recordingUrl || raw.recordingUrl || '',
       });
       const keyById = `${rep.sessionId}_${rep.studentId}`;
       const existingById = (persistentState as any).reports[keyById];

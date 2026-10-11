@@ -32,13 +32,10 @@ export function downloadCSVReport(filename: string, headers: string[], rows: (st
   URL.revokeObjectURL(url);
 }
 
+import { getLocalCustomColleges } from './authApi';
+
 function getStoredColleges(): any[] {
-  try {
-    const raw = localStorage.getItem('erus_custom_colleges_v1');
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  return getLocalCustomColleges();
 }
 
 // 1. SUPER ADMIN REPORTS

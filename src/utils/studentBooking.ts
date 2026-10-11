@@ -5,34 +5,34 @@
  * They CAN freely select and book slots on OTHER topics!
  */
 
-const STORAGE_PREFIX_SLOT = 'erus_student_booked_slot_';
-const STORAGE_PREFIX_TOPICS = 'erus_student_booked_topics_';
+// In-memory student booking cache synced with MongoDB via backend API
+const inMemoryStudentBookings = new Map<string, Record<string, string>>();
 
 /**
- * Retrieve map of { [topic: string]: slotId } for a student.
+ * Retrieve map of { [topic: string]: slotId } for a student from MongoDB cache.
  */
 export function getStudentBookedSlotsByTopic(studentIdentifier?: string | null): Record<string, string> {
   if (!studentIdentifier) return {};
-  try {
-    const raw = localStorage.getItem(`${STORAGE_PREFIX_TOPICS}${studentIdentifier}`);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return parsed;
-      }
-    }
+  const current = inMemoryStudentBookings.get(studentIdentifier);
+  if (current) return { ...current };
 
-    // Fallback migration: check legacy single slot
-    const legacy = localStorage.getItem(`${STORAGE_PREFIX_SLOT}${studentIdentifier}`);
-    if (legacy) {
-      return { '__legacy__': legacy };
-    }
+  // Fetch asynchronously from MongoDB in background
+  try {
+    fetch(`/api/student/${encodeURIComponent(studentIdentifier)}/booked-slot`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.topicBookings) {
+          inMemoryStudentBookings.set(studentIdentifier, data.topicBookings);
+        }
+      })
+      .catch(() => {});
   } catch {}
+
   return {};
 }
 
 /**
- * Record a student booking for a specific topic.
+ * Record a student booking for a specific topic (persisted in MongoDB).
  */
 export function setStudentBookedSlotForTopic(
   studentIdentifier: string,
@@ -40,16 +40,12 @@ export function setStudentBookedSlotForTopic(
   slotId: string
 ): void {
   if (!studentIdentifier || !topic || !slotId) return;
-  try {
-    const current = getStudentBookedSlotsByTopic(studentIdentifier);
-    current[topic] = slotId;
-    delete current['__legacy__'];
-    localStorage.setItem(`${STORAGE_PREFIX_TOPICS}${studentIdentifier}`, JSON.stringify(current));
-    // Keep legacy single slot updated with latest booked slot for backwards compatibility
-    localStorage.setItem(`${STORAGE_PREFIX_SLOT}${studentIdentifier}`, slotId);
-  } catch {}
+  const current = inMemoryStudentBookings.get(studentIdentifier) || {};
+  current[topic] = slotId;
+  delete current['__legacy__'];
+  inMemoryStudentBookings.set(studentIdentifier, { ...current });
 
-  // Sync with backend API
+  // Sync directly with MongoDB via backend API
   try {
     fetch('/api/student/book-slot', {
       method: 'POST',
@@ -60,7 +56,7 @@ export function setStudentBookedSlotForTopic(
 }
 
 /**
- * Revive / release a booked slot for a specific topic.
+ * Revive / release a booked slot for a specific topic (updated in MongoDB).
  */
 export function clearStudentBookedSlotForTopic(
   studentIdentifier: string,
@@ -68,30 +64,21 @@ export function clearStudentBookedSlotForTopic(
   slotId?: string
 ): void {
   if (!studentIdentifier) return;
-  try {
-    const current = getStudentBookedSlotsByTopic(studentIdentifier);
-    if (topic && current[topic]) {
-      delete current[topic];
-    } else if (slotId) {
-      for (const [t, sId] of Object.entries(current)) {
-        if (sId === slotId) {
-          delete current[t];
-          break;
-        }
+  const current = inMemoryStudentBookings.get(studentIdentifier) || {};
+  if (topic && current[topic]) {
+    delete current[topic];
+  } else if (slotId) {
+    for (const [t, sId] of Object.entries(current)) {
+      if (sId === slotId) {
+        delete current[t];
+        break;
       }
     }
-    delete current['__legacy__'];
-    localStorage.setItem(`${STORAGE_PREFIX_TOPICS}${studentIdentifier}`, JSON.stringify(current));
+  }
+  delete current['__legacy__'];
+  inMemoryStudentBookings.set(studentIdentifier, { ...current });
 
-    const remaining = Object.values(current);
-    if (remaining.length > 0) {
-      localStorage.setItem(`${STORAGE_PREFIX_SLOT}${studentIdentifier}`, remaining[0]);
-    } else {
-      localStorage.removeItem(`${STORAGE_PREFIX_SLOT}${studentIdentifier}`);
-    }
-  } catch {}
-
-  // Sync with backend API
+  // Sync with MongoDB via backend API
   try {
     fetch('/api/student/cancel-slot', {
       method: 'POST',
@@ -217,10 +204,7 @@ export function setStudentBookedSlotId(studentIdentifier: string, slotId: string
 
 export function clearStudentBookedSlot(studentIdentifier?: string | null): void {
   if (!studentIdentifier) return;
-  try {
-    localStorage.removeItem(`${STORAGE_PREFIX_TOPICS}${studentIdentifier}`);
-    localStorage.removeItem(`${STORAGE_PREFIX_SLOT}${studentIdentifier}`);
-  } catch {}
+  inMemoryStudentBookings.delete(studentIdentifier);
 }
 
 export function isSlotSelectableForStudent(

@@ -281,7 +281,7 @@ export const SlotStudentReportsView: React.FC<SlotStudentReportsViewProps> = ({
             <div className="flex items-center gap-2 bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 p-1 rounded-xl shadow-2xs flex-wrap">
               <button
                 onClick={async () => {
-                  const cachedUrl = slotId && typeof localStorage !== 'undefined' ? localStorage.getItem(`erus_recording_${slotId}`) : null;
+                  const cachedUrl = null;
                   if (!slot?.recordingUrl && cachedUrl) {
                     setSlot((prev: any) => ({ ...prev, recordingUrl: cachedUrl }));
                   }
@@ -290,7 +290,7 @@ export const SlotStudentReportsView: React.FC<SlotStudentReportsViewProps> = ({
                       const res = await fetch(`/api/sessions/${encodeURIComponent(slotId)}/recording`);
                       const d = await res.json();
                       if (d.success && d.recordingUrl) {
-                        try { localStorage.setItem(`erus_recording_${slotId}`, d.recordingUrl); } catch {}
+                        /* persisted in MongoDB */
                         setSlot((prev: any) => ({ ...prev, recordingUrl: d.recordingUrl }));
                       }
                     } catch {}
@@ -807,7 +807,7 @@ export const SlotStudentReportsView: React.FC<SlotStudentReportsViewProps> = ({
             </div>
 
             {(() => {
-              const cachedUrl = slotId && typeof localStorage !== 'undefined' ? localStorage.getItem(`erus_recording_${slotId}`) : null;
+              const cachedUrl = null;
               const getCleanStr = (v: any): string => {
                 if (typeof v === 'string') return v.trim();
                 if (v && typeof v.recordingUrl === 'string') return v.recordingUrl.trim();

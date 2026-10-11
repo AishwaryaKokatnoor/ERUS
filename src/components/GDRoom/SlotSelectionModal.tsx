@@ -46,8 +46,6 @@ export const SlotSelectionModal: React.FC<SlotSelectionModalProps> = ({
 }) => {
   if (!isOpen) return null;
 
-  const FACULTY_STORAGE_KEY = 'erus_selected_faculty_incharge';
-
   // Build complete list of faculty from institutional master list and any added to available slots
   const facultyList = useMemo(() => {
     const map = new Map<string, { id: string; name: string; dept: string; email: string; avatar?: string }>();
@@ -69,20 +67,13 @@ export const SlotSelectionModal: React.FC<SlotSelectionModalProps> = ({
 
   const currentSlot = availableSlots.find((s) => s.id === currentSlotId);
 
-  // Student's selected faculty in-charge (persisted in localStorage)
+  // Student's selected faculty in-charge
   const [selectedFacultyId, setSelectedFacultyId] = useState<string>(() => {
-    try {
-      const stored = localStorage.getItem(FACULTY_STORAGE_KEY);
-      if (stored) return stored;
-    } catch {}
     return currentSlot?.assignedFacultyId || 'FAC-CSE-102';
   });
 
   const handleSelectFaculty = (facultyId: string) => {
     setSelectedFacultyId(facultyId);
-    try {
-      localStorage.setItem(FACULTY_STORAGE_KEY, facultyId);
-    } catch {}
   };
 
   // Filter slots strictly by selected faculty (or show all if 'ALL' chosen)

@@ -465,25 +465,15 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
     return sameSession && sameTopic;
   };
 
-  // Lookup any saved non-zero report for this student across localStorage caches & student history
+  // Lookup any saved non-zero report for this student across in-memory history
   const findBestSavedStudentReport = (): StudentAssessmentReport | null => {
     if (initialReport && (initialReport.overallScore || 0) > 0 && isMatchingReport(initialReport)) {
       return initialReport;
     }
     try {
-      if (session?.id) {
-        const slotRepRaw = localStorage.getItem(`erus_slot_report_${session.id}`);
-        if (slotRepRaw) {
-          const parsed = JSON.parse(slotRepRaw);
-          if (parsed && (parsed.overallScore || 0) > 0) return parsed;
-        }
-      }
-      const activeRaw = localStorage.getItem('erus_active_report_v1');
-      if (activeRaw) {
-        const parsed = JSON.parse(activeRaw);
-        if (parsed && (parsed.overallScore || 0) > 0 && isMatchingReport(parsed)) {
-          return parsed;
-        }
+      const activeRep = getActiveReport();
+      if (activeRep && (activeRep.overallScore || 0) > 0 && isMatchingReport(activeRep)) {
+        return activeRep;
       }
       const candidateKeys = Array.from(
         new Set(
@@ -508,10 +498,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
         const anyNonZero = hist.find((r) => (r.overallScore || 0) > 0);
         if (anyNonZero) return anyNonZero;
       }
-      if (activeRaw) {
-        const parsed = JSON.parse(activeRaw);
-        if (parsed && (parsed.overallScore || 0) > 0) return parsed;
-      }
+      if (activeRep && (activeRep.overallScore || 0) > 0) return activeRep;
     } catch {}
     return null;
   };
@@ -597,7 +584,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
             if (slotData.success) {
               if (slotData.slot?.recordingUrl) {
                 if (session) session.recordingUrl = slotData.slot.recordingUrl;
-                try { localStorage.setItem(`erus_recording_${session.id}`, slotData.slot.recordingUrl); } catch {}
+                /* persisted in MongoDB */
                 setCurrentReport((prev) => ({ ...prev, recordingUrl: slotData.slot.recordingUrl }));
               }
               if (Array.isArray(slotData.reports)) {
@@ -633,7 +620,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
             const recData = await recRes.json().catch(() => ({}));
             if (recData.success && recData.recordingUrl) {
               if (session) session.recordingUrl = recData.recordingUrl;
-              try { localStorage.setItem(`erus_recording_${targetSlotId}`, recData.recordingUrl); } catch {}
+              /* persisted in MongoDB */
               setCurrentReport((prev) => ({ ...prev, recordingUrl: recData.recordingUrl }));
             }
           } catch {}
@@ -1261,7 +1248,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
           <button
             onClick={async () => {
               const targetId = session?.id || currentReport?.sessionId;
-              const cachedUrl = targetId && typeof localStorage !== 'undefined' ? localStorage.getItem(`erus_recording_${targetId}`) : null;
+              const cachedUrl = null;
               let recUrl = session?.recordingUrl || currentReport?.recordingUrl || cachedUrl;
               if (!recUrl && targetId) {
                 try {
@@ -1270,7 +1257,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
                   if (d.success && d.recordingUrl) {
                     recUrl = d.recordingUrl;
                     if (session) session.recordingUrl = d.recordingUrl;
-                    try { localStorage.setItem(`erus_recording_${targetId}`, d.recordingUrl); } catch {}
+                    /* persisted in MongoDB */
                     setCurrentReport((prev) => ({ ...prev, recordingUrl: d.recordingUrl }));
                   }
                 } catch {}
@@ -1812,7 +1799,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
 
             {(() => {
               const targetId = session?.id || currentReport?.sessionId || '';
-              const cachedUrl = targetId ? (typeof localStorage !== 'undefined' ? localStorage.getItem(`erus_recording_${targetId}`) : null) : null;
+              const cachedUrl = null;
               const getCleanStr = (v: any): string => {
                 if (typeof v === 'string') return v.trim();
                 if (v && typeof v.recordingUrl === 'string') return v.recordingUrl.trim();

@@ -24,27 +24,17 @@ export const MOCK_SUPER_ADMINS: (import('../types/auth').SuperAdminUser & { pass
   },
 ];
 
-const REGISTERED_USERS_KEY = 'erus_registered_users_db';
+const inMemoryRegisteredUsers: (AuthUser & { password: string })[] = [];
 
 export function getRegisteredUsers(): (AuthUser & { password: string })[] {
-  try {
-    const raw = localStorage.getItem(REGISTERED_USERS_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  return [...inMemoryRegisteredUsers];
 }
 
 export function registerNewUser(user: AuthUser, password: string): AuthUser {
-  try {
-    const existing = getRegisteredUsers();
-    // Check if duplicate email
-    const filtered = existing.filter((u) => u.email.toLowerCase() !== user.email.toLowerCase());
-    filtered.push({ ...user, password });
-    localStorage.setItem(REGISTERED_USERS_KEY, JSON.stringify(filtered));
-  } catch (e) {
-    console.warn('Could not persist registration to localStorage:', e);
-  }
+  const existing = inMemoryRegisteredUsers.filter((u) => u.email.toLowerCase() !== user.email.toLowerCase());
+  existing.push({ ...user, password });
+  inMemoryRegisteredUsers.length = 0;
+  inMemoryRegisteredUsers.push(...existing);
   return user;
 }
 
@@ -55,7 +45,7 @@ export function authenticateUser(
 ): AuthUser | null {
   const cleanId = identifier.trim().toLowerCase();
   
-  // 1. First check newly registered accounts in localStorage
+  // 1. First check newly registered accounts in memory
   const registeredUsers = getRegisteredUsers();
   const registeredMatch = registeredUsers.find(
     (u) =>

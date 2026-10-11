@@ -21,6 +21,15 @@ export const getStoredToken = (): string | null => {
   }
 };
 
+export const getStoredUser = (): AuthUser | null => {
+  try {
+    const raw = localStorage.getItem(USER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+
 export const setStoredAuth = (user: AuthUser, token?: string) => {
   try {
     localStorage.setItem(USER_KEY, JSON.stringify(user));
@@ -130,86 +139,66 @@ export async function verifyCurrentSession(): Promise<AuthUser | null> {
 }
 
 // ==========================================
-// COLLEGE & SUPER ADMIN DATA STORAGE KEYS
+// PURGE LEGACY LOCALSTORAGE ON BOOT
+// All data is stored in MongoDB, no need for localStorage!
 // ==========================================
-const CUSTOM_COLLEGES_KEY = 'erus_custom_colleges';
+if (typeof localStorage !== 'undefined') {
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('erus_') && k !== TOKEN_KEY && k !== USER_KEY) {
+        keysToRemove.push(k);
+      }
+    }
+    keysToRemove.forEach((k) => localStorage.removeItem(k));
+  } catch {}
+}
 
-const DEFAULT_ADMIN_COLLEGES: any[] = [];
+// In-Memory Data Stores (Authoritative Source is MongoDB via Backend API)
+let inMemoryCustomColleges: any[] = [];
+const inMemoryStudentsMap = new Map<string, any[]>();
+const inMemoryFacultyMap = new Map<string, any[]>();
+const inMemorySlotsMap = new Map<string, any[]>();
+const inMemoryDeletedSlotIds = new Set<string>();
 
 export function getLocalCustomColleges(): any[] {
-  try {
-    const raw = localStorage.getItem(CUSTOM_COLLEGES_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed)
-      ? parsed.filter((c: any) => !['DIT', 'IITB'].includes(c?.code?.toUpperCase()) && !['col-1', 'col-2'].includes(c?.id))
-      : [];
-  } catch {
-    return [];
-  }
+  return inMemoryCustomColleges.filter((c: any) => !['DIT', 'IITB'].includes(c?.code?.toUpperCase()) && !['col-1', 'col-2'].includes(c?.id));
 }
 
 export function saveLocalCustomCollege(col: any) {
-  try {
-    const existing = getLocalCustomColleges();
-    const filtered = existing.filter((c) => c.code?.toUpperCase() !== col.code?.toUpperCase());
-    filtered.unshift(col);
-    localStorage.setItem(CUSTOM_COLLEGES_KEY, JSON.stringify(filtered));
-  } catch (e) {
-    console.warn('Error saving local college:', e);
-  }
+  const filtered = inMemoryCustomColleges.filter((c) => c.code?.toUpperCase() !== col.code?.toUpperCase());
+  filtered.unshift(col);
+  inMemoryCustomColleges = filtered;
 }
 
 export function getLocalStudents(collegeCode: string): any[] {
-  try {
-    const raw = localStorage.getItem(`erus_college_students_${collegeCode.toUpperCase()}`);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  const code = (collegeCode || '').trim().toUpperCase();
+  return inMemoryStudentsMap.get(code) || [];
 }
 
 export function saveLocalStudents(collegeCode: string, students: any[]) {
-  try {
-    localStorage.setItem(`erus_college_students_${collegeCode.toUpperCase()}`, JSON.stringify(students));
-  } catch (e) {
-    console.warn('Error saving local students:', e);
-  }
+  const code = (collegeCode || '').trim().toUpperCase();
+  inMemoryStudentsMap.set(code, students || []);
 }
 
 export function getLocalFaculty(collegeCode: string): any[] {
-  try {
-    const raw = localStorage.getItem(`erus_college_faculty_${collegeCode.toUpperCase()}`);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  const code = (collegeCode || '').trim().toUpperCase();
+  return inMemoryFacultyMap.get(code) || [];
 }
 
 export function saveLocalFaculty(collegeCode: string, faculty: any[]) {
-  try {
-    localStorage.setItem(`erus_college_faculty_${collegeCode.toUpperCase()}`, JSON.stringify(faculty));
-  } catch (e) {
-    console.warn('Error saving local faculty:', e);
-  }
+  const code = (collegeCode || '').trim().toUpperCase();
+  inMemoryFacultyMap.set(code, faculty || []);
 }
 
 export function getDeletedSlotIds(): Set<string> {
-  try {
-    const raw = localStorage.getItem('erus_deleted_slot_ids');
-    const parsed = raw ? JSON.parse(raw) : [];
-    return new Set(Array.isArray(parsed) ? parsed.filter(Boolean) : []);
-  } catch {
-    return new Set();
-  }
+  return new Set(inMemoryDeletedSlotIds);
 }
 
 export function markSlotDeletedLocally(slotId: string) {
   if (!slotId) return;
-  try {
-    const deleted = getDeletedSlotIds();
-    deleted.add(slotId);
-    localStorage.setItem('erus_deleted_slot_ids', JSON.stringify(Array.from(deleted)));
-  } catch {}
+  inMemoryDeletedSlotIds.add(slotId);
 }
 
 export function normalizeClientCollegeCode(rawCode?: string): string {
@@ -225,48 +214,37 @@ export function normalizeClientCollegeCode(rawCode?: string): string {
 }
 
 export function getLocalSlots(collegeCode: string): any[] {
-  try {
-    const targetCode = normalizeClientCollegeCode(collegeCode);
-    if (!targetCode) return [];
-    const deleted = getDeletedSlotIds();
-    const raw = localStorage.getItem(`erus_college_slots_${targetCode}`);
-    const list = raw ? JSON.parse(raw) : [];
-    return (list || [])
-      .filter((s: any) => {
-        if (!s || !s.id || deleted.has(s.id)) return false;
-        const sCode = normalizeClientCollegeCode(s.collegeCode || targetCode);
-        return sCode === targetCode;
-      })
-      .map((s: any) => {
-        const topic = s.topic ? String(s.topic).trim() : '';
-        const numMatch = (s.slotName || '').match(/^(Slot\s+\d+)/i) || (s.id || '').match(/slot-.*?-(\d+)/i);
-        const prefix = numMatch ? (numMatch[1].startsWith('Slot') ? numMatch[1] : `Slot ${numMatch[1]}`) : '';
-        if (prefix && topic && !topic.toLowerCase().includes('pending') && !s.description?.includes('Waiting for College Admin to allot')) {
-          return { ...s, collegeCode: targetCode, slotName: `${prefix}: ${topic}` };
-        }
-        return { ...s, collegeCode: targetCode };
-      });
-  } catch {
-    return [];
-  }
+  const targetCode = normalizeClientCollegeCode(collegeCode);
+  if (!targetCode) return [];
+  const list = inMemorySlotsMap.get(targetCode) || [];
+  return list
+    .filter((s: any) => {
+      if (!s || !s.id || inMemoryDeletedSlotIds.has(s.id)) return false;
+      const sCode = normalizeClientCollegeCode(s.collegeCode || targetCode);
+      return sCode === targetCode;
+    })
+    .map((s: any) => {
+      const topic = s.topic ? String(s.topic).trim() : '';
+      const numMatch = (s.slotName || '').match(/^(Slot\s+\d+)/i) || (s.id || '').match(/slot-.*?-(\d+)/i);
+      const prefix = numMatch ? (numMatch[1].startsWith('Slot') ? numMatch[1] : `Slot ${numMatch[1]}`) : '';
+      if (prefix && topic && !topic.toLowerCase().includes('pending') && !s.description?.includes('Waiting for College Admin to allot')) {
+        return { ...s, collegeCode: targetCode, slotName: `${prefix}: ${topic}` };
+      }
+      return { ...s, collegeCode: targetCode };
+    });
 }
 
 export function saveLocalSlots(collegeCode: string, slots: any[]) {
-  try {
-    const targetCode = normalizeClientCollegeCode(collegeCode);
-    if (!targetCode) return;
-    const deleted = getDeletedSlotIds();
-    const filtered = (slots || [])
-      .filter((s: any) => {
-        if (!s || !s.id || deleted.has(s.id)) return false;
-        const sCode = normalizeClientCollegeCode(s.collegeCode || targetCode);
-        return sCode === targetCode;
-      })
-      .map((s: any) => ({ ...s, collegeCode: targetCode }));
-    localStorage.setItem(`erus_college_slots_${targetCode}`, JSON.stringify(filtered));
-  } catch (e) {
-    console.warn('Error saving local slots:', e);
-  }
+  const targetCode = normalizeClientCollegeCode(collegeCode);
+  if (!targetCode) return;
+  const filtered = (slots || [])
+    .filter((s: any) => {
+      if (!s || !s.id || inMemoryDeletedSlotIds.has(s.id)) return false;
+      const sCode = normalizeClientCollegeCode(s.collegeCode || targetCode);
+      return sCode === targetCode;
+    })
+    .map((s: any) => ({ ...s, collegeCode: targetCode }));
+  inMemorySlotsMap.set(targetCode, filtered);
 }
 
 // ==========================================
@@ -409,35 +387,7 @@ export async function updateCollegeStudent(studentIdOrId: string, updates: any, 
     saveLocalStudents(code, existing);
   }
 
-  // Also update in registered users cache
-  try {
-    const raw = localStorage.getItem('erus_registered_users_db');
-    if (raw) {
-      const users = JSON.parse(raw);
-      if (Array.isArray(users)) {
-        const uIdx = users.findIndex(
-          (u: any) =>
-            u.id === studentIdOrId ||
-            u.studentId === studentIdOrId ||
-            u.email?.toLowerCase() === studentIdOrId.toLowerCase() ||
-            (existing[studentIdx] && u.email?.toLowerCase() === existing[studentIdx].email?.toLowerCase())
-        );
-        if (uIdx >= 0) {
-          users[uIdx] = {
-            ...users[uIdx],
-            name: updatedStudent.name || users[uIdx].name,
-            email: updatedStudent.email || users[uIdx].email,
-            studentId: updatedStudent.studentId || users[uIdx].studentId,
-            course: updatedStudent.course || users[uIdx].course,
-            batch: updatedStudent.batch || users[uIdx].batch,
-            seatNumber: updatedStudent.seatNumber || users[uIdx].seatNumber,
-            password: updatedStudent.password || users[uIdx].password,
-          };
-          localStorage.setItem('erus_registered_users_db', JSON.stringify(users));
-        }
-      }
-    }
-  } catch {}
+
 
   try {
     const res = await fetch(`/api/college/students/${encodeURIComponent(studentIdOrId)}`, {
@@ -543,34 +493,7 @@ export async function updateCollegeFaculty(facultyIdOrId: string, updates: any, 
     saveLocalFaculty(code, existing);
   }
 
-  // Also update in registered users cache
-  try {
-    const raw = localStorage.getItem('erus_registered_users_db');
-    if (raw) {
-      const users = JSON.parse(raw);
-      if (Array.isArray(users)) {
-        const uIdx = users.findIndex(
-          (u: any) =>
-            u.id === facultyIdOrId ||
-            u.facultyId === facultyIdOrId ||
-            u.email?.toLowerCase() === facultyIdOrId.toLowerCase() ||
-            (existing[facIdx] && u.email?.toLowerCase() === existing[facIdx].email?.toLowerCase())
-        );
-        if (uIdx >= 0) {
-          users[uIdx] = {
-            ...users[uIdx],
-            name: updatedFaculty.name || users[uIdx].name,
-            email: updatedFaculty.email || users[uIdx].email,
-            facultyId: updatedFaculty.facultyId || users[uIdx].facultyId,
-            department: updatedFaculty.department || users[uIdx].department,
-            designation: updatedFaculty.designation || users[uIdx].designation,
-            password: updatedFaculty.password || users[uIdx].password,
-          };
-          localStorage.setItem('erus_registered_users_db', JSON.stringify(users));
-        }
-      }
-    }
-  } catch {}
+
 
   try {
     const res = await fetch(`/api/college/faculty/${encodeURIComponent(facultyIdOrId)}`, {
@@ -719,11 +642,8 @@ export function isStudentAssignedToSlot(slot: any, user: any): boolean {
     if ((user as any).bookedSlotsByTopic) {
       if (Object.values((user as any).bookedSlotsByTopic).includes(slot.id)) return true;
     }
-    try {
-      const studentKey = user.id || user.email || 'student';
-      const localBooked = localStorage.getItem(`erus_student_booked_slot_${studentKey}`);
-      if (localBooked === slot.id) return true;
-    } catch {}
+    const bookedTopics = getStudentBookedSlotsByTopic(user.id || user.email || 'student');
+    if (bookedTopics && Object.values(bookedTopics).includes(slot.id)) return true;
   }
 
   // 3. Check assignedStudentIds array if present
@@ -806,12 +726,8 @@ export function hasStudentParticipatedInSlot(slot: any, user: any, reportHistory
   if (slot.id && isCompleted) {
     if (user.bookedSlotId === slot.id) return true;
     if ((user as any).bookedSlotsByTopic && Object.values((user as any).bookedSlotsByTopic).includes(slot.id)) return true;
-    try {
-      const localBooked = localStorage.getItem(`erus_student_booked_slot_${studentKey}`);
-      if (localBooked === slot.id) return true;
-      const bookedTopics = getStudentBookedSlotsByTopic(studentKey);
-      if (bookedTopics && Object.values(bookedTopics).includes(slot.id)) return true;
-    } catch {}
+    const bookedTopics = getStudentBookedSlotsByTopic(studentKey);
+    if (bookedTopics && Object.values(bookedTopics).includes(slot.id)) return true;
   }
 
   return false;
@@ -894,16 +810,7 @@ export async function deleteCollegeSlot(slotId: string, collegeCode: string = 'D
     saveLocalSlots(code, local);
   } catch {}
 
-  // 2. Purge from global availableSlots cache
-  try {
-    const raw = localStorage.getItem('erus_available_slots_v9');
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        localStorage.setItem('erus_available_slots_v9', JSON.stringify(parsed.filter((s: any) => s.id !== slotId)));
-      }
-    }
-  } catch {}
+
 
   // 3. Request backend deletion
   try {
@@ -956,17 +863,13 @@ export async function updateCollegeStudentLimit(
 ): Promise<{ success: boolean; college?: any; slots?: any[]; studentLimit?: number; error?: string }> {
   const limitNum = Math.max(1, studentLimit || 60);
 
-  // Update local storage cache
-  try {
-    const local = getLocalCustomColleges();
-    const updated = local.map((c: any) => {
-      if (c.id === collegeIdOrCode || c.code?.toUpperCase() === collegeIdOrCode.toUpperCase()) {
-        return { ...c, studentLimit: limitNum };
-      }
-      return c;
-    });
-    localStorage.setItem(CUSTOM_COLLEGES_KEY, JSON.stringify(updated));
-  } catch {}
+  // Update in-memory college limit
+  inMemoryCustomColleges = inMemoryCustomColleges.map((c: any) => {
+    if (c.id === collegeIdOrCode || c.code?.toUpperCase() === collegeIdOrCode.toUpperCase()) {
+      return { ...c, studentLimit: limitNum };
+    }
+    return c;
+  });
 
   try {
     const res = await fetch(`/api/admin/colleges/${encodeURIComponent(collegeIdOrCode)}/limit`, {
@@ -1085,9 +988,9 @@ export async function fetchAdminColleges(): Promise<any[]> {
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.colleges)) {
-        try {
-          localStorage.setItem(CUSTOM_COLLEGES_KEY, JSON.stringify(data.colleges));
-        } catch {}
+        inMemoryCustomColleges = data.colleges.filter(
+          (c: any) => !['DIT', 'IITB'].includes(c?.code?.toUpperCase()) && !['col-1', 'col-2'].includes(c?.id)
+        );
         return data.colleges;
       }
     }
@@ -1110,41 +1013,10 @@ export async function registerNewCollege(payload: any) {
   const collegeName = (payload.name || '').trim();
   const adminPass = payload.adminPassword || `Erus@${cleanCode}2026`;
 
-  // 1. Thoroughly purge all cached student, faculty, and slot data for this college code
-  try {
-    const keysToRemove: string[] = [];
-    const targetCodeUpper = cleanCode.toUpperCase();
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (!k) continue;
-      const kUpper = k.toUpperCase();
-      if (
-        kUpper.includes(`ERUS_COLLEGE_STUDENTS_${targetCodeUpper}`) ||
-        kUpper.includes(`ERUS_COLLEGE_FACULTY_${targetCodeUpper}`) ||
-        kUpper.includes(`ERUS_COLLEGE_SLOTS_${targetCodeUpper}`) ||
-        kUpper.endsWith(`_${targetCodeUpper}`)
-      ) {
-        keysToRemove.push(k);
-      }
-    }
-    keysToRemove.forEach((k) => localStorage.removeItem(k));
-  } catch {}
-
-  // 2. Remove any previous users belonging to this college from `erus_registered_users_db`
-  try {
-    const usersRaw = localStorage.getItem('erus_registered_users_db');
-    if (usersRaw) {
-      const users = JSON.parse(usersRaw);
-      if (Array.isArray(users)) {
-        const filteredUsers = users.filter((u: any) => {
-          const uCode = (u.collegeCode || '').trim().toUpperCase();
-          const uCollege = (u.college || '').trim().toLowerCase();
-          return !(uCode === cleanCode || uCollege === collegeName.toLowerCase());
-        });
-        localStorage.setItem('erus_registered_users_db', JSON.stringify(filteredUsers));
-      }
-    }
-  } catch {}
+  // 1. Purge in-memory student, faculty, and slot data for this college code
+  inMemoryStudentsMap.delete(cleanCode);
+  inMemoryFacultyMap.delete(cleanCode);
+  inMemorySlotsMap.delete(cleanCode);
 
   const newCollegeObj = {
     id: `col-${Date.now()}`,
@@ -1248,65 +1120,17 @@ export async function deleteCollege(
       const matchName = resolvedName && c.name?.toLowerCase() === resolvedName.toLowerCase();
       return !(matchId || matchCode || matchTargetCode || matchName);
     });
-    localStorage.setItem(CUSTOM_COLLEGES_KEY, JSON.stringify(updated));
+    inMemoryCustomColleges = updated;
 
-    // Clear all student, faculty, and slot keys associated with this college
+    // Clear all in-memory student, faculty, and slot keys associated with this college
     const codesToClear = Array.from(new Set([resolvedCode, code, target.toUpperCase()].filter(Boolean)));
-    try {
-      const keysToRemove: string[] = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (!k) continue;
-        const kUpper = k.toUpperCase();
-        for (const c of codesToClear) {
-          if (
-            kUpper.includes(`ERUS_COLLEGE_STUDENTS_${c}`) ||
-            kUpper.includes(`ERUS_COLLEGE_FACULTY_${c}`) ||
-            kUpper.includes(`ERUS_COLLEGE_SLOTS_${c}`) ||
-            kUpper.endsWith(`_${c}`)
-          ) {
-            keysToRemove.push(k);
-          }
-        }
-      }
-      keysToRemove.forEach((k) => localStorage.removeItem(k));
-    } catch {}
-
-    if (updated.length === 0) {
-      try {
-        const keysToRemove: string[] = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k && (k.startsWith('erus_college_students_') || k.startsWith('erus_college_slots_') || k.startsWith('erus_college_faculty_'))) {
-            keysToRemove.push(k);
-          }
-        }
-        keysToRemove.forEach((k) => localStorage.removeItem(k));
-      } catch {}
-    }
-
-    // Purge registered users belonging to this college from `erus_registered_users_db`
-    try {
-      const usersRaw = localStorage.getItem('erus_registered_users_db');
-      if (usersRaw) {
-        const users = JSON.parse(usersRaw);
-        if (Array.isArray(users)) {
-          const filteredUsers = users.filter((u: any) => {
-            const uCode = (u.collegeCode || '').trim().toUpperCase();
-            const uCollege = (u.college || '').trim().toLowerCase();
-            const isMatchCode = resolvedCode && uCode === resolvedCode;
-            const isMatchTarget = target && (uCode === target.toUpperCase() || u.collegeId === target);
-            const isMatchName = resolvedName && uCollege === resolvedName.toLowerCase();
-            return !(isMatchCode || isMatchTarget || isMatchName);
-          });
-          localStorage.setItem('erus_registered_users_db', JSON.stringify(filteredUsers));
-        }
-      }
-    } catch (uErr) {
-      console.warn('Error clearing users from erus_registered_users_db:', uErr);
-    }
+    codesToClear.forEach((c) => {
+      inMemoryStudentsMap.delete(c);
+      inMemoryFacultyMap.delete(c);
+      inMemorySlotsMap.delete(c);
+    });
   } catch (e) {
-    console.warn('Error clearing local college storage:', e);
+    console.warn('Error clearing local college state:', e);
   }
 
   try {

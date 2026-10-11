@@ -404,8 +404,7 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
             <div className="flex items-center gap-2 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800 p-1.5 rounded-xl shadow-2xs flex-wrap">
               <button
                 onClick={async () => {
-                  const rawCached = safeSession?.id && typeof localStorage !== 'undefined' ? localStorage.getItem(`erus_recording_${safeSession.id}`) : null;
-                  const cachedUrl = rawCached && !rawCached.startsWith('blob:') ? rawCached : null;
+                  const cachedUrl = null;
                   let recUrl = safeSession.recordingUrl || cachedUrl;
                   if (!recUrl || recUrl.startsWith('blob:')) {
                     try {
@@ -413,7 +412,7 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
                       const d = await res.json();
                       if (d.success && d.recordingUrl) {
                         recUrl = d.recordingUrl;
-                        try { localStorage.setItem(`erus_recording_${safeSession.id}`, d.recordingUrl); } catch {}
+                        /* persisted in MongoDB */
                       }
                     } catch {}
                   }
@@ -1380,7 +1379,7 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
 
             {(() => {
               const targetId = activeVideoSlot?.id || safeSession?.id || '';
-              const cachedUrl = targetId && typeof localStorage !== 'undefined' ? localStorage.getItem(`erus_recording_${targetId}`) : null;
+              const cachedUrl = null;
               const getCleanStr = (v: any): string => {
                 if (typeof v === 'string') return v.trim();
                 if (v && typeof v.recordingUrl === 'string') return v.recordingUrl.trim();

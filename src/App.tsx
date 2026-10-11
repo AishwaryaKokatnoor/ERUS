@@ -28,7 +28,24 @@ import {
 import { addReportToStudentHistory } from './utils/studentReportHistory';
 import { facilitatorVoice } from './utils/speechSynthesis';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
-import { clearStoredAuth, verifyCurrentSession, createCollegeSlot, fetchCollegeSlots, fetchFacultyAssignedSlots, fetchStudentAssignedSlots, isFacultyAssignedToSlot, isSlotAssignedToFaculty, isStudentAssignedToSlot, hasStudentParticipatedInSlot, sendUserHeartbeat, normalizeClientCollegeCode } from './utils/authApi';
+import { 
+  clearStoredAuth, 
+  getStoredUser,
+  getStoredToken,
+  getDeletedSlotIds,
+  markSlotDeletedLocally,
+  verifyCurrentSession, 
+  createCollegeSlot, 
+  fetchCollegeSlots, 
+  fetchFacultyAssignedSlots, 
+  fetchStudentAssignedSlots, 
+  isFacultyAssignedToSlot, 
+  isSlotAssignedToFaculty, 
+  isStudentAssignedToSlot, 
+  hasStudentParticipatedInSlot, 
+  sendUserHeartbeat, 
+  normalizeClientCollegeCode 
+} from './utils/authApi';
 import { getSocket } from './utils/socket';
 import { 
   getStudentBookedSlotsByTopic,
@@ -43,124 +60,31 @@ import { StudentTopicPortal } from './components/StudentPortal/StudentTopicPorta
 
 function GDAppContent() {
   // Authentication State
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
-    try {
-      const saved = localStorage.getItem('erus_auth_user');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => getStoredUser());
 
   const userCollegeCode = normalizeClientCollegeCode((currentUser as any)?.collegeCode || (currentUser as any)?.college || '');
-  const STORAGE_KEY = userCollegeCode ? `erus_available_slots_v10_${userCollegeCode}` : 'erus_available_slots_v10_guest';
-
-  // Safely load and validate slots scoped strictly to the logged-in user's college
-  const loadInitialSlots = (): GDSession[] => {
-    try {
-      // Purge legacy global cache keys so one college's slots never leak to another college
-      ['erus_available_slots', 'erus_available_slots_v1', 'erus_available_slots_v2', 'erus_available_slots_v3', 'erus_available_slots_v4', 'erus_available_slots_v5', 'erus_available_slots_v6', 'erus_available_slots_v7', 'erus_available_slots_v8', 'erus_available_slots_v9'].forEach((k) => {
-        localStorage.removeItem(k);
-      });
-
-      const savedUserRaw = localStorage.getItem('erus_auth_user');
-      const savedUser = savedUserRaw ? JSON.parse(savedUserRaw) : null;
-      const code = normalizeClientCollegeCode(savedUser?.collegeCode || savedUser?.college || '');
-      if (!code) return [];
-
-      let deletedIds = new Set<string>();
-      try {
-        const rawDel = localStorage.getItem('erus_deleted_slot_ids');
-        if (rawDel) {
-          const parsedDel = JSON.parse(rawDel);
-          if (Array.isArray(parsedDel)) deletedIds = new Set(parsedDel);
-        }
-      } catch {}
-
-      const saved = localStorage.getItem(`erus_available_slots_v10_${code}`);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const notDeleted = parsed.filter(
-            (s: GDSession) =>
-              s &&
-              s.id &&
-              !deletedIds.has(s.id) &&
-              normalizeClientCollegeCode(s.collegeCode || code) === code
-          );
-          if (notDeleted.length > 0) {
-            return notDeleted.map((s: GDSession) => ({
-              ...s,
-              collegeCode: code,
-              status: s.status === 'completed' ? 'completed' : (s.status === 'active' ? 'active' : 'waiting'),
-            }));
-          }
-        }
-      }
-    } catch {}
-    return [];
-  };
 
   const [currentTab, setCurrentTab] = useState<NavTabType>(() => {
-    try {
-      const savedUser = localStorage.getItem('erus_auth_user');
-      let role: string | undefined;
-      if (savedUser) {
-        role = JSON.parse(savedUser)?.role;
-      }
-      if (role === 'super_admin') return 'super_admin';
-      if (role === 'college_admin') {
-        const savedTab = localStorage.getItem('erus_current_tab');
-        if (savedTab === 'report') return 'report';
-        return 'college_admin';
-      }
-      const savedTab = localStorage.getItem('erus_current_tab');
-      if (savedTab && ['room', 'topics', 'report', 'faculty'].includes(savedTab)) {
-        return savedTab as NavTabType;
-      }
-      if (role === 'faculty') return 'faculty';
-      if (role === 'student') return 'topics';
-    } catch {}
+    const user = getStoredUser();
+    if (user?.role === 'super_admin') return 'super_admin';
+    if (user?.role === 'college_admin') return 'college_admin';
+    if (user?.role === 'faculty') return 'faculty';
+    if (user?.role === 'student') return 'topics';
     return 'topics';
   });
-  const [availableSlots, setAvailableSlots] = useState<GDSession[]>(loadInitialSlots);
-  const [session, setSession] = useState<GDSession>(() => {
-    const slots = loadInitialSlots();
-    try {
-      const activeSlotId = localStorage.getItem('erus_active_slot_id');
-      if (activeSlotId) {
-        const matched = slots.find((s) => s.id === activeSlotId);
-        if (matched) return matched;
-      }
-    } catch {}
-    return slots[0] || INITIAL_SESSION;
-  });
+
+  const [availableSlots, setAvailableSlots] = useState<GDSession[]>([]);
+  const [session, setSession] = useState<GDSession>(INITIAL_SESSION);
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
-  const [activeReport, setActiveReport] = useState<StudentAssessmentReport | null>(() => {
-    try {
-      const savedRep = localStorage.getItem('erus_active_report_v1');
-      if (savedRep) {
-        const parsed = JSON.parse(savedRep);
-        if (parsed && typeof parsed === 'object' && parsed.id) {
-          return parsed;
-        }
-      }
-    } catch {}
-    return null;
-  });
+  const [activeReport, setActiveReport] = useState<StudentAssessmentReport | null>(null);
   const [viewingStudentId, setViewingStudentId] = useState<string | null>(null);
   const [voiceMuted, setVoiceMuted] = useState<boolean>(false);
   const [studentBookedSlotsByTopic, setStudentBookedSlotsByTopic] = useState<Record<string, string>>(() => {
-    try {
-      const userRaw = localStorage.getItem('erus_auth_user');
-      if (userRaw) {
-        const u = JSON.parse(userRaw);
-        if (u.role === 'student') {
-          const key = u.id || u.email || 'student';
-          return getStudentBookedSlotsByTopic(key);
-        }
-      }
-    } catch {}
+    const u = getStoredUser();
+    if (u && u.role === 'student') {
+      const key = u.id || u.email || 'student';
+      return getStudentBookedSlotsByTopic(key);
+    }
     return {};
   });
 
@@ -238,25 +162,6 @@ function GDAppContent() {
     }
   }, [currentUser]);
  
-  // Save currentTab to localStorage so page refresh preserves active view
-  useEffect(() => {
-    try {
-      localStorage.setItem('erus_current_tab', currentTab);
-    } catch {}
-  }, [currentTab]);
-
-  // Persist activeReport to localStorage whenever it has a valid non-zero score
-  useEffect(() => {
-    if (activeReport && (activeReport.overallScore || 0) > 0) {
-      try {
-        localStorage.setItem('erus_active_report_v1', JSON.stringify(activeReport));
-        if (activeReport.sessionId) {
-          localStorage.setItem(`erus_slot_report_${activeReport.sessionId}`, JSON.stringify(activeReport));
-        }
-      } catch {}
-    }
-  }, [activeReport]);
-
   // User Presence & Heartbeat Tracking for Server Capacity & Active User Monitoring
   useEffect(() => {
     if (!currentUser) return;
@@ -266,13 +171,6 @@ function GDAppContent() {
     }, 45 * 1000);
     return () => clearInterval(interval);
   }, [currentUser]);
-
-  // Keep availableSlots persisted to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(availableSlots));
-    } catch {}
-  }, [availableSlots, STORAGE_KEY]);
 
   // Keep live faculty observation notes synchronized into availableSlots
   useEffect(() => {
@@ -303,14 +201,7 @@ function GDAppContent() {
           : await fetchCollegeSlots(collegeCode);
 
         if (Array.isArray(rawSlots)) {
-          let deletedIds = new Set<string>();
-          try {
-            const rawDel = localStorage.getItem('erus_deleted_slot_ids');
-            if (rawDel) {
-              const parsedDel = JSON.parse(rawDel);
-              if (Array.isArray(parsedDel)) deletedIds = new Set(parsedDel);
-            }
-          } catch {}
+          const deletedIds = getDeletedSlotIds();
           let filteredRaw = rawSlots.filter((s: any) => {
             if (!s || !s.id || deletedIds.has(s.id)) return false;
             const sCode = normalizeClientCollegeCode(s.collegeCode || '');
@@ -328,13 +219,8 @@ function GDAppContent() {
             const isTopicAllotted = typeof s.topic === 'string' && s.topic.trim() !== '' && !/^slot\s+\d+/i.test(s.topic) && s.topic !== s.slotName && s.topic !== cleanName && !s.description?.includes('Waiting for College Admin to allot');
             const cleanTopic = isTopicAllotted && typeof s.topic === 'string' ? s.topic.trim() : '';
 
-            const cachedRecUrl = typeof localStorage !== 'undefined' ? localStorage.getItem(`erus_recording_${s.id}`) : null;
-            const validCachedRecUrl = (typeof cachedRecUrl === 'string' && !cachedRecUrl.startsWith('blob:')) ? cachedRecUrl : '';
             const recUrlStr = typeof s.recordingUrl === 'string' ? s.recordingUrl : (s.recordingUrl?.recordingUrl || s.recordingUrl?.url || '');
-            const finalRecUrl = (recUrlStr && !recUrlStr.startsWith('blob:')) ? recUrlStr : validCachedRecUrl;
-            if (finalRecUrl && !finalRecUrl.startsWith('blob:') && typeof localStorage !== 'undefined') {
-              try { localStorage.setItem(`erus_recording_${s.id}`, finalRecUrl); } catch {}
-            }
+            const finalRecUrl = (recUrlStr && !recUrlStr.startsWith('blob:')) ? recUrlStr : '';
 
             return {
               ...INITIAL_SESSION,
@@ -486,7 +372,6 @@ function GDAppContent() {
     };
     const handleRecordingSaved = (data: any) => {
       if (data?.slotId && data?.recordingUrl) {
-        try { localStorage.setItem(`erus_recording_${data.slotId}`, data.recordingUrl); } catch {}
         setAvailableSlots((prev) =>
           prev.map((s) => (s.id === data.slotId ? { ...s, recordingUrl: data.recordingUrl, recordingDurationSeconds: data.durationSeconds } : s))
         );
@@ -506,12 +391,6 @@ function GDAppContent() {
 
   // Reset slots back to clean demo defaults
   const handleResetSlots = () => {
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-      ['erus_available_slots', 'erus_available_slots_v1', 'erus_available_slots_v2', 'erus_available_slots_v3', 'erus_available_slots_v4', 'erus_available_slots_v5', 'erus_available_slots_v6', 'erus_available_slots_v7', 'erus_available_slots_v8', 'erus_available_slots_v9'].forEach((k) => {
-        localStorage.removeItem(k);
-      });
-    } catch {}
     setAvailableSlots([]);
     setSession(INITIAL_SESSION);
     setElapsedSeconds(0);
@@ -524,9 +403,6 @@ function GDAppContent() {
     setAvailableSlots([]);
     setSession(INITIAL_SESSION);
     setCurrentUser(user);
-    try {
-      localStorage.setItem('erus_auth_user', JSON.stringify(user));
-    } catch {}
 
     // Fetch real slots from backend. Faculty portals are restricted to their assigned sessions.
     const rawCode = (user as any).collegeCode || (user as any).college || '';
@@ -757,9 +633,6 @@ function GDAppContent() {
     };
 
     // Update active session status and reset speaking metrics for fresh live discussion
-    try {
-      localStorage.setItem('erus_active_slot_id', activeSlot.id);
-    } catch {}
     setSession(activeSlot);
     setCurrentTab('room');
 
@@ -1451,9 +1324,6 @@ function GDAppContent() {
       );
     }
 
-    try {
-      localStorage.setItem('erus_active_slot_id', activeSlot.id);
-    } catch {}
     setSession(activeSlot);
     setTranscripts([
       {
@@ -1548,19 +1418,7 @@ function GDAppContent() {
 
   const handleDeleteSession = (slotId: string) => {
     setAvailableSlots((prev) => prev.filter((s) => s.id !== slotId));
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed.filter((s: any) => s.id !== slotId)));
-        }
-      }
-      const rawDel = localStorage.getItem('erus_deleted_slot_ids');
-      const delSet = new Set(rawDel ? JSON.parse(rawDel) : []);
-      delSet.add(slotId);
-      localStorage.setItem('erus_deleted_slot_ids', JSON.stringify(Array.from(delSet)));
-    } catch {}
+    markSlotDeletedLocally(slotId);
   };
 
   const handleViewStudentReport = (studentId?: string) => {
@@ -1602,13 +1460,12 @@ function GDAppContent() {
 
     // Backend validates and persists the booking first. Frontend state follows it.
     try {
+      const token = getStoredToken();
       const bookingRes = await fetch('/api/student/book-slot', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(localStorage.getItem('erus_jwt_token')
-            ? { Authorization: 'Bearer ' + localStorage.getItem('erus_jwt_token') }
-            : {}),
+          ...(token ? { Authorization: 'Bearer ' + token } : {}),
         },
         body: JSON.stringify({
           // Send all stable identifiers. This handles older browser sessions
@@ -1840,9 +1697,6 @@ function GDAppContent() {
             currentUser={currentUser}
             bookedSlotId={studentBookedSlotId}
             onUpdateLayout={(newLayout) => {
-              try {
-                localStorage.setItem('erus_gd_room_layout', newLayout);
-              } catch {}
               setSession((prev) => ({ ...prev, roomLayout: newLayout }));
               setAvailableSlots((prev) =>
                 prev.map((s) => (s.id === session.id ? { ...s, roomLayout: newLayout } : s))
