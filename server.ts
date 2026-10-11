@@ -8092,10 +8092,11 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
     // Participant shared a thought or filler. Advance floor to the next participant.
     const otherCandidates = allParticipants.filter((p) => p.userId !== completedUserId);
     if (otherCandidates.length > 0) {
-      otherCandidates.sort((a, b) => {
-        return (a.speakingTurns || 0) - (b.speakingTurns || 0) || (a.lastSpokeAt || 0) - (b.lastSpokeAt || 0);
-      });
-      targetReal = otherCandidates[0];
+      const leastTurns = Math.min(...otherCandidates.map((p) => Number(p.speakingTurns || 0)));
+      const leastSpoken = otherCandidates.filter((p) => Number(p.speakingTurns || 0) === leastTurns);
+      const earliestLastSpoke = Math.min(...leastSpoken.map((p) => Number(p.lastSpokeAt || 0)));
+      const tiedCandidates = leastSpoken.filter((p) => Number(p.lastSpokeAt || 0) === earliestLastSpoke);
+      targetReal = tiedCandidates[Math.floor(Math.random() * tiedCandidates.length)];
       isSameSpeaker = false;
     } else {
       targetReal = allParticipants.find((p) => p.userId === completedUserId) || allParticipants[0];
