@@ -3584,10 +3584,29 @@ app.post('/api/college/slots/:id/complete', async (req, res) => {
 
 app.post('/api/college/slots/:id/start', async (req, res) => {
   const slotId = req.params.id;
-  const facultyId = String(req.body?.facultyId || req.body?.id || '').trim().toLowerCase();
-  const email = String(req.body?.email || req.body?.facultyEmail || '').trim().toLowerCase();
-  const name = String(req.body?.name || req.body?.facultyName || '').trim().toLowerCase();
-  const role = String(req.body?.role || '').trim().toLowerCase();
+  const authHeader = String(req.headers.authorization || '');
+  if (!authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ success: false, error: 'Sign in again before starting this GD session.' });
+  }
+
+  let claims: any;
+  try {
+    claims = jwt.verify(authHeader.slice(7).trim(), JWT_SECRET);
+  } catch {
+    return res.status(401).json({ success: false, error: 'Your session has expired. Please sign in again.' });
+  }
+
+  let caller: any = persistentState.users.find((u) => u.id === claims?.id);
+  if (!caller && isMongoConnected()) {
+    try {
+      caller = await UserModel.findOne({ $or: [{ id: claims?.id }, { email: String(claims?.email || '').toLowerCase() }] }).lean();
+    } catch (err: any) {
+      console.warn('[Slots] Could not resolve authenticated caller:', err.message);
+    }
+  }
+  if (!caller || String(caller.role || '') !== String(claims?.role || '')) {
+    return res.status(401).json({ success: false, error: 'Authenticated account could not be verified.' });
+  }
 
   let target: any = null;
   let code = '';
@@ -3614,26 +3633,23 @@ app.post('/api/college/slots/:id/start', async (req, res) => {
   const slotFacEmail = String(target.assignedFacultyEmail || target.facultyEmail || '').trim().toLowerCase();
   const slotFacName = String(target.assignedFacultyName || target.facultyName || '').trim().toLowerCase();
   const allottedFac = String((target as any).allottedFaculty || '').trim().toLowerCase();
+  const callerId = String(caller.id || '').trim().toLowerCase();
+  const callerEmail = String(caller.email || '').trim().toLowerCase();
+  const callerFacultyId = String(caller.facultyId || caller.facultyProfile?.facultyId || caller.id || '').trim().toLowerCase();
+  const callerCollegeCode = normalizeCollegeCode(caller.collegeCode || caller.collegeOrg?.code);
+  const callerRole = String(caller.role || '').toLowerCase();
 
-  const isAssigned =
-    role === 'college_admin' ||
-    role === 'super_admin' ||
-    role === 'faculty' ||
-    (!slotFacId && !slotFacName) ||
-    (facultyId && (slotFacId === facultyId || allottedFac.includes(facultyId))) ||
-    (email && (slotFacEmail === email || allottedFac.includes(email))) ||
-    (name && (slotFacName === name || allottedFac.includes(name))) ||
-    (code && (persistentState.faculty[code] || []).some((f) => {
-      const matchCaller = (facultyId && (f.facultyId?.toLowerCase() === facultyId || f.id?.toLowerCase() === facultyId)) ||
-                          (email && f.email?.toLowerCase() === email);
-      const matchSlot = (slotFacId && (f.facultyId?.toLowerCase() === slotFacId || f.id?.toLowerCase() === slotFacId)) ||
-                        (slotFacEmail && f.email?.toLowerCase() === slotFacEmail) ||
-                        (slotFacName && f.name?.toLowerCase() === slotFacName);
-      return matchCaller && matchSlot;
-    }));
+  const isPlatformAdmin = callerRole === 'super_admin';
+  const isSameCollegeAdmin = callerRole === 'college_admin' && callerCollegeCode === normalizeCollegeCode(code);
+  const isAssignedFaculty = callerRole === 'faculty' &&
+    callerCollegeCode === normalizeCollegeCode(code) &&
+    ((!slotFacId && !slotFacName) ||
+      (slotFacId && (slotFacId === callerId || slotFacId === callerFacultyId || allottedFac.includes(callerId) || allottedFac.includes(callerFacultyId))) ||
+      (slotFacEmail && (slotFacEmail === callerEmail || allottedFac.includes(callerEmail))) ||
+      (slotFacName && String(caller.name || '').trim().toLowerCase() === slotFacName));
 
-  if (!isAssigned) {
-    console.warn(`[Slots] Non-strict start authorization granted for slot ${slotId} by caller ${facultyId || email || role}`);
+  if (!isPlatformAdmin && !isSameCollegeAdmin && !isAssignedFaculty) {
+    return res.status(403).json({ success: false, error: 'Only the assigned faculty or an administrator for this college can start this session.' });
   }
 
   if (target.status === 'completed') return res.status(409).json({ success: false, error: 'Session is already completed' });
