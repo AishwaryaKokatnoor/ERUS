@@ -842,10 +842,10 @@ function GDAppContent() {
           if (fetchExisting.ok) {
             const existingData = await fetchExisting.json();
             if (existingData.success && Array.isArray(existingData.reports) && existingData.reports.length > 0) {
-              const matched = existingData.reports.find(
-                (r: any) => r.sessionId === finishedSlotId && r.overallScore && r.overallScore > 0
-              ) || existingData.reports.find((r: any) => r.overallScore && r.overallScore > 0);
-              if (matched && matched.overallScore > 0) {
+              // Match this exact session, and accept a legitimate zero-score report
+              // when the database recorded no speech evidence.
+              const matched = existingData.reports.find((r: any) => r.sessionId === finishedSlotId);
+              if (matched) {
                 foundAuthoritativeReport = matched;
               }
             }
@@ -1059,26 +1059,42 @@ function GDAppContent() {
         studentReport.sessionId = cleanSlotId;
         studentReport.topic = targetSlot.topic || studentReport.topic;
 
-        // Auto-heal 0 marks if student spoke, has duration, or completed session
-        if (!studentReport.overallScore || studentReport.overallScore === 0) {
-          const rawDur = studentReport.speakingTimeSeconds ?? studentReport.speakingDurationSeconds ?? userStudent.speakingDurationSeconds ?? 0;
-          const dur = rawDur > 0 ? rawDur : 160;
-          const rawTurns = studentReport.speakingTurns || userStudent.speakingTurns || 0;
-          const trns = rawTurns > 0 ? rawTurns : Math.max(2, Math.round(dur / 45));
+        // Repair a zero score only when there is actual captured speech evidence.
+        // Never invent speaking time or turns merely because a session was completed.
+        const evidenceTranscripts = (transcripts || []).filter((t) =>
+          !t.isFacilitator &&
+          (t.speakerId === userStudent.id ||
+            (t.speakerName && userStudent.name && String(t.speakerName).toLowerCase() === String(userStudent.name).toLowerCase()) ||
+            (t.seatNumber != null && t.seatNumber === userStudent.seatNumber))
+        );
+        const observedWords = evidenceTranscripts.map((t) => String(t.text || '')).join(' ').split(/\\s+/).filter(Boolean).length;
+        const wordsDuration = observedWords > 0 ? Math.round((observedWords / 130) * 60) : 0;
+        const actualDuration = Math.max(
+          Number(studentReport.speakingTimeSeconds || 0),
+          Number(studentReport.speakingDurationSeconds || 0),
+          Number(userStudent.speakingDurationSeconds || 0),
+          wordsDuration
+        );
+        const actualTurns = Math.max(
+          Number(studentReport.speakingTurns || 0),
+          Number(userStudent.speakingTurns || 0),
+          evidenceTranscripts.length
+        );
+        if (Number(studentReport.overallScore || 0) <= 0 && (observedWords > 0 || actualDuration > 0 || actualTurns > 0)) {
           const { overallScore: calculated } = calculateStudentOverallScore({
-            seconds: dur,
-            turns: trns,
-            wpm: studentReport.wpm || 130,
-            hasCollab: trns >= 2,
-            hasLead: trns >= 3,
+            seconds: actualDuration,
+            turns: actualTurns,
+            wpm: Number(studentReport.wpm || 0) || (actualDuration > 0 ? 130 : 0),
+            hasCollab: actualTurns >= 2,
+            hasLead: actualTurns >= 3,
           });
           studentReport.overallScore = calculated;
           studentReport.grade = calculated >= 90 ? 'Excellent' : calculated >= 75 ? 'Very Good' : calculated >= 60 ? 'Good' : calculated >= 40 ? 'Average' : 'Needs Improvement';
           studentReport.skills = distributeRubricScores(calculated);
-          studentReport.speakingTimeSeconds = dur;
-          studentReport.speakingDurationSeconds = dur;
-          studentReport.speakingTurns = trns;
-          studentReport.speakingTimeFormatted = `${Math.floor(dur / 60)} min ${dur % 60} sec`;
+          studentReport.speakingTimeSeconds = actualDuration;
+          studentReport.speakingDurationSeconds = actualDuration;
+          studentReport.speakingTurns = actualTurns;
+          studentReport.speakingTimeFormatted = `${Math.floor(actualDuration / 60)} min ${actualDuration % 60} sec`;
         }
 
         setActiveReport(studentReport);
@@ -1148,15 +1164,26 @@ function GDAppContent() {
       } catch {}
 
       if (foundFacultyReport) {
-        if (!foundFacultyReport.overallScore || foundFacultyReport.overallScore === 0) {
-          const dur = foundFacultyReport.speakingDurationSeconds || 160;
-          const trns = foundFacultyReport.speakingTurns || Math.max(2, Math.round(dur / 45));
+        const facultyEvidence = (transcripts || []).filter((t) =>
+          !t.isFacilitator &&
+          (t.speakerId === foundFacultyReport.studentId ||
+            (t.speakerName && foundFacultyReport.studentName && String(t.speakerName).toLowerCase() === String(foundFacultyReport.studentName).toLowerCase()) ||
+            (t.seatNumber != null && t.seatNumber === foundFacultyReport.seatNumber))
+        );
+        const facultyWords = facultyEvidence.map((t) => String(t.text || '')).join(' ').split(/\\s+/).filter(Boolean).length;
+        const facultyDuration = Math.max(
+          Number(foundFacultyReport.speakingDurationSeconds || 0),
+          Number(foundFacultyReport.speakingTimeSeconds || 0),
+          facultyWords > 0 ? Math.round((facultyWords / 130) * 60) : 0
+        );
+        const facultyTurns = Math.max(Number(foundFacultyReport.speakingTurns || 0), facultyEvidence.length);
+        if (Number(foundFacultyReport.overallScore || 0) <= 0 && (facultyWords > 0 || facultyDuration > 0 || facultyTurns > 0)) {
           const { overallScore: calculated } = calculateStudentOverallScore({
-            seconds: dur,
-            turns: trns,
-            wpm: foundFacultyReport.wpm || 130,
-            hasCollab: trns >= 2,
-            hasLead: trns >= 3,
+            seconds: facultyDuration,
+            turns: facultyTurns,
+            wpm: Number(foundFacultyReport.wpm || 0) || (facultyDuration > 0 ? 130 : 0),
+            hasCollab: facultyTurns >= 2,
+            hasLead: facultyTurns >= 3,
           });
           foundFacultyReport.overallScore = calculated;
           foundFacultyReport.grade = calculated >= 90 ? 'Excellent' : calculated >= 75 ? 'Very Good' : calculated >= 60 ? 'Good' : calculated >= 40 ? 'Average' : 'Needs Improvement';
