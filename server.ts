@@ -3456,6 +3456,44 @@ app.post('/api/college/slots/:id/complete', async (req, res) => {
     return res.status(403).json({ success: false, error: 'Only the assigned faculty or an administrator for this college can complete this session.' });
   }
 
+  // Completion can be triggered twice by reconnects or synchronized clients.
+  // Reuse persisted reports rather than re-evaluating and overwriting good scores.
+  if (target.status === 'completed') {
+    let savedReports: any[] = [];
+    if (isMongoConnected()) {
+      try {
+        const docs = await AssessmentReportModel.find({ sessionId: slotId }).sort({ createdAt: 1 }).lean();
+        savedReports = docs.map((doc: any) => doc.fullReportJson || doc);
+      } catch (err: any) {
+        console.warn('[Slots] Could not read saved reports for completed session:', err.message);
+      }
+    }
+    if (savedReports.length === 0 && isDbConnected && prisma) {
+      try {
+        const docs = await prisma.assessmentReport.findMany({ where: { sessionId: slotId }, orderBy: { createdAt: 'asc' } });
+        savedReports = docs.map((doc: any) => ({
+          id: doc.id,
+          sessionId: doc.sessionId,
+          studentId: doc.studentId,
+          overallScore: doc.overallScore,
+          grade: gradeForScore(doc.overallScore),
+          skills: (() => { try { return JSON.parse(doc.rubricJson || '{}'); } catch { return {}; } })(),
+          feedback: doc.feedback || '',
+          aiSummary: doc.feedback || '',
+        }));
+      } catch (err: any) {
+        console.warn('[Database] Could not read saved reports for completed session:', err.message);
+      }
+    }
+    if (savedReports.length > 0) {
+      const completedRoom = LIVE_ROOMS.get(slotId);
+      const transcriptCount = completedRoom
+        ? completedRoom.transcripts.filter((t) => t.sessionId === slotId).length
+        : liveTranscripts.filter((t) => t.sessionId === slotId).length;
+      return res.json({ success: true, slotId, status: 'completed', reports: savedReports, transcriptCount });
+    }
+  }
+
   const room = LIVE_ROOMS.get(slotId);
   const transcriptHistory = room
     ? room.transcripts.filter((t) => t.sessionId === slotId)
