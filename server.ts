@@ -269,12 +269,15 @@ function recordUserActivity(user: { id: string; name?: string; email?: string; r
 }
 
 function loadPersistentState() {
-  // Local file storage (.erus_backend_state.json) is disabled; all state is persisted in MongoDB.
+  // Preserve legacy state files for manual recovery. MongoDB remains the runtime source of truth,
+  // but startup must never delete the only remaining copy of older state without an explicit migration.
   try {
     if (fs.existsSync(PERSIST_FILE)) {
-      fs.unlinkSync(PERSIST_FILE);
+      console.warn('[Backend State] Legacy state file found; preserved for recovery (not auto-imported).');
     }
-  } catch {}
+  } catch (err) {
+    console.warn('[Backend State] Could not inspect legacy state file:', err);
+  }
 }
 
 function savePersistentState() {
@@ -354,10 +357,6 @@ async function syncMongoDBWithPersistentState() {
     const dbColleges = await CollegeModel.find();
     if (dbColleges.length > 0) {
       for (const c of dbColleges) {
-        if (c.code === 'VIT2002' || ['DIT', 'IITB'].includes(c.code)) {
-          await CollegeModel.deleteOne({ _id: c._id }).catch(() => null);
-          continue;
-        }
         const normCode = normalizeCollegeCode(c.code);
         const mappedCol: BackendCollege = {
           id: c.id,
@@ -396,8 +395,9 @@ async function syncMongoDBWithPersistentState() {
       for (const u of dbUsers) {
         const uColCode = normalizeCollegeCode(u.collegeCode);
         if (u.role !== 'super_admin' && (!uColCode || !activeCollegeSet.has(uColCode))) {
-          await UserModel.deleteOne({ _id: u._id }).catch(() => null);
-          continue;
+          // Keep orphaned users in MongoDB for recovery. They are not attached to an active
+          // college roster, but deleting them here made transient/incomplete college sync destructive.
+          console.warn(`[MongoDB] Preserving user ${u.email} with unmatched college code "${uColCode}".`);
         }
         const mappedUser: StoredAuthUser = {
           id: u.id,
@@ -492,7 +492,9 @@ async function syncMongoDBWithPersistentState() {
         if (!s?.id || deletedSet.has(s.id)) continue;
         const colCode = normalizeCollegeCode(s.collegeCode);
         if (!colCode || !activeCollegeSet.has(colCode)) {
-          await GDSessionModel.deleteOne({ id: s.id }).catch(() => null);
+          // Keep orphaned slots for recovery; do not delete persisted sessions because a college
+          // document may be temporarily missing or not yet synchronized.
+          console.warn(`[MongoDB] Preserving slot ${s.id} with unmatched college code "${colCode}".`);
           continue;
         }
         if (!persistentState.slots[colCode]) persistentState.slots[colCode] = [];
@@ -6413,7 +6415,12 @@ function ensureHealthyReport(report: any): any {
 }
 
 async function persistAssessmentReport(rawReport: any) {
-  if (!rawReport?.sessionId) return rawReport;
+  if (!rawReport?.sessionId) {
+    throw new Error('Cannot persist assessment report without a sessionId.');
+  }
+  if (!isMongoConnected()) {
+    throw new Error('MongoDB is not connected; assessment report was not persisted.');
+  }
 
   const report = ensureHealthyReport(rawReport);
   if (!(persistentState as any).reports) (persistentState as any).reports = {};
@@ -6490,7 +6497,8 @@ async function persistAssessmentReport(rawReport: any) {
       );
       report.id = repId;
     } catch (e: any) {
-      console.warn('[MongoDB] Failed to persist assessment report:', e.message);
+      console.error('[MongoDB] Failed to persist assessment report:', e.message);
+      throw e;
     }
   }
 
@@ -7959,7 +7967,9 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
   }
   if (room.status !== 'active') return;
   if (room.currentSpeakerId || room.currentSpeakerSocketId) return;
-  const isAnyPeerSpeaking = Array.from(room.peers.values()).some((p) => p.role === 'student' && (p.isSpeaking || p.micActive));
+  // micActive means microphone permission/state, not that the participant is currently speaking.
+  // Treating an enabled microphone as active speech prevented the facilitator from starting turns.
+  const isAnyPeerSpeaking = Array.from(room.peers.values()).some((p) => p.role === 'student' && p.isSpeaking);
   if (isAnyPeerSpeaking) return;
 
   const realStudents = Array.from(room.peers.values()).filter((p) => p.role === 'student');
@@ -7988,15 +7998,12 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
     .slice(lastFacilitatorIndex + 1)
     .filter((t) => !t.isFacilitator && (t.speakerId === completedUserId || t.speakerId === speakerPeer?.userId));
 
-  if (!isOpening && currentTurnTranscripts.length === 0) {
-    // Participant did not provide new speech transcript in this turn;
-    // do not re-analyze old statements or repeat prompts. Let discussion flow.
-    return;
-  }
-
+  const missingTurnTranscript = !isOpening && currentTurnTranscripts.length === 0;
   const spokenThought = currentTurnTranscripts.map((t) => t.text.trim()).join(' ');
 
-  const utteranceClassification = isOpening
+  // If speech transcription missed this turn, don't analyze an older statement or stall the room.
+  // The turn selector below will hand the floor to another eligible student.
+  const utteranceClassification = isOpening || missingTurnTranscript
     ? { category: 'substantive' as const, cleanedThought: '' }
     : classifyParticipantUtterance(spokenThought);
 
@@ -8064,6 +8071,8 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
       } else {
         invitation = `Welcome participants to today's group discussion on "${room.topic}". The discussion has now officially commenced. To begin, let us invite ${targetReal.name} from ${seatStr}. ${firstName}, please share your opening thoughts on this topic.`;
       }
+    } else if (missingTurnTranscript) {
+      invitation = `We did not receive a clear transcript from the previous turn. Let us keep the discussion moving. ${targetReal.name} from ${seatStr}, please share a fresh perspective on "${room.topic}".`;
     } else if (utteranceClassification.category === 'greeting' || utteranceClassification.category === 'mic_check') {
       const studentTurnCount = speakerPeer?.speakingTurns || 0;
       if (studentTurnCount > 1 && utteranceClassification.category === 'greeting') {
