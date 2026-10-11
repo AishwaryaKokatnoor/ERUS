@@ -340,8 +340,63 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         ),
       }));
     },
-    onAiParticipantSpeech: () => {
-      // AI simulated participants are disabled; real human students only.
+    onAiParticipantSpeech: (data: any) => {
+      const participant = data?.participant;
+      const transcript = data?.transcript;
+      if (!participant?.id || !transcript?.id || !String(transcript.text || '').trim()) return;
+
+      setTranscripts((prev) => (
+        prev.some((entry) => entry.id === transcript.id) ? prev : [...prev, transcript]
+      ));
+
+      const aiStudent: Student = {
+        id: String(participant.id),
+        name: String(participant.name || 'AI Participant'),
+        seatNumber: Number(participant.seatNumber || 1),
+        college: String(participant.college || 'ERUS AI Participant'),
+        course: 'Group Discussion',
+        batch: 'AI Simulation',
+        avatar: String(participant.avatar || ''),
+        isUser: false,
+        micActive: false,
+        isSpeaking: true,
+        hasRaisedHand: false,
+        speakingDurationSeconds: Number(participant.speakingDurationSeconds || 0),
+        speakingTurns: Number(participant.speakingTurns || 1),
+        interruptionCount: 0,
+        questionsAnswered: 0,
+        questionsInitiated: 0,
+        sentiment: 'neutral',
+        isRealPeer: false,
+        isDemoAI: true,
+      };
+
+      setSession((prev) => ({
+        ...prev,
+        currentSpeakerId: aiStudent.id,
+        silenceTimerSeconds: 0,
+        students: prev.students.some((student) => student.id === aiStudent.id)
+          ? prev.students.map((student) => student.id === aiStudent.id ? { ...student, ...aiStudent } : student)
+          : [...prev.students, aiStudent],
+      }));
+
+      // Every connected client vocalizes the same server-authored turn. The voice
+      // engine varies persona by speaker name/seat and cancels overlapping speech.
+      if (!voiceMuted && !isRoomAudioMuted) {
+        roomVoice.speakAsStudent({
+          id: aiStudent.id,
+          name: aiStudent.name,
+          seatNumber: aiStudent.seatNumber,
+          gender: /^(priya|ananya|meera|sneha|neha|kavya|divya)/i.test(aiStudent.name) ? 'female' : 'male',
+        }, String(transcript.text), () => {
+          setSession((prev) => ({
+            ...prev,
+            students: prev.students.map((student) => student.id === aiStudent.id
+              ? { ...student, isSpeaking: false }
+              : student),
+          }));
+        });
+      }
     },
 
     onFacilitatorIntervention: (intervention) => {
