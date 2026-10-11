@@ -3562,6 +3562,24 @@ app.post('/api/college/slots/:id/complete', async (req, res) => {
       }
     }
   }
+  if (Array.isArray(target.students)) {
+    for (const s of target.students) {
+      const sId = s?.id || s?.studentId;
+      if (sId && !String(sId).startsWith('ai-') && !String(sId).startsWith('demo-') && !String(sId).includes('empty')) {
+        participantIds.add(String(sId));
+      }
+    }
+  }
+  if (isMongoConnected()) {
+    try {
+      const bookings = await GDBookingModel.find({ sessionId: slotId, status: { $ne: 'CANCELLED' } });
+      for (const b of bookings) {
+        if (b.studentId && !b.studentId.startsWith('ai-') && !b.studentId.startsWith('demo-')) {
+          participantIds.add(b.studentId);
+        }
+      }
+    } catch (e) {}
+  }
   transcriptHistory.forEach((t: any) => {
     // AI simulation personas participate in the conversation but are not real students
     // and must never receive student assessment reports.
@@ -7602,44 +7620,13 @@ const AI_PARTICIPANT_PROFILES: AIParticipantProfile[] = [
 ];
 
 const AI_PARTICIPANT_NAMES = AI_PARTICIPANT_PROFILES.map((p) => p.name);
-const AI_GD_SIMULATION_MODE = true;
-const AI_GD_SIMULATION_PARTICIPANTS = 6;
+const AI_GD_SIMULATION_MODE = false;
+const AI_GD_SIMULATION_PARTICIPANTS = 0;
 
 function syncAiParticipants(room: LiveGDRoomState) {
-  const humanStudents = Array.from(room.peers.values()).filter((peer) => peer.role === 'student');
-  const availableAiCount = 6; // Exactly 6 AI peers alongside the human student
-  const occupiedSeats = new Set(humanStudents.map((peer) => Number(peer.seatNumber)).filter((seat) => seat > 0));
-  const next = new Map<string, AIParticipant>();
-
-  for (let index = 0; index < availableAiCount; index++) {
-    const profile = AI_PARTICIPANT_PROFILES[index];
-    const name = profile.name;
-    const id = `ai-${room.slotId}-${index + 1}`;
-    const existing = room.aiParticipants.get(id);
-    let seatNumber = existing?.seatNumber || 1;
-    if (!existing || occupiedSeats.has(seatNumber) || Array.from(next.values()).some((p) => p.seatNumber === seatNumber)) {
-      seatNumber = 1;
-      while (occupiedSeats.has(seatNumber) || Array.from(next.values()).some((p) => p.seatNumber === seatNumber)) {
-        seatNumber++;
-      }
-    }
-    next.set(id, {
-      id,
-      name,
-      seatNumber,
-      avatar: profile.avatar,
-      role: 'student',
-      college: profile.college,
-      speakingTurns: existing?.speakingTurns || 0,
-      speakingDurationSeconds: existing?.speakingDurationSeconds || 0,
-      lastSpokeAt: existing?.lastSpokeAt,
-    });
-  }
-
   room.aiParticipants.clear();
-  for (const [id, participant] of next) room.aiParticipants.set(id, participant);
-  room.simulationMode = true;
-  return Array.from(room.aiParticipants.values());
+  room.simulationMode = false;
+  return [];
 }
 
 function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {

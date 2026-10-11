@@ -759,21 +759,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       });
     });
 
-    // 4. Place server-authoritative AI participants (exactly 6 Indian student personas) into their assigned seats.
-    const fallbackProfiles = [
-      { id: 'ai-p1', name: 'Aarav Mehta', college: 'IIT Bombay', avatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80', seatNumber: 2 },
-      { id: 'ai-p2', name: 'Priya Sharma', college: 'BITS Pilani', avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80', seatNumber: 3 },
-      { id: 'ai-p3', name: 'Rohan Iyer', college: 'NIT Trichy', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80', seatNumber: 4 },
-      { id: 'ai-p4', name: 'Ananya Reddy', college: 'IIIT Hyderabad', avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80', seatNumber: 5 },
-      { id: 'ai-p5', name: 'Kabir Nair', college: 'Delhi Tech Univ', avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80', seatNumber: 6 },
-      { id: 'ai-p6', name: 'Meera Kapoor', college: 'SRM Institute', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80', seatNumber: 7 },
-    ];
-    const sourceAiList = (rtcAiParticipants && rtcAiParticipants.length >= 6)
-      ? rtcAiParticipants
-      : [
-          ...(rtcAiParticipants || []),
-          ...fallbackProfiles.slice((rtcAiParticipants || []).length),
-        ];
+    // 4. In 100% all-human mode, no synthetic AI student participants are injected.
+    // Only if rtcSimulationMode is explicitly enabled by the room, place server-authoritative AI participants.
+    const sourceAiList = rtcSimulationMode ? (rtcAiParticipants || []) : [];
 
     sourceAiList.forEach((participant: any) => {
       if (!participant?.id) return;
