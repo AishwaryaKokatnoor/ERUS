@@ -3778,6 +3778,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                       <Volume2 className="w-5 h-5 text-indigo-200" />
                     )}
                   </button>
+                  <button
+                    id="test-ai-voice-btn"
+                    onClick={() => roomVoice.speakAsFacilitator('AI facilitator voice check. Can you hear me?')}
+                    disabled={voiceMuted || isRoomAudioMuted}
+                    className="p-3 rounded-full font-semibold transition-all shadow-lg flex items-center justify-center cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                    title={voiceMuted || isRoomAudioMuted ? 'Unmute audio to test the AI facilitator voice' : 'Test AI facilitator voice'}
+                    aria-label="Test AI facilitator voice"
+                  >
+                    <Volume2 className="w-5 h-5" />
+                  </button>
 
                   {/* 5. Trigger Next Student / Peer Turn */}
                   <button
