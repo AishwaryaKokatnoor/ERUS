@@ -10,7 +10,6 @@ export interface VoicePersonaStudent {
 
 class RoomVoiceEngine {
   private isMuted: boolean = false;
-  private voiceUnlocked: boolean = false;
   private currentUtterance: SpeechSynthesisUtterance | null = null;
   private cachedVoices: SpeechSynthesisVoice[] = [];
   private activeUtterances: Set<SpeechSynthesisUtterance> = new Set();
@@ -50,20 +49,9 @@ class RoomVoiceEngine {
 
   private setupUserGestureUnlock() {
     if (typeof window === 'undefined') return;
-    const unlock = () => {
-      this.unlock();
-      if (this.voiceUnlocked || typeof window === 'undefined' || !window.speechSynthesis) return;
-
-      // Prime browser speech output during a user gesture so later socket-driven
-      // facilitator speech is not blocked by autoplay restrictions.
-      try {
-        const primer = new SpeechSynthesisUtterance(' ');
-        primer.volume = 0;
-        primer.rate = 10;
-        window.speechSynthesis.speak(primer);
-        this.voiceUnlocked = true;
-      } catch {}
-    };
+    // Refresh/resume browser speech from real user gestures. Do not enqueue a
+    // blank utterance: browsers can leave it pending and block later speech.
+    const unlock = () => this.unlock();
     window.addEventListener('click', unlock, { passive: true });
     window.addEventListener('touchstart', unlock, { passive: true });
     window.addEventListener('keydown', unlock, { passive: true });
