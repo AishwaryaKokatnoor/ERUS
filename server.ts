@@ -6803,8 +6803,8 @@ app.get('/api/student/reports', async (req, res) => {
     const memoryReports: any[] = Object.values((persistentState as any).reports);
     const matched = memoryReports
       .filter((r) => {
-        const matchStudent = (!studentId || r.studentId === studentId) ||
-          (!studentName || (r.studentName && String(r.studentName).toLowerCase() === studentName.toLowerCase()));
+        const matchStudent = (Boolean(studentId) && r.studentId === studentId) ||
+          (Boolean(studentName) && r.studentName && String(r.studentName).toLowerCase() === studentName.toLowerCase());
         const matchSession = !sessionId || r.sessionId === sessionId;
         const matchTopic = !topic || (r.topic && String(r.topic).toLowerCase() === topic.toLowerCase());
         return matchStudent && matchSession && matchTopic;
