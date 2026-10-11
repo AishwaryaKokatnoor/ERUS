@@ -3577,8 +3577,8 @@ app.post('/api/college/slots/:id/complete', async (req, res) => {
       sessionId: slotId, speakingDurationSeconds: speakingSeconds, speakingTurns: turns,
       interruptionCount: peer?.interruptionCount ?? slotStudent?.interruptionCount ?? 0, questionsAnswered: 0, questionsInitiated: 0,
     });
-    await persistAssessmentReport(report);
-    reports.push(report);
+    const finalPersistedReport = (await persistAssessmentReport(report)) || report;
+    reports.push(finalPersistedReport);
   }
 
   target.status = 'completed';
@@ -6375,9 +6375,41 @@ function ensureHealthyReport(report: any): any {
 }
 
 async function persistAssessmentReport(rawReport: any) {
-  if (!rawReport?.sessionId) return;
+  if (!rawReport?.sessionId) return rawReport;
 
   const report = ensureHealthyReport(rawReport);
+  if (!(persistentState as any).reports) (persistentState as any).reports = {};
+
+  const memKeyById = `${report.sessionId}_${report.studentId}`;
+  const memKeyByName = report.studentName ? `${report.sessionId}_${String(report.studentName).toLowerCase()}` : '';
+
+  // CRITICAL: Never overwrite an existing non-zero report with a 0-score report!
+  if ((report.overallScore || 0) <= 0) {
+    const existingMem =
+      (persistentState as any).reports[memKeyById] ||
+      (memKeyByName ? (persistentState as any).reports[memKeyByName] : null);
+    if (existingMem && (existingMem.overallScore || 0) > 0) {
+      return existingMem;
+    }
+    if (isMongoConnected()) {
+      try {
+        const existingDoc: any = await AssessmentReportModel.findOne({
+          sessionId: report.sessionId,
+          $or: [
+            { studentId: report.studentId },
+            ...(report.studentName ? [{ studentName: report.studentName }] : []),
+          ],
+        }).lean();
+        if (existingDoc && (existingDoc.overallScore || 0) > 0) {
+          const restored = existingDoc.fullReportJson || existingDoc;
+          (persistentState as any).reports[memKeyById] = restored;
+          if (memKeyByName) (persistentState as any).reports[memKeyByName] = restored;
+          return restored;
+        }
+      } catch {}
+    }
+  }
+
   const durationSec = report.speakingDurationSeconds;
   const formattedDuration = report.speakingTimeFormatted;
   const turns = report.speakingTurns;
@@ -6443,11 +6475,12 @@ async function persistAssessmentReport(rawReport: any) {
   }
 
   // In-memory persistence fallback
-  if (!(persistentState as any).reports) (persistentState as any).reports = {};
-  (persistentState as any).reports[`${report.sessionId}_${report.studentId}`] = report;
-  if (report.studentName) {
-    (persistentState as any).reports[`${report.sessionId}_${String(report.studentName).toLowerCase()}`] = report;
+  (persistentState as any).reports[memKeyById] = report;
+  if (memKeyByName) {
+    (persistentState as any).reports[memKeyByName] = report;
   }
+  savePersistentState();
+  return report;
 }
 
 app.post('/api/facilitator/evaluate', async (req, res) => {
@@ -6462,8 +6495,8 @@ app.post('/api/facilitator/evaluate', async (req, res) => {
       questionsAnswered: student.questionsAnswered || 0,
       questionsInitiated: student.questionsInitiated || 0,
     });
-    await persistAssessmentReport(report);
-    res.json({ success: true, report });
+    const finalReport = (await persistAssessmentReport(report)) || report;
+    res.json({ success: true, report: finalReport });
   } catch (error: any) {
     console.error('Evaluation error:', error);
     res.status(500).json({ success: false, error: 'Evaluation failed' });
@@ -7315,6 +7348,7 @@ interface LiveGDRoomState {
   facilitatorHandoffStreak: number;
   speechYieldTimer?: NodeJS.Timeout;
   askedQuestions: Set<string>;
+  facilitatorSpeakingUntil?: number;
 }
 
 const LIVE_ROOMS = new Map<string, LiveGDRoomState>();
@@ -7369,16 +7403,28 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
       facilitatorHandoffCount: 0,
       facilitatorHandoffStreak: 0,
       askedQuestions: new Set<string>(),
+      facilitatorSpeakingUntil: 0,
     };
 
     // Central 15-Second Silence Deadlock Watchdog (PDF Page 4, Section F)
     room.silenceInterval = setInterval(async () => {
+      if (room.status !== 'active') {
+        room.silenceTimerSeconds = 0;
+        return;
+      }
+
       // Auto-clear stale isSpeaking if a peer hasn't emitted speech in >3000ms
       const checkNow = Date.now();
       for (const p of room.peers.values()) {
         if (p.isSpeaking && p.lastSpokeAt && checkNow - p.lastSpokeAt > 3000) {
           p.isSpeaking = false;
         }
+      }
+
+      // Do not increment silence countdown while the AI Facilitator is actively speaking
+      if (room.facilitatorSpeakingUntil && checkNow < room.facilitatorSpeakingUntil) {
+        room.silenceTimerSeconds = 0;
+        return;
       }
 
       const anyPeerSpeaking = Array.from(room.peers.values()).some((p) => p.isSpeaking);
@@ -7406,7 +7452,7 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
 
         // Silence watchdog: trigger AI moderator intervention if no one speaks for 15s
         const now = Date.now();
-        const deadlockCooldownMs = 8000;
+        const deadlockCooldownMs = 18000;
         if (
           room.silenceTimerSeconds >= 15 &&
           (!room.lastDeadlockAt || now - room.lastDeadlockAt >= deadlockCooldownMs)
@@ -8120,6 +8166,9 @@ CRITICAL RULES:
     };
     room.transcripts.push(transcript);
     persistTranscriptToMongoDB(transcript);
+    const invWordCount = invitation.split(/\s+/).filter(Boolean).length;
+    room.facilitatorSpeakingUntil = Date.now() + Math.max(7000, invWordCount * 480);
+    room.silenceTimerSeconds = 0;
     io.to('room-' + room.slotId).emit('facilitator-intervention', {
       text: invitation,
       action: isOpening
@@ -8136,6 +8185,9 @@ CRITICAL RULES:
 
 async function triggerDeadlockIntervention(room: LiveGDRoomState) {
   const checkNow = Date.now();
+  if (room.facilitatorSpeakingUntil && checkNow < room.facilitatorSpeakingUntil) {
+    return;
+  }
   for (const p of room.peers.values()) {
     if (p.isSpeaking && p.lastSpokeAt && checkNow - p.lastSpokeAt > 3000) {
       p.isSpeaking = false;
@@ -8236,20 +8288,24 @@ async function triggerDeadlockIntervention(room: LiveGDRoomState) {
     ]
   };
 
-  const pool = domainDeadlockQuestions[deadlockDomain] || domainDeadlockQuestions.general;
+  const primaryPool = domainDeadlockQuestions[deadlockDomain] || domainDeadlockQuestions.general;
+  const combinedPool = [...primaryPool, ...domainDeadlockQuestions.general];
   if (!room.askedQuestions) room.askedQuestions = new Set<string>();
-  const unaskedPool = pool.filter((q) => {
+  const getQuestionStem = (q: string) => q.replace(/^[^,]+,\s*/, '').toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+  const unaskedPool = combinedPool.filter((q) => {
+    const stem = getQuestionStem(q);
     for (const asked of room.askedQuestions!) {
-      if (asked.includes(q) || q.includes(asked)) return false;
+      const askedStem = getQuestionStem(asked);
+      if (asked.includes(q) || q.includes(asked) || (stem.length > 20 && askedStem.includes(stem.slice(-28)))) return false;
     }
     return true;
   });
-  const candidatesPool = unaskedPool.length > 0 ? unaskedPool : pool;
+  const candidatesPool = unaskedPool.length > 0 ? unaskedPool : combinedPool;
   let deadlockQuestion = candidatesPool[(room.deadlockCount - 1) % candidatesPool.length];
 
   if (ai) {
     try {
-      const priorQuestionsList = Array.from(room.askedQuestions || []).slice(-4).map((q) => `- ${q}`).join('\n');
+      const priorQuestionsList = Array.from(room.askedQuestions || []).slice(-6).map((q) => `- ${q}`).join('\n');
       const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500));
       const aiPromise = ai.models.generateContent({
         model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
@@ -8272,7 +8328,16 @@ Do not mention AI.`,
       });
       const response: any = await Promise.race([aiPromise, timeoutPromise]);
       const generated = response?.text?.trim();
-      if (generated) deadlockQuestion = generated;
+      if (generated) {
+        const genStem = getQuestionStem(generated);
+        const isDuplicate = Array.from(room.askedQuestions || []).some((asked) => {
+          const askedStem = getQuestionStem(asked);
+          return asked.toLowerCase() === generated.toLowerCase() || (genStem.length > 20 && askedStem.includes(genStem.slice(-28)));
+        });
+        if (!isDuplicate) {
+          deadlockQuestion = generated;
+        }
+      }
     } catch (err) {
       // Clean fallback without interrupting discussion
     }
@@ -8303,6 +8368,10 @@ Do not mention AI.`,
 
   room.transcripts.push(interventionTranscript);
   persistTranscriptToMongoDB(interventionTranscript);
+
+  const dlWordCount = (deadlockQuestion || '').split(/\s+/).filter(Boolean).length;
+  room.facilitatorSpeakingUntil = Date.now() + Math.max(7000, dlWordCount * 480);
+  room.silenceTimerSeconds = 0;
 
   io.to(`room-${room.slotId}`).emit('facilitator-intervention', {
     text: deadlockQuestion,
@@ -8515,6 +8584,10 @@ io.on('connection', (socket) => {
     };
     room.transcripts.push(transcript);
     persistTranscriptToMongoDB(transcript);
+
+    const modWordCount = text.trim().split(/\s+/).filter(Boolean).length;
+    room.facilitatorSpeakingUntil = Date.now() + Math.max(8000, modWordCount * 500);
+    room.silenceTimerSeconds = 0;
 
     io.to(`room-${safeSlotId}`).emit('facilitator-intervention', {
       text: text.trim(),

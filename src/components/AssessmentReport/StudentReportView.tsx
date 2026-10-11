@@ -447,16 +447,73 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
   const [showVideoModal, setShowVideoModal] = useState(false);
   const [videoError, setVideoError] = useState(false);
 
-  // Helper: check if a report matches the current session ID and topic
+  // Helper: check if a report matches the current session ID or topic
   const isMatchingReport = (rep?: StudentAssessmentReport | null): boolean => {
     if (!rep) return false;
+    if (session?.id && rep.sessionId && rep.sessionId === session.id) return true;
+    if (session?.topic && rep.topic && rep.topic.trim().toLowerCase() === session.topic.trim().toLowerCase()) return true;
     const sameSession = session?.id ? rep.sessionId === session.id : true;
     const sameTopic = session?.topic ? rep.topic === session.topic : true;
     return sameSession && sameTopic;
   };
 
+  // Lookup any saved non-zero report for this student across localStorage caches & student history
+  const findBestSavedStudentReport = (): StudentAssessmentReport | null => {
+    if (initialReport && (initialReport.overallScore || 0) > 0 && isMatchingReport(initialReport)) {
+      return initialReport;
+    }
+    try {
+      if (session?.id) {
+        const slotRepRaw = localStorage.getItem(`erus_slot_report_${session.id}`);
+        if (slotRepRaw) {
+          const parsed = JSON.parse(slotRepRaw);
+          if (parsed && (parsed.overallScore || 0) > 0) return parsed;
+        }
+      }
+      const activeRaw = localStorage.getItem('erus_active_report_v1');
+      if (activeRaw) {
+        const parsed = JSON.parse(activeRaw);
+        if (parsed && (parsed.overallScore || 0) > 0 && isMatchingReport(parsed)) {
+          return parsed;
+        }
+      }
+      const candidateKeys = Array.from(
+        new Set(
+          [
+            (currentUser as any)?.studentId,
+            currentUser?.id,
+            currentUser?.name,
+            userStudent?.id,
+            userStudent?.name,
+          ]
+            .map((k) => String(k || '').trim())
+            .filter(Boolean)
+        )
+      );
+      for (const key of candidateKeys) {
+        const hist = getStudentReportHistory(key);
+        const exactMatch = hist.find((r) => (r.overallScore || 0) > 0 && isMatchingReport(r));
+        if (exactMatch) return exactMatch;
+      }
+      for (const key of candidateKeys) {
+        const hist = getStudentReportHistory(key);
+        const anyNonZero = hist.find((r) => (r.overallScore || 0) > 0);
+        if (anyNonZero) return anyNonZero;
+      }
+      if (activeRaw) {
+        const parsed = JSON.parse(activeRaw);
+        if (parsed && (parsed.overallScore || 0) > 0) return parsed;
+      }
+    } catch {}
+    return null;
+  };
+
   // Initialize report personalized for the active student if they are a student
   const [currentReport, setCurrentReport] = useState<StudentAssessmentReport>(() => {
+    const savedNonZero = findBestSavedStudentReport();
+    if (savedNonZero) {
+      return normalizeReport(savedNonZero);
+    }
     if (isStudent) {
       if (
         initialReport &&
@@ -501,26 +558,34 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
     } catch (e) {}
   }, []);
 
-  // After completion, load the persisted report strictly matching active session and topic
+  // Load the persisted report and recordingUrl from backend (runs on mount and refresh regardless of transient session.status)
   useEffect(() => {
-    if (!isStudent || session.status !== 'completed' || !currentUser?.id) return;
+    if (!currentUser?.id && !userStudent?.id) return;
     let cancelled = false;
     (async () => {
       try {
-        const studentQuery = encodeURIComponent(currentUser.id);
-        const nameQuery = encodeURIComponent(currentUser.name || '');
+        const studentQuery = encodeURIComponent(currentUser?.id || userStudent?.id || '');
+        const nameQuery = encodeURIComponent(currentUser?.name || userStudent?.name || '');
         const sessionQuery = encodeURIComponent(session?.id || '');
         const topicQuery = encodeURIComponent(session?.topic || '');
         const res = await fetch(`/api/student/reports?studentId=${studentQuery}&studentName=${nameQuery}&sessionId=${sessionQuery}&topic=${topicQuery}`);
-        const data = await res.json();
-        let persisted = Array.isArray(data.reports) && data.reports.length > 0
-          ? data.reports.find((r: any) => (!session.topic || r.topic === session.topic) && (!session.id || r.sessionId === session.id))
-          : null;
+        const data = await res.json().catch(() => ({}));
+        const allReports: any[] = Array.isArray(data.reports) ? data.reports : [];
+        // Prefer non-zero matching report first
+        let persisted =
+          allReports.find(
+            (r: any) =>
+              (r.overallScore || 0) > 0 &&
+              ((session?.id && r.sessionId === session.id) || (!session?.topic || r.topic === session.topic))
+          ) ||
+          allReports.find((r: any) => (r.overallScore || 0) > 0) ||
+          allReports.find((r: any) => (!session?.topic || r.topic === session.topic) && (!session?.id || r.sessionId === session.id)) ||
+          null;
 
-        if (!persisted && session?.id) {
+        if ((!persisted || (persisted.overallScore || 0) <= 0) && session?.id) {
           try {
             const slotRes = await fetch(`/api/college/slots/${encodeURIComponent(session.id)}/reports`);
-            const slotData = await slotRes.json();
+            const slotData = await slotRes.json().catch(() => ({}));
             if (slotData.success) {
               if (slotData.slot?.recordingUrl) {
                 if (session) session.recordingUrl = slotData.slot.recordingUrl;
@@ -528,13 +593,25 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
                 setCurrentReport((prev) => ({ ...prev, recordingUrl: slotData.slot.recordingUrl }));
               }
               if (Array.isArray(slotData.reports)) {
-                persisted = slotData.reports.find(
-                  (r: any) =>
-                    (!session.topic || r.topic === session.topic) &&
-                    (r.studentId === currentUser.id ||
-                    r.studentId === (currentUser as any).studentId ||
-                    (r.studentName && r.studentName.toLowerCase() === currentUser.name?.toLowerCase()))
-                );
+                const slotMatched =
+                  slotData.reports.find(
+                    (r: any) =>
+                      (r.overallScore || 0) > 0 &&
+                      (r.studentId === currentUser?.id ||
+                        r.studentId === (currentUser as any)?.studentId ||
+                        r.studentId === userStudent?.id ||
+                        (r.studentName && r.studentName.toLowerCase() === (currentUser?.name || userStudent?.name || '').toLowerCase()))
+                  ) ||
+                  slotData.reports.find(
+                    (r: any) =>
+                      r.studentId === currentUser?.id ||
+                      r.studentId === (currentUser as any)?.studentId ||
+                      r.studentId === userStudent?.id ||
+                      (r.studentName && r.studentName.toLowerCase() === (currentUser?.name || userStudent?.name || '').toLowerCase())
+                  );
+                if (slotMatched && ((slotMatched.overallScore || 0) > 0 || !persisted)) {
+                  persisted = slotMatched;
+                }
               }
             }
           } catch {}
@@ -542,10 +619,10 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
 
         // Also proactively check session recording endpoint if recordingUrl is still empty
         const targetSlotId = session?.id || currentReport?.sessionId;
-        if (targetSlotId && !session?.recordingUrl && !currentReport?.recordingUrl) {
+        if (targetSlotId) {
           try {
             const recRes = await fetch(`/api/sessions/${encodeURIComponent(targetSlotId)}/recording`);
-            const recData = await recRes.json();
+            const recData = await recRes.json().catch(() => ({}));
             if (recData.success && recData.recordingUrl) {
               if (session) session.recordingUrl = recData.recordingUrl;
               try { localStorage.setItem(`erus_recording_${targetSlotId}`, recData.recordingUrl); } catch {}
@@ -555,28 +632,49 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
         }
 
         if (!cancelled && persisted) {
-          setCurrentReport((prev) => normalizeReport({ ...prev, ...persisted }, prev));
+          setCurrentReport((prev) => {
+            // CRITICAL: Never overwrite a report that already has overallScore > 0 with a 0-score report!
+            if ((prev?.overallScore || 0) > 0 && (persisted.overallScore || 0) <= 0) {
+              return prev;
+            }
+            const next = normalizeReport({ ...prev, ...persisted }, prev);
+            if ((next.overallScore || 0) > 0) {
+              addReportToStudentHistory(next);
+            }
+            return next;
+          });
         }
       } catch (e) {
         console.warn('[Student Report] Could not load persisted report:', e);
       }
     })();
     return () => { cancelled = true; };
-  }, [isStudent, currentUser?.id, currentUser?.name, session?.id, session?.topic, session?.status]);
+  }, [isStudent, currentUser?.id, currentUser?.name, userStudent?.id, session?.id, session?.topic, session?.status]);
 
-  // Ensure report stays synchronized with active session and student without cross-topic leakage
+  // Ensure report stays synchronized with active session and student without overwriting non-zero reports on refresh
   useEffect(() => {
     if (isStudent && userStudent) {
       setSelectedStudentId(userStudent.id);
+      const savedNonZero = findBestSavedStudentReport();
+      if (savedNonZero && (savedNonZero.overallScore || 0) > 0) {
+        setCurrentReport((prev) => {
+          if ((prev?.overallScore || 0) > (savedNonZero.overallScore || 0) && isMatchingReport(prev)) {
+            return prev;
+          }
+          return normalizeReport(savedNonZero, prev);
+        });
+        return;
+      }
       if (
         initialReport &&
+        (initialReport.overallScore || 0) > 0 &&
         isMatchingReport(initialReport) &&
         (initialReport.studentId === userStudent.id || initialReport.studentName?.toLowerCase() === (currentUser?.name || userStudent.name)?.toLowerCase())
       ) {
         setCurrentReport(normalizeReport(initialReport));
       } else {
         setCurrentReport((prev) => {
-          if (prev && isMatchingReport(prev) && (prev.speakingTurns > 0 || prev.speakingTimeSeconds > 0)) {
+          if (prev && ((prev.overallScore || 0) > 0 || prev.speakingTurns > 0 || prev.speakingTimeSeconds > 0)) {
             return prev;
           }
           return normalizeReport(generateStudentReport(userStudent, session?.topic || 'Group Discussion', session?.durationMinutes || 15, undefined, session?.id));
@@ -588,12 +686,12 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
     }
   }, [isStudent, userStudent?.id, currentUser?.name, session?.id, session?.topic, initialReport, targetStudentId]);
 
-  // Persist current report to student's historical comparison archive
+  // Persist current report to student's historical comparison archive ONLY when overallScore > 0
   useEffect(() => {
-    if (currentReport && (!isStudent || hasParticipatedInCurrentSession)) {
+    if (currentReport && (currentReport.overallScore || 0) > 0) {
       addReportToStudentHistory(currentReport);
     }
-  }, [currentReport, isStudent, hasParticipatedInCurrentSession]);
+  }, [currentReport]);
 
   // Faculty live observation notes for this candidate (Enhancement 4)
   const candidateLiveNotes = useMemo(() => {
@@ -1118,78 +1216,76 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
         </div>
       )}
 
-      {/* Discussion Audio & Video Archive & Playback Player (Hidden for students; visible to faculty/admin) */}
-      {!isStudent && (
-        <div className="no-print p-4 rounded-2xl bg-gradient-to-r from-teal-500/10 via-emerald-500/10 to-indigo-500/10 dark:from-teal-950/40 dark:via-emerald-950/40 dark:to-indigo-950/40 border border-teal-500/30 dark:border-teal-700/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-teal-500/20 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0">
-              <Video className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm font-bold text-slate-900 dark:text-white">
-                  Live GD Discussion Recording
-                </span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-100 dark:bg-teal-900 text-teal-800 dark:text-teal-200 border border-teal-300 dark:border-teal-700">
-                  Video &amp; Audio Archive (.webm)
-                </span>
-              </div>
-              <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
-                Watch or listen to the full discussion recording, evaluate speaking turns, and review participant interactions.
-              </p>
-            </div>
+      {/* Discussion Audio & Video Archive & Playback Player */}
+      <div className="no-print p-4 rounded-2xl bg-gradient-to-r from-teal-500/10 via-emerald-500/10 to-indigo-500/10 dark:from-teal-950/40 dark:via-emerald-950/40 dark:to-indigo-950/40 border border-teal-500/30 dark:border-teal-700/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-teal-500/20 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0">
+            <Video className="w-5 h-5" />
           </div>
-
-          <div className="flex items-center gap-2 self-start sm:self-center flex-wrap">
-            <button
-              onClick={async () => {
-                const targetId = session?.id || currentReport?.sessionId;
-                const cachedUrl = targetId && typeof localStorage !== 'undefined' ? localStorage.getItem(`erus_recording_${targetId}`) : null;
-                let recUrl = session?.recordingUrl || currentReport?.recordingUrl || cachedUrl;
-                if (!recUrl && targetId) {
-                  try {
-                    const res = await fetch(`/api/sessions/${encodeURIComponent(targetId)}/recording`);
-                    const d = await res.json();
-                    if (d.success && d.recordingUrl) {
-                      recUrl = d.recordingUrl;
-                      if (session) session.recordingUrl = d.recordingUrl;
-                      try { localStorage.setItem(`erus_recording_${targetId}`, d.recordingUrl); } catch {}
-                      setCurrentReport((prev) => ({ ...prev, recordingUrl: d.recordingUrl }));
-                    }
-                  } catch {}
-                }
-                setVideoError(false);
-                setShowVideoModal(true);
-              }}
-              className="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
-              title="Watch full recorded video of this discussion"
-            >
-              <Video className="w-3.5 h-3.5" />
-              <span>Watch Video</span>
-            </button>
-            {(session?.recordingUrl || currentReport?.recordingUrl) && (
-              <>
-                <audio
-                  controls
-                  src={session?.recordingUrl || currentReport?.recordingUrl}
-                  className="h-8 w-44 sm:w-56"
-                />
-                <a
-                  href={session?.recordingUrl || currentReport?.recordingUrl}
-                  download={`GD-${session?.id || 'session'}-Recording.webm`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white flex items-center gap-1.5 shadow-xs transition-all"
-                  title="Download audio/video recording to device"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download</span>
-                </a>
-              </>
-            )}
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-bold text-slate-900 dark:text-white">
+                Live GD Discussion Recording
+              </span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-100 dark:bg-teal-900 text-teal-800 dark:text-teal-200 border border-teal-300 dark:border-teal-700">
+                Video &amp; Audio Archive (.webm)
+              </span>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+              Watch or listen to the full discussion recording, evaluate speaking turns, and review participant interactions.
+            </p>
           </div>
         </div>
-      )}
+
+        <div className="flex items-center gap-2 self-start sm:self-center flex-wrap">
+          <button
+            onClick={async () => {
+              const targetId = session?.id || currentReport?.sessionId;
+              const cachedUrl = targetId && typeof localStorage !== 'undefined' ? localStorage.getItem(`erus_recording_${targetId}`) : null;
+              let recUrl = session?.recordingUrl || currentReport?.recordingUrl || cachedUrl;
+              if (!recUrl && targetId) {
+                try {
+                  const res = await fetch(`/api/sessions/${encodeURIComponent(targetId)}/recording`);
+                  const d = await res.json();
+                  if (d.success && d.recordingUrl) {
+                    recUrl = d.recordingUrl;
+                    if (session) session.recordingUrl = d.recordingUrl;
+                    try { localStorage.setItem(`erus_recording_${targetId}`, d.recordingUrl); } catch {}
+                    setCurrentReport((prev) => ({ ...prev, recordingUrl: d.recordingUrl }));
+                  }
+                } catch {}
+              }
+              setVideoError(false);
+              setShowVideoModal(true);
+            }}
+            className="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+            title="Watch full recorded video of this discussion"
+          >
+            <Video className="w-3.5 h-3.5" />
+            <span>Watch Video</span>
+          </button>
+          {(session?.recordingUrl || currentReport?.recordingUrl) && (
+            <>
+              <audio
+                controls
+                src={session?.recordingUrl || currentReport?.recordingUrl}
+                className="h-8 w-44 sm:w-56"
+              />
+              <a
+                href={session?.recordingUrl || currentReport?.recordingUrl}
+                download={`GD-${session?.id || 'session'}-Recording.webm`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1.5 rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white flex items-center gap-1.5 shadow-xs transition-all"
+                title="Download audio/video recording to device"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download</span>
+              </a>
+            </>
+          )}
+        </div>
+      </div>
 
       {/* Main Printable Assessment Report Card */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-sm dark:shadow-2xl space-y-6 print-card transition-colors duration-200">

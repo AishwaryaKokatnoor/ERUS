@@ -128,24 +128,41 @@ export function getStudentReportHistory(studentIdentifier: string, currentReport
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
+        // Sort or prefer non-zero reports if duplicate exists
         return parsed;
+      }
+    }
+    // Fallback check in erus_active_report_v1
+    const activeRaw = localStorage.getItem('erus_active_report_v1');
+    if (activeRaw) {
+      const activeParsed = JSON.parse(activeRaw);
+      if (
+        activeParsed &&
+        typeof activeParsed === 'object' &&
+        (activeParsed.overallScore || 0) > 0 &&
+        (!studentIdentifier ||
+          String(activeParsed.studentId || '').toLowerCase() === studentIdentifier.toLowerCase() ||
+          String(activeParsed.studentName || '').toLowerCase() === studentIdentifier.toLowerCase())
+      ) {
+        return [activeParsed];
       }
     }
   } catch (e) {
     console.warn('Failed to load report history:', e);
   }
 
-  // If no stored history and currentReport is provided, initialize with current report only
-  if (currentReport) {
+  // If no stored history and currentReport is provided with non-zero score, initialize with current report
+  if (currentReport && (currentReport.overallScore || 0) > 0) {
     const initialHistory = [currentReport];
     saveStudentReportHistory(studentIdentifier, initialHistory);
     return initialHistory;
   }
 
-  return [];
+  return currentReport ? [currentReport] : [];
 }
 
 export function saveStudentReportHistory(studentIdentifier: string, reports: StudentAssessmentReport[]): void {
+  if (!studentIdentifier) return;
   try {
     const key = getStorageKey(studentIdentifier);
     localStorage.setItem(key, JSON.stringify(reports));
@@ -155,23 +172,58 @@ export function saveStudentReportHistory(studentIdentifier: string, reports: Stu
 }
 
 export function addReportToStudentHistory(report: StudentAssessmentReport): StudentAssessmentReport[] {
-  const studentKey = report.studentName || report.studentId || 'student';
-  const existing = getStudentReportHistory(studentKey);
+  const keys = Array.from(
+    new Set(
+      [report.studentId, report.studentName, 'student']
+        .map((k) => String(k || '').trim())
+        .filter(Boolean)
+    )
+  );
+  const primaryKey = report.studentName || report.studentId || 'student';
+  let existing = getStudentReportHistory(primaryKey);
+  if (existing.length === 0 && report.studentId) {
+    existing = getStudentReportHistory(report.studentId);
+  }
 
-  // Check if report already exists in history (same id or same session & topic)
-  const existingIndex = existing.findIndex((r) => r.id === report.id || (r.sessionId === report.sessionId && r.topic === report.topic));
-  
+  // Check if report already exists in history (same id or same sessionId or same topic)
+  const existingIndex = existing.findIndex(
+    (r) =>
+      r.id === report.id ||
+      (r.sessionId && report.sessionId && r.sessionId === report.sessionId) ||
+      (r.topic && report.topic && r.topic === report.topic)
+  );
+
+  // CRITICAL: Never overwrite an existing non-zero report with a 0-score fallback report on page refresh!
+  if (existingIndex >= 0) {
+    const prevReport = existing[existingIndex];
+    if ((prevReport.overallScore || 0) > 0 && (report.overallScore || 0) <= 0) {
+      return existing;
+    }
+  } else if ((report.overallScore || 0) <= 0 && existing.some((r) => (r.overallScore || 0) > 0)) {
+    return existing;
+  }
+
   let updated: StudentAssessmentReport[];
   if (existingIndex >= 0) {
-    // Update existing report
     updated = [...existing];
     updated[existingIndex] = report;
   } else {
-    // Prepend new report so index 0 is always the most recent (Current GD)
     updated = [report, ...existing];
   }
 
-  saveStudentReportHistory(studentKey, updated);
+  for (const k of keys) {
+    saveStudentReportHistory(k, updated);
+  }
+
+  if ((report.overallScore || 0) > 0 && typeof window !== 'undefined') {
+    try {
+      localStorage.setItem('erus_active_report_v1', JSON.stringify(report));
+      if (report.sessionId) {
+        localStorage.setItem(`erus_slot_report_${report.sessionId}`, JSON.stringify(report));
+      }
+    } catch {}
+  }
+
   return updated;
 }
 

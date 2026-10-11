@@ -363,7 +363,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
     onFacilitatorIntervention: (intervention) => {
       hasInitiatedOpeningRef.current = true;
+      lastFacilitatorInterventionTimeRef.current = Date.now();
+      setLocalSilenceSeconds(0);
       const intText = String(intervention?.text || '').trim();
+      if (!intText) return;
+
+      // Record question in usedProbeQuestionsRef so local fallback never repeats it
+      usedProbeQuestionsRef.current.add(intText);
+
       setTranscripts((prev) => {
         if (prev.some((t) => t.id === intervention?.transcript?.id || (t.isFacilitator && String(t.text || '').trim() === intText))) return prev;
         return intervention?.transcript ? [...prev, intervention.transcript] : prev;
@@ -406,19 +413,36 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       // Audibly speak AI intervention using roomVoice
       if (!voiceMuted && !isRoomAudioMuted) {
         roomVoice.speakAsFacilitator(intervention.text, () => {
-          setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
+          lastFacilitatorInterventionTimeRef.current = Date.now();
+          setLocalSilenceSeconds(0);
+          setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false, silenceTimerSeconds: 0 }));
         });
       }
     },
   });
 
-  // Synchronized GD termination watch: if session status changes to 'completed', finish GD for student
+  // Synchronized GD termination watch: if session status changes to 'completed', upload recording first then finish GD
   useEffect(() => {
     if (session.status === 'completed' && currentUser?.role === 'student') {
-      // Students do NOT record or upload — faculty portal is the single authoritative recorder!
-      onFinishSession();
+      let cancelled = false;
+      const finishWithRecording = async () => {
+        if (gdRecorderRef.current?.isRecording) {
+          try {
+            await gdRecorderRef.current.stopAndUploadRecording(session.slotId || session.id);
+          } catch (err) {
+            console.warn('[GD Room] Student recording upload on completion notice:', err);
+          }
+        }
+        if (!cancelled) {
+          onFinishSession();
+        }
+      };
+      finishWithRecording();
+      return () => {
+        cancelled = true;
+      };
     }
-  }, [session.status, currentUser?.role, onFinishSession]);
+  }, [session.status, currentUser?.role, onFinishSession, session.slotId, session.id]);
 
   // Continuous local silence stopwatch fallback to ensure 15s triggers even during socket network lag
   const [localSilenceSeconds, setLocalSilenceSeconds] = useState(0);
@@ -434,6 +458,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     const interval = setInterval(() => {
       const isAnyActive =
         session.isFacilitatorSpeaking ||
+        roomVoice.isSpeaking() ||
+        aiVoicePausedMicRef.current ||
         rtcIsSpeakingLive ||
         (isListeningMicRef.current && (audioLevel > 8 || !!liveSpeechTranscript)) ||
         session.students.some((s) => s.isSpeaking);
@@ -765,25 +791,21 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   ]);
 
   // Automated Live Discussion Multi-Stream Video/Audio Recorder
-  // Runs on Faculty/Admin if present; otherwise runs on primary student client so EVERY GD is recorded
+  // Runs on Faculty/Admin or active Student client so EVERY GD is recorded reliably
   const isRecordingClient = useMemo(() => {
     if (isFacultyOrAdmin) return true;
-    // Check if there is a faculty peer present in WebRTC room
     const hasFacultyInRoom = Array.from(rtcPeerStreams?.keys() || []).some((k) => k.toLowerCase().includes('faculty'));
     if (hasFacultyInRoom) return false;
-    // Primary student acts as background recorder to guarantee recording exists
-    const userStudent = activeDisplayStudents.find((s) => s.isUser);
-    if (!userStudent) return false;
-    const allUserSeats = activeDisplayStudents.filter((s) => s.isUser).map((s) => s.seatNumber || 1);
-    return (userStudent.seatNumber || 1) === Math.min(...allUserSeats);
-  }, [isFacultyOrAdmin, rtcPeerStreams, activeDisplayStudents]);
+    return true;
+  }, [isFacultyOrAdmin, rtcPeerStreams]);
 
   const gdRecorder = useGDRecorder({
     slotId: session.slotId || session.id || 'slot-1',
     isSessionActive: session.status === 'active',
     localStream: videoStream,
+    localAudioStream: audioStream,
     peerStreams: rtcPeerStreams,
-    recordVideo: isRecordingClient,
+    recordVideo: true,
     enabled: isRecordingClient,
     topicTitle: session.topic || (session as any).topicTitle || 'Group Discussion',
     participantTiles: activeDisplayStudents.map((st) => ({
@@ -798,6 +820,18 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     autoStartOnActive: true,
   });
   gdRecorderRef.current = gdRecorder;
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).__erusStopAndUploadRecording = () =>
+        gdRecorderRef.current?.stopAndUploadRecording(session.slotId || session.id);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        delete (window as any).__erusStopAndUploadRecording;
+      }
+    };
+  }, [session.slotId, session.id]);
 
   // Conclude or leave GD discussion with automatic video recording preservation
   const handleConcludeOrLeaveSession = useCallback(async () => {
@@ -1014,12 +1048,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       audioChunksRef.current = [];
 
       mr.ondataavailable = (e) => {
+        if (aiVoicePausedMicRef.current || roomVoice.isSpeaking()) return;
         if (e.data && e.data.size > 0) {
           audioChunksRef.current.push(e.data);
         }
       };
 
       mr.onstop = async () => {
+        if (aiVoicePausedMicRef.current || roomVoice.isSpeaking()) {
+          audioChunksRef.current = [];
+          return;
+        }
         if (audioChunksRef.current.length === 0) return;
         const audioBlob = new Blob(audioChunksRef.current, { type: mime });
         audioChunksRef.current = [];
@@ -1128,12 +1167,12 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         };
 
         recognition.onresult = (event: any) => {
-          // If human participant speaks while AI voice is playing, stop AI voice so participant has the floor
-          if (roomVoice.isSpeaking()) {
-            roomVoice.stop();
-            setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
+          // CRITICAL: Ignore microphone input while AI Facilitator voice is playing through speakers
+          // so speaker echo does NOT cut off the AI Facilitator mid-sentence or transcribe AI speech as student speech!
+          if (aiVoicePausedMicRef.current || roomVoice.isSpeaking()) {
+            committedResultIndexRef.current = event.results.length - 1;
+            return;
           }
-          aiVoicePausedMicRef.current = false;
           lastWebSpeechTimeRef.current = Date.now();
 
           let interimTranscript = '';
@@ -1911,20 +1950,33 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
     // 2. Mid-discussion silence (if floor is silent for 15 seconds, request intervention or probe)
     const currentSilence = Math.max(rtcSilenceTimer, session.silenceTimerSeconds, localSilenceSeconds);
-    if (currentSilence >= 15 && !session.isFacilitatorSpeaking && !rtcIsSpeakingLive && !isTransitioningTurnRef.current) {
-      if (Date.now() - lastFacilitatorInterventionTimeRef.current >= 6000) {
-        lastFacilitatorInterventionTimeRef.current = Date.now();
+    if (
+      currentSilence >= 15 &&
+      !session.isFacilitatorSpeaking &&
+      !roomVoice.isSpeaking() &&
+      !aiVoicePausedMicRef.current &&
+      !rtcIsSpeakingLive &&
+      !isTransitioningTurnRef.current
+    ) {
+      if (Date.now() - lastFacilitatorInterventionTimeRef.current >= 16000) {
+        const requestTimestamp = Date.now();
+        lastFacilitatorInterventionTimeRef.current = requestTimestamp;
         setLocalSilenceSeconds(0);
         if (isSocketConnected && rtcRequestAiIntervention) {
           console.log('[Silence Watchdog] Floor silent for 15s; requesting AI facilitator intervention.');
           rtcRequestAiIntervention();
-          // Fallback probe in case server response is delayed
+          // Fallback probe ONLY if server did not send any intervention within 6.5 seconds
           setTimeout(() => {
-            if (!session.isFacilitatorSpeaking && !rtcIsSpeakingLive) {
+            if (
+              lastFacilitatorInterventionTimeRef.current <= requestTimestamp &&
+              !session.isFacilitatorSpeaking &&
+              !roomVoice.isSpeaking() &&
+              !rtcIsSpeakingLive
+            ) {
               console.log('[Silence Watchdog] Server response delay; falling back to local targeted probe.');
               handleFacilitatorTargetedProbe();
             }
-          }, 2500);
+          }, 6500);
         } else {
           console.log('[Silence Watchdog] Floor silent for 15s; local targeted probe.');
           handleFacilitatorTargetedProbe();

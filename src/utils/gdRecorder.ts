@@ -79,6 +79,12 @@ export async function uploadGDRecording(
     throw new Error(data.error || `Failed to upload recording (HTTP ${res.status})`);
   }
 
+  if (data.recordingUrl && typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(`erus_recording_${slotId}`, data.recordingUrl);
+    } catch {}
+  }
+
   return data;
 }
 
@@ -118,6 +124,7 @@ export interface UseGDRecorderOptions {
   slotId: string;
   isSessionActive: boolean;
   localStream?: MediaStream | null;
+  localAudioStream?: MediaStream | null;
   peerStreams?: Map<string, MediaStream>;
   recordVideo?: boolean;
   enabled?: boolean;
@@ -220,6 +227,7 @@ export function useGDRecorder({
   slotId,
   isSessionActive,
   localStream,
+  localAudioStream,
   peerStreams,
   recordVideo = true,
   enabled = true,
@@ -245,6 +253,8 @@ export function useGDRecorder({
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const durationCounterRef = useRef<number>(0);
   const mimeTypeRef = useRef<string>('');
+  const slotIdRef = useRef<string>(slotId);
+  const isCheckpointUploadingRef = useRef<boolean>(false);
 
   // Video compositing refs
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -254,6 +264,10 @@ export function useGDRecorder({
   const topicTitleRef = useRef<string>(topicTitle);
 
   // Keep refs in sync with latest props
+  useEffect(() => {
+    slotIdRef.current = slotId;
+  }, [slotId]);
+
   useEffect(() => {
     participantTilesRef.current = participantTiles;
   }, [participantTiles]);
@@ -296,12 +310,15 @@ export function useGDRecorder({
     if (localStream) {
       mixStreamIntoDestination(localStream);
     }
+    if (localAudioStream) {
+      mixStreamIntoDestination(localAudioStream);
+    }
     if (peerStreams) {
       for (const peerStream of peerStreams.values()) {
         mixStreamIntoDestination(peerStream);
       }
     }
-  }, [enabled, isRecording, localStream, peerStreams, mixStreamIntoDestination]);
+  }, [enabled, isRecording, localStream, localAudioStream, peerStreams, mixStreamIntoDestination]);
 
   // Video rendering loop for composite grid
   const startCanvasVideoCompositor = useCallback((canvas: HTMLCanvasElement) => {
@@ -554,7 +571,9 @@ export function useGDRecorder({
       connectedTracksRef.current.clear();
 
       // 2. Mix available streams (local user + peers)
-      if (localStream && localStream.getAudioTracks().length > 0) {
+      if (localAudioStream && localAudioStream.getAudioTracks().length > 0) {
+        mixStreamIntoDestination(localAudioStream);
+      } else if (localStream && localStream.getAudioTracks().length > 0) {
         mixStreamIntoDestination(localStream);
       } else {
         try {
@@ -661,10 +680,37 @@ export function useGDRecorder({
       setIsRecording(true);
       setIsPaused(false);
 
-      // Start duration timer
+      // Start duration timer + periodic background checkpoint upload so video is NEVER lost
       timerIntervalRef.current = setInterval(() => {
         durationCounterRef.current += 1;
-        setRecordingDurationSeconds(durationCounterRef.current);
+        const currentSecs = durationCounterRef.current;
+        setRecordingDurationSeconds(currentSecs);
+
+        // Background checkpoint upload at 3s and every 8s thereafter
+        if (
+          (currentSecs === 3 || currentSecs % 8 === 0) &&
+          chunksRef.current.length > 0 &&
+          slotIdRef.current &&
+          !isCheckpointUploadingRef.current
+        ) {
+          isCheckpointUploadingRef.current = true;
+          const mime = mimeTypeRef.current || (recordVideo ? 'video/webm' : 'audio/webm');
+          const snapshotBlob = new Blob(chunksRef.current, { type: mime });
+          if (snapshotBlob.size > 0) {
+            uploadGDRecording(slotIdRef.current, snapshotBlob, currentSecs)
+              .then((res) => {
+                if (res?.recordingUrl) {
+                  setRecordingUrl(res.recordingUrl);
+                }
+              })
+              .catch(() => {})
+              .finally(() => {
+                isCheckpointUploadingRef.current = false;
+              });
+          } else {
+            isCheckpointUploadingRef.current = false;
+          }
+        }
       }, 1000);
 
       console.log(
@@ -681,6 +727,7 @@ export function useGDRecorder({
   }, [
     enabled,
     localStream,
+    localAudioStream,
     peerStreams,
     recordVideo,
     startCanvasVideoCompositor,
@@ -716,14 +763,18 @@ export function useGDRecorder({
   const stopRecording = useCallback((): Promise<Blob | null> => {
     return new Promise((resolve) => {
       const rec = mediaRecorderRef.current;
+      const mime = mimeTypeRef.current || (recordVideo ? 'video/webm' : 'audio/webm');
       if (!rec || rec.state === 'inactive') {
-        resolve(recordingBlob);
+        if (chunksRef.current.length > 0) {
+          resolve(new Blob(chunksRef.current, { type: mime }));
+        } else {
+          resolve(recordingBlob);
+        }
         return;
       }
 
       const handleStop = () => {
         rec.removeEventListener('stop', handleStop);
-        const mime = mimeTypeRef.current || (recordVideo ? 'video/webm' : 'audio/webm');
         const finalBlob = new Blob(chunksRef.current, { type: mime });
         resolve(finalBlob);
       };
@@ -735,7 +786,11 @@ export function useGDRecorder({
         }
         rec.stop();
       } catch {
-        resolve(null);
+        if (chunksRef.current.length > 0) {
+          resolve(new Blob(chunksRef.current, { type: mime }));
+        } else {
+          resolve(null);
+        }
       }
     });
   }, [recordingBlob, recordVideo]);
@@ -798,7 +853,7 @@ export function useGDRecorder({
     }
   }, [enabled, autoStartOnActive, isSessionActive, isRecording, recordingUrl, startRecording]);
 
-  // Clean up on unmount
+  // Clean up on unmount — also ensure any recorded chunks are uploaded to server before disposal
   useEffect(() => {
     return () => {
       if (timerIntervalRef.current) {
@@ -815,14 +870,24 @@ export function useGDRecorder({
       videoPoolRef.current.clear();
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         try {
+          if (mediaRecorderRef.current.state === 'recording') {
+            mediaRecorderRef.current.requestData();
+          }
           mediaRecorderRef.current.stop();
         } catch {}
+      }
+      if (chunksRef.current.length > 0 && slotIdRef.current) {
+        const mime = mimeTypeRef.current || (recordVideo ? 'video/webm' : 'audio/webm');
+        const finalBlob = new Blob(chunksRef.current, { type: mime });
+        if (finalBlob.size > 0) {
+          uploadGDRecording(slotIdRef.current, finalBlob, durationCounterRef.current || 1).catch(() => {});
+        }
       }
       if (audioContextRef.current) {
         audioContextRef.current.close().catch(() => {});
       }
     };
-  }, []);
+  }, [recordVideo]);
 
   return {
     isRecording,

@@ -123,7 +123,18 @@ function GDAppContent() {
     return slots[0] || INITIAL_SESSION;
   });
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
-  const [activeReport, setActiveReport] = useState<StudentAssessmentReport | null>(null);
+  const [activeReport, setActiveReport] = useState<StudentAssessmentReport | null>(() => {
+    try {
+      const savedRep = localStorage.getItem('erus_active_report_v1');
+      if (savedRep) {
+        const parsed = JSON.parse(savedRep);
+        if (parsed && typeof parsed === 'object' && parsed.id) {
+          return parsed;
+        }
+      }
+    } catch {}
+    return null;
+  });
   const [viewingStudentId, setViewingStudentId] = useState<string | null>(null);
   const [voiceMuted, setVoiceMuted] = useState<boolean>(false);
   const [studentBookedSlotsByTopic, setStudentBookedSlotsByTopic] = useState<Record<string, string>>(() => {
@@ -207,6 +218,18 @@ function GDAppContent() {
       localStorage.setItem('erus_current_tab', currentTab);
     } catch {}
   }, [currentTab]);
+
+  // Persist activeReport to localStorage whenever it has a valid non-zero score
+  useEffect(() => {
+    if (activeReport && (activeReport.overallScore || 0) > 0) {
+      try {
+        localStorage.setItem('erus_active_report_v1', JSON.stringify(activeReport));
+        if (activeReport.sessionId) {
+          localStorage.setItem(`erus_slot_report_${activeReport.sessionId}`, JSON.stringify(activeReport));
+        }
+      } catch {}
+    }
+  }, [activeReport]);
 
   // User Presence & Heartbeat Tracking for Server Capacity & Active User Monitoring
   useEffect(() => {
@@ -638,29 +661,16 @@ function GDAppContent() {
     }
   }, [currentTab]);
 
-  // Main session elapsed timer & silence deadlock tracker (Strictly active only when room is live)
+  // Main session elapsed timer (Strictly active only when room is live; silence moderation is handled by RealisticGDRoom & server)
   useEffect(() => {
     if (!currentUser || currentTab !== 'room' || session.status !== 'active') return;
 
     const timer = setInterval(() => {
       setElapsedSeconds((prev) => prev + 1);
-
-      // Deadlock silence detection
-      setSession((prevSession) => {
-        const newSilence = prevSession.silenceTimerSeconds + 1;
-        // If silence reaches 20 seconds, trigger deadlock prompt
-        if (newSilence === 20 && !prevSession.isFacilitatorSpeaking && !prevSession.currentSpeakerId) {
-          triggerDeadlockIntervention(prevSession);
-        }
-        return {
-          ...prevSession,
-          silenceTimerSeconds: newSilence,
-        };
-      });
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [currentUser, currentTab, session.status, session.isFacilitatorSpeaking, session.currentSpeakerId]);
+  }, [currentUser, currentTab, session.status]);
 
   // Faculty In-Charge / Host Commences the Discussion Session
   const handleStartSession = (slotIdToStart?: string) => {
@@ -802,6 +812,23 @@ function GDAppContent() {
     if (isFinishingSessionRef.current) return;
     isFinishingSessionRef.current = true;
 
+    const finishedSlotId = session.id;
+
+    // 0. Ensure any active GD recording is stopped and uploaded BEFORE unmounting RealisticGDRoom
+    if (typeof window !== 'undefined' && typeof (window as any).__erusStopAndUploadRecording === 'function') {
+      try {
+        const uploadRes = await (window as any).__erusStopAndUploadRecording();
+        if (uploadRes?.recordingUrl) {
+          setSession((prev) => ({ ...prev, recordingUrl: uploadRes.recordingUrl }));
+          setAvailableSlots((prev) =>
+            prev.map((s) => (s.id === finishedSlotId ? { ...s, recordingUrl: uploadRes.recordingUrl } : s))
+          );
+        }
+      } catch (recErr) {
+        console.warn('[GD Recorder] Final upload before report transition notice:', recErr);
+      }
+    }
+
     // 1. Guaranteed student resolution
     const userStudent: Student = session.students?.find((s) => s.isUser) ||
       session.students?.find((s) => !s.isEmptySeat && (s.id === currentUser?.id || s.name === currentUser?.name)) ||
@@ -832,8 +859,6 @@ function GDAppContent() {
       userStudent.college = currentUser?.college || 'Institution';
       userStudent.isUser = true;
     }
-
-    const finishedSlotId = session.id;
 
     try {
       if (currentUser?.role === 'faculty') {
@@ -922,6 +947,7 @@ function GDAppContent() {
           };
           setActiveReport(enhancedReport);
           addReportToStudentHistory(enhancedReport);
+          setCurrentTab('report');
           return;
         }
 
@@ -957,12 +983,22 @@ function GDAppContent() {
           });
           const data = await res.json().catch(() => ({}));
           if (res.ok && data.report) {
-            const enhancedReport: StudentAssessmentReport = {
+            let enhancedReport: StudentAssessmentReport = {
               ...data.report,
               facultyLiveNotes: session.facultyLiveNotes?.filter(
                 (n) => n.studentId === userStudent.id || n.studentName.toLowerCase() === userStudent.name.toLowerCase()
               ),
             };
+            // Never overwrite an already-saved non-zero report with a 0-score report
+            if ((enhancedReport.overallScore || 0) <= 0) {
+              const savedHist = getStudentReportHistory(userStudent.id || userStudent.name || 'student');
+              const nonZeroSaved = savedHist.find(
+                (r) => (r.overallScore || 0) > 0 && (r.sessionId === finishedSlotId || r.topic === session.topic)
+              ) || (activeReport && (activeReport.overallScore || 0) > 0 ? activeReport : null);
+              if (nonZeroSaved) {
+                enhancedReport = nonZeroSaved;
+              }
+            }
             setActiveReport(enhancedReport);
             addReportToStudentHistory(enhancedReport);
           } else {
@@ -982,11 +1018,20 @@ function GDAppContent() {
             speakingDurationSeconds: duration,
             speakingTurns: turns,
           };
-          const fallbackRep = generateStudentReport(studentObjWithMetrics, session.topic, session.durationMinutes);
+          let fallbackRep = generateStudentReport(studentObjWithMetrics, session.topic, session.durationMinutes);
           fallbackRep.sessionId = finishedSlotId;
           fallbackRep.facultyLiveNotes = session.facultyLiveNotes?.filter(
             (n) => n.studentId === userStudent.id || n.studentName.toLowerCase() === userStudent.name.toLowerCase()
           );
+          if ((fallbackRep.overallScore || 0) <= 0) {
+            const savedHist = getStudentReportHistory(userStudent.id || userStudent.name || 'student');
+            const nonZeroSaved = savedHist.find(
+              (r) => (r.overallScore || 0) > 0 && (r.sessionId === finishedSlotId || r.topic === session.topic)
+            ) || (activeReport && (activeReport.overallScore || 0) > 0 ? activeReport : null);
+            if (nonZeroSaved) {
+              fallbackRep = nonZeroSaved;
+            }
+          }
           setActiveReport(fallbackRep);
           addReportToStudentHistory(fallbackRep);
         }
