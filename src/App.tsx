@@ -327,6 +327,36 @@ function GDAppContent() {
     if (!currentUser) return;
     const socket = getSocket();
     if (!socket) return;
+    const handleRemoteSessionStarted = (data: any) => {
+      const slotId = String(data?.slotId || '').trim();
+      if (!slotId || currentUser.role !== 'student') return;
+
+      const bookedSlotIds = Object.values(studentBookedSlotsByTopic);
+      const isMySession = session?.id === slotId || bookedSlotIds.includes(slotId);
+      if (!isMySession) return;
+
+      const targetSlot = availableSlots.find((slot) => slot.id === slotId);
+      const alreadyActive = session?.id === slotId && session.status === 'active';
+
+      setAvailableSlots((prev) =>
+        prev.map((slot) => slot.id === slotId ? { ...slot, status: 'active' } : slot)
+      );
+      setSession((prev) => {
+        const base = prev.id === slotId ? prev : (targetSlot || { ...prev, id: slotId });
+        return {
+          ...base,
+          id: slotId,
+          status: 'active',
+          startedAt: base.startedAt || Date.now(),
+        };
+      });
+
+      if (!alreadyActive) {
+        setElapsedSeconds(0);
+        setTranscripts([]);
+      }
+      setCurrentTab('room');
+    };
     const handleRemoteSessionEnded = (data: any) => {
       if (data?.slotId) {
         setAvailableSlots((prev) =>
@@ -374,15 +404,17 @@ function GDAppContent() {
         setSession((prev) => (prev?.id === data.slotId ? { ...prev, recordingUrl: data.recordingUrl, recordingDurationSeconds: data.durationSeconds } : prev));
       }
     };
+    socket.on('session-started', handleRemoteSessionStarted);
     socket.on('session-ended', handleRemoteSessionEnded);
     socket.on('slot-updated', handleSlotUpdated);
     socket.on('session-recording-saved', handleRecordingSaved);
     return () => {
+      socket.off('session-started', handleRemoteSessionStarted);
       socket.off('session-ended', handleRemoteSessionEnded);
       socket.off('slot-updated', handleSlotUpdated);
       socket.off('session-recording-saved', handleRecordingSaved);
     };
-  }, [currentUser, session?.id, currentTab, userCollegeCode]);
+  }, [currentUser, session?.id, session?.status, currentTab, userCollegeCode, studentBookedSlotsByTopic, availableSlots]);
 
 
   // Reset slots back to clean demo defaults
@@ -590,12 +622,8 @@ function GDAppContent() {
     return () => clearInterval(timer);
   }, [currentUser, currentTab, session.status]);
 
-  // Faculty In-Charge / Host Commences the Discussion Session
+  // Host / Participant Commences the Discussion Session
   const handleStartSession = (slotIdToStart?: string) => {
-    const userRole = String(currentUser?.role || '').toLowerCase();
-    if (userRole !== 'faculty' && userRole !== 'college_admin' && userRole !== 'super_admin') {
-      return;
-    }
     const targetSlotId = slotIdToStart || session.id;
     const targetSlot = availableSlots.find((s) => s.id === targetSlotId) || session;
 

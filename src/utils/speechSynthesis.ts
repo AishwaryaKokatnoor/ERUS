@@ -259,11 +259,11 @@ class RoomVoiceEngine {
   }
 
   // AI Facilitator Speech in Indian English Accent
-  public speak(text: string, onEnd?: () => void) {
-    this.speakAsFacilitator(text, onEnd);
+  public speak(text: string, onEnd?: () => void, force?: boolean) {
+    this.speakAsFacilitator(text, onEnd, force);
   }
 
-  public speakAsFacilitator(text: string, onEnd?: () => void) {
+  public speakAsFacilitator(text: string, onEnd?: () => void, force?: boolean) {
     const cleanText = String(text || '').replace(/\s+/g, ' ').trim();
     if (this.isMuted || typeof window === 'undefined' || !window.speechSynthesis || !cleanText) {
       if (onEnd) onEnd();
@@ -272,9 +272,9 @@ class RoomVoiceEngine {
 
     const normalized = cleanText.toLowerCase().replace(/[^a-z0-9]/g, '');
     const now = Date.now();
-    // Prevent duplicate/repeated speech of the exact same prompt within 15 seconds
-    if (normalized && normalized === this.lastSpokenNormalized && now - this.lastSpokenAt < 15000) {
-      console.log('[AI Facilitator Voice] Skipping duplicate prompt within 15s:', cleanText.slice(0, 40));
+    // Prevent duplicate/repeated speech of the exact same prompt within 4 seconds (unless forced)
+    if (!force && normalized && normalized === this.lastSpokenNormalized && now - this.lastSpokenAt < 4000) {
+      console.log('[AI Facilitator Voice] Skipping duplicate prompt within 4s:', cleanText.slice(0, 40));
       if (onEnd) onEnd();
       return;
     }

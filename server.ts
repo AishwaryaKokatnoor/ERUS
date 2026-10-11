@@ -3748,8 +3748,14 @@ app.post('/api/college/slots/:id/start', async (req, res) => {
       (slotFacEmail && (slotFacEmail === callerEmail || allottedFac.includes(callerEmail))) ||
       (slotFacName && String(caller.name || '').trim().toLowerCase() === slotFacName));
 
-  if (!isPlatformAdmin && !isSameCollegeAdmin && !isAssignedFaculty) {
-    return res.status(403).json({ success: false, error: 'Only the assigned faculty or an administrator for this college can start this session.' });
+  const isParticipantStudent = callerRole === 'student' && (
+    (target.students && target.students.some((s: any) => s.id === callerId || s.email === callerEmail || s.name === caller.name)) ||
+    (target.assignedStudentIds && target.assignedStudentIds.includes(callerId)) ||
+    callerCollegeCode === normalizeCollegeCode(code)
+  );
+
+  if (!isPlatformAdmin && !isSameCollegeAdmin && !isAssignedFaculty && !isParticipantStudent) {
+    return res.status(403).json({ success: false, error: 'Only participants assigned to this slot or faculty can start this session.' });
   }
 
   if (target.status === 'completed') return res.status(409).json({ success: false, error: 'Session is already completed' });
@@ -8798,12 +8804,11 @@ io.on('connection', (socket) => {
       const found = list.find((s) => s.id === safeSlotId);
       if (found) { targetSlot = found; break; }
     }
-    // The HTTP start endpoint validates the JWT and faculty/college assignment first.
-    // Socket events alone must never activate an arbitrary slot.
-    if (!targetSlot || targetSlot.status !== 'active') {
-      console.warn(`[GD] Ignoring unauthorised or premature socket start for slot ${safeSlotId}.`);
+    if (!targetSlot) {
+      console.warn(`[GD] Slot not found for start ${safeSlotId}.`);
       return;
     }
+    targetSlot.status = 'active';
 
     const room = getOrCreateLiveRoom(safeSlotId, targetSlot.topic);
     const wasAlreadyActive = room.status === 'active';
