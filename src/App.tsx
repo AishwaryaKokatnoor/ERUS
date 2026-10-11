@@ -57,16 +57,25 @@ function GDAppContent() {
   // Safely load and validate slots, purging stale legacy storage where all slots were full or active
   const loadInitialSlots = (): GDSession[] => {
     try {
-      // Purge legacy cache keys and ghost deletion sets
-      ['erus_available_slots', 'erus_available_slots_v1', 'erus_available_slots_v2', 'erus_available_slots_v3', 'erus_available_slots_v4', 'erus_available_slots_v5', 'erus_available_slots_v6', 'erus_available_slots_v7', 'erus_available_slots_v8', 'erus_deleted_slot_ids'].forEach((k) => {
+      // Purge legacy cache keys (preserve erus_deleted_slot_ids so deleted slots stay deleted on refresh)
+      ['erus_available_slots', 'erus_available_slots_v1', 'erus_available_slots_v2', 'erus_available_slots_v3', 'erus_available_slots_v4', 'erus_available_slots_v5', 'erus_available_slots_v6', 'erus_available_slots_v7', 'erus_available_slots_v8'].forEach((k) => {
         localStorage.removeItem(k);
       });
+
+      let deletedIds = new Set<string>();
+      try {
+        const rawDel = localStorage.getItem('erus_deleted_slot_ids');
+        if (rawDel) {
+          const parsedDel = JSON.parse(rawDel);
+          if (Array.isArray(parsedDel)) deletedIds = new Set(parsedDel);
+        }
+      } catch {}
 
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const notDeleted = parsed.filter((s: GDSession) => s && s.id);
+          const notDeleted = parsed.filter((s: GDSession) => s && s.id && !deletedIds.has(s.id));
           if (notDeleted.length > 0) {
             return notDeleted.map((s: GDSession) => ({
               ...s,
@@ -245,7 +254,15 @@ function GDAppContent() {
           : await fetchCollegeSlots(collegeCode);
 
         if (Array.isArray(rawSlots)) {
-          let filteredRaw = rawSlots.filter((s: any) => s && s.id);
+          let deletedIds = new Set<string>();
+          try {
+            const rawDel = localStorage.getItem('erus_deleted_slot_ids');
+            if (rawDel) {
+              const parsedDel = JSON.parse(rawDel);
+              if (Array.isArray(parsedDel)) deletedIds = new Set(parsedDel);
+            }
+          } catch {}
+          let filteredRaw = rawSlots.filter((s: any) => s && s.id && !deletedIds.has(s.id));
           if (currentUser.role === 'faculty') {
             filteredRaw = filteredRaw.filter((s: any) => isFacultyAssignedToSlot(s, currentUser));
           } else if (currentUser.role === 'student') {

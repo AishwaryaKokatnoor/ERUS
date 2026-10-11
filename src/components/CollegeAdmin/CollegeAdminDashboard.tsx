@@ -170,6 +170,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
 
   // Slots State
   const [slots, setSlots] = useState<any[]>([]);
+  const [hasLoadedSlots, setHasLoadedSlots] = useState(false);
   const [deletedSlotIds, setDeletedSlotIds] = useState<Set<string>>(() => {
     try {
       const raw = localStorage.getItem('erus_deleted_slot_ids');
@@ -180,9 +181,9 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
   });
   const [isScheduleSlotOpen, setIsScheduleSlotOpen] = useState(false);
 
-  // Authoritative college slots: use loaded college slots when available, fallback to availableSlots matching this college
+  // Authoritative college slots: once loaded from backend, use slots directly (even if 0 remain after deletion)
   const allRawSlots: any[] =
-    slots.length > 0
+    hasLoadedSlots || slots.length > 0
       ? slots
       : (availableSlots || []).filter((s) => {
           const sCode = (s.collegeCode || '').toUpperCase();
@@ -330,6 +331,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
           if (rawDel) deletedIds = new Set(JSON.parse(rawDel));
         } catch {}
         setSlots(slotData.filter((s: any) => !deletedIds.has(s.id) && !deletedSlotIds.has(s.id)));
+        setHasLoadedSlots(true);
       }
     } catch (e) {
       console.warn('Dashboard load error:', e);

@@ -213,6 +213,8 @@ let persistentState = {
   users: [...DEFAULT_USERS],
   studentBookings: {} as Record<string, string>,
   studentTopicBookings: {} as Record<string, Record<string, string>>,
+  deletedSlotIds: [] as string[],
+  slotsInitializedColleges: {} as Record<string, boolean>,
   recordings: {} as Record<string, { recordingUrl: string; durationSeconds: number; fileSizeBytes: number; recordedAt: string }>,
   systemSettings: {
     dailyUserLimit: 100,
@@ -271,6 +273,14 @@ function loadPersistentState() {
         const dummyCollegeCodes = ['DIT', 'IITB'];
         const dummyUserIds = ['ca-1', 'fac-1', 'fac-2', 's1', 's2', 's3'];
 
+        if (Array.isArray(data.deletedSlotIds)) {
+          persistentState.deletedSlotIds = Array.from(new Set(data.deletedSlotIds.filter(Boolean)));
+        }
+        if (data.slotsInitializedColleges && typeof data.slotsInitializedColleges === 'object') {
+          persistentState.slotsInitializedColleges = { ...data.slotsInitializedColleges };
+        }
+        const deletedSet = new Set(persistentState.deletedSlotIds);
+
         if (Array.isArray(data.colleges)) {
           persistentState.colleges = data.colleges.filter(
             (c: any) => !dummyCollegeCodes.includes(c?.code) && !['col-1', 'col-2'].includes(c?.id)
@@ -307,6 +317,7 @@ function loadPersistentState() {
           for (const [k, v] of Object.entries(data.slots)) {
             const kCode = k.trim().toUpperCase();
             if (validCollegeCodes.has(kCode) && Array.isArray(v)) {
+              persistentState.slotsInitializedColleges[kCode] = true;
               const registeredStudentIds = new Set(
                 (persistentState.students[kCode] || []).map((s: any) => String(s.id || '').toLowerCase())
               );
@@ -314,7 +325,7 @@ function loadPersistentState() {
                 (persistentState.students[kCode] || []).map((s: any) => String(s.email || '').toLowerCase())
               );
               persistentState.slots[kCode] = (v as any[])
-                .filter((slot: any) => !['slot-dit-001', 'session-101', 'slot-teachers-1'].includes(slot?.id))
+                .filter((slot: any) => slot?.id && !deletedSet.has(slot.id) && !['slot-dit-001', 'session-101', 'slot-teachers-1'].includes(slot?.id))
                 .map((slot: any) => {
                   const cleanedStudents = (slot.students || []).filter((st: any) => {
                     if (!st) return false;
@@ -608,9 +619,14 @@ async function syncMongoDBWithPersistentState() {
     }
 
     // Hydrate Slots (Parent Table: gd_sessions) from MongoDB
+    const deletedSet = new Set(persistentState.deletedSlotIds || []);
+    if (deletedSet.size > 0) {
+      await GDSessionModel.deleteMany({ id: { $in: Array.from(deletedSet) } }).catch(() => null);
+    }
     const dbSessions = await GDSessionModel.find();
     if (dbSessions.length > 0) {
       for (const s of dbSessions) {
+        if (!s?.id || deletedSet.has(s.id)) continue;
         const colCode = normalizeCollegeCode(s.collegeCode);
         if (!colCode || !persistentState.colleges.some((c) => c.code.toUpperCase() === colCode)) continue;
         if (!persistentState.slots[colCode]) persistentState.slots[colCode] = [];
@@ -650,6 +666,7 @@ async function syncMongoDBWithPersistentState() {
     // Persist all slots to MongoDB
     for (const [colCode, slotList] of Object.entries(persistentState.slots)) {
       for (const s of (slotList as any[])) {
+        if (!s?.id || deletedSet.has(s.id)) continue;
         s.collegeCode = normalizeCollegeCode(s.collegeCode || colCode);
         await persistSlotToMongoDB(s);
       }
@@ -2068,7 +2085,8 @@ app.get('/api/college/stats', (req, res) => {
   const college = persistentState.colleges.find((c) => c.code === code);
   const stuList = persistentState.students[code] || [];
   const facList = persistentState.faculty[code] || [];
-  const slotList = persistentState.slots[code] || [];
+  const deletedSet = new Set(persistentState.deletedSlotIds || []);
+  const slotList = (persistentState.slots[code] || []).filter((s) => s?.id && !deletedSet.has(s.id));
 
   res.json({
     success: true,
@@ -2745,10 +2763,17 @@ app.get('/api/college/slots', async (req, res) => {
   const code = normalizeCollegeCode((req.query.collegeCode as string) || 'DIT');
   const facultyList = persistentState.faculty[code] || [];
   const slotMap = new Map<string, any>();
+  const deletedSet = new Set(persistentState.deletedSlotIds || []);
+  const hadInitializedSlots =
+    Boolean(persistentState.slotsInitializedColleges?.[code]) ||
+    Array.isArray(persistentState.slots[code]) ||
+    deletedSet.size > 0;
 
-  // Start with in-memory slots for this code
+  // Start with in-memory slots for this code (excluding any deleted slots)
   for (const slot of (persistentState.slots[code] || [])) {
-    slotMap.set(slot.id, slot);
+    if (slot?.id && !deletedSet.has(slot.id)) {
+      slotMap.set(slot.id, slot);
+    }
   }
 
   // Authoritative MongoDB lookup
@@ -2756,6 +2781,12 @@ app.get('/api/college/slots', async (req, res) => {
     try {
       const dbSlots = await GDSessionModel.find({ collegeCode: code }).maxTimeMS(2000);
       for (const s of dbSlots) {
+        if (!s?.id || deletedSet.has(s.id)) {
+          if (s?.id && deletedSet.has(s.id)) {
+            deleteSlotFromMongoDB(s.id).catch(() => null);
+          }
+          continue;
+        }
         const existing = slotMap.get(s.id) || {};
         slotMap.set(s.id, {
           ...existing,
@@ -2797,6 +2828,7 @@ app.get('/api/college/slots', async (req, res) => {
       });
 
       for (const s of dbSlots) {
+        if (!s?.id || deletedSet.has(s.id)) continue;
         const existing = slotMap.get(s.id) || {};
         slotMap.set(s.id, {
           ...existing,
@@ -2827,8 +2859,8 @@ app.get('/api/college/slots', async (req, res) => {
     }
   }
 
-  // If no slots exist for this college, auto-generate 15-student slots based on the college's quota set by Super Admin
-  if (slotMap.size === 0) {
+  // Only auto-generate initial slots if this college has never initialized or deleted slots
+  if (slotMap.size === 0 && !hadInitializedSlots) {
     const col = persistentState.colleges.find((c) => normalizeCollegeCode(c.code) === code);
     const limit = col?.studentLimit || 60;
     const generated = generateRandomSlotsForCollege(code, limit);
@@ -2836,6 +2868,8 @@ app.get('/api/college/slots', async (req, res) => {
       slotMap.set(g.id, g);
       persistSlotToMongoDB(g);
     }
+    if (!persistentState.slotsInitializedColleges) persistentState.slotsInitializedColleges = {};
+    persistentState.slotsInitializedColleges[code] = true;
   }
 
   const slots = Array.from(slotMap.values()).map((slot) => {
@@ -2874,8 +2908,8 @@ app.get('/api/college/slots', async (req, res) => {
     return ensureSlotParticipants(baseSlot, code);
   });
 
-  // Preserve ALL slots: never truncate, drop, or delete created slots!
-  let finalSlots = slots;
+  // Preserve ALL non-deleted slots
+  let finalSlots = slots.filter((s) => s?.id && !deletedSet.has(s.id));
 
   // Sort slots: active first, then scheduled (newest first), then completed
   finalSlots.sort((a, b) => {
@@ -2889,6 +2923,8 @@ app.get('/api/college/slots', async (req, res) => {
   });
 
   // Keep in-memory cache synchronized
+  if (!persistentState.slotsInitializedColleges) persistentState.slotsInitializedColleges = {};
+  persistentState.slotsInitializedColleges[code] = true;
   persistentState.slots[code] = finalSlots;
   savePersistentState();
 
@@ -2975,6 +3011,10 @@ app.post('/api/college/slots', async (req, res) => {
   if (!persistentState.slots[code]) {
     persistentState.slots[code] = [];
   }
+  if (!persistentState.slotsInitializedColleges) {
+    persistentState.slotsInitializedColleges = {};
+  }
+  persistentState.slotsInitializedColleges[code] = true;
 
   // Faculty assignment is topic-level: every slot under the same topic must
   // use the same Faculty In-Charge. The first published assignment becomes the
@@ -3019,10 +3059,13 @@ app.post('/api/college/slots', async (req, res) => {
     ...(slotStudents ? { students: slotStudents } : {}),
   };
 
+  if (Array.isArray(persistentState.deletedSlotIds)) {
+    persistentState.deletedSlotIds = persistentState.deletedSlotIds.filter((id) => id !== newSlot.id);
+  }
   ensureSlotParticipants(newSlot, code);
   persistentState.slots[code] = [newSlot, ...(persistentState.slots[code] || []).filter((s) => s.id !== newSlot.id)];
   savePersistentState();
-  persistSlotToMongoDB(newSlot);
+  await persistSlotToMongoDB(newSlot);
 
   if (isDbConnected && prisma) {
     try {
@@ -3157,7 +3200,7 @@ app.put(['/api/college/slots/:id/allot', '/api/college/slots/:id'], async (req, 
   }
 
   savePersistentState();
-  persistSlotToMongoDB(targetSlot);
+  await persistSlotToMongoDB(targetSlot);
 
   if (isDbConnected && prisma) {
     try {
@@ -3244,7 +3287,7 @@ app.post('/api/college/slots/:id/allot', async (req, res) => {
   }
 
   savePersistentState();
-  persistSlotToMongoDB(targetSlot);
+  await persistSlotToMongoDB(targetSlot);
 
   try {
     io.emit('slot-updated', targetSlot);
@@ -3260,6 +3303,15 @@ app.post('/api/college/generate-slots', async (req, res) => {
   const col = persistentState.colleges.find((c) => normalizeCollegeCode(c.code) === code);
   const limit = studentLimit || col?.studentLimit || 60;
 
+  // Record old slots as deleted before regenerating
+  const oldSlots = persistentState.slots[code] || [];
+  if (!Array.isArray(persistentState.deletedSlotIds)) persistentState.deletedSlotIds = [];
+  for (const old of oldSlots) {
+    if (old?.id && !persistentState.deletedSlotIds.includes(old.id)) {
+      persistentState.deletedSlotIds.push(old.id);
+    }
+  }
+
   // Clear old slots for this college from MongoDB & PostgreSQL
   if (isMongoConnected()) {
     try {
@@ -3274,10 +3326,12 @@ app.post('/api/college/generate-slots', async (req, res) => {
 
   const slots = generateRandomSlotsForCollege(code, limit);
   persistentState.slots[code] = slots;
+  if (!persistentState.slotsInitializedColleges) persistentState.slotsInitializedColleges = {};
+  persistentState.slotsInitializedColleges[code] = true;
   savePersistentState();
 
   for (const sl of slots) {
-    persistSlotToMongoDB(sl);
+    await persistSlotToMongoDB(sl);
   }
 
   try {
@@ -3294,19 +3348,29 @@ app.post('/api/college/generate-slots', async (req, res) => {
 
 app.delete('/api/college/slots/:id', async (req, res) => {
   const slotId = req.params.id;
-  let target: any = null;
+  if (!Array.isArray(persistentState.deletedSlotIds)) {
+    persistentState.deletedSlotIds = [];
+  }
+  if (!persistentState.deletedSlotIds.includes(slotId)) {
+    persistentState.deletedSlotIds.push(slotId);
+  }
+  if (!persistentState.slotsInitializedColleges) {
+    persistentState.slotsInitializedColleges = {};
+  }
 
-  for (const list of Object.values(persistentState.slots)) {
-    const found = list.find((s) => s.id === slotId);
-    if (found) {
-      target = found;
-      break;
+  // Remove from in-memory slots across all colleges and mark those colleges initialized
+  for (const c of Object.keys(persistentState.slots)) {
+    const beforeLen = (persistentState.slots[c] || []).length;
+    persistentState.slots[c] = (persistentState.slots[c] || []).filter((s) => s.id !== slotId);
+    if ((persistentState.slots[c] || []).length !== beforeLen) {
+      persistentState.slotsInitializedColleges[c] = true;
     }
   }
 
-  // Remove from in-memory slots across all colleges
-  for (const c of Object.keys(persistentState.slots)) {
-    persistentState.slots[c] = (persistentState.slots[c] || []).filter((s) => s.id !== slotId);
+  const reqCode = normalizeCollegeCode((req.query.collegeCode as string) || req.body?.collegeCode || '');
+  if (reqCode) {
+    persistentState.slotsInitializedColleges[reqCode] = true;
+    if (!persistentState.slots[reqCode]) persistentState.slots[reqCode] = [];
   }
 
   // Remove associated student bookings
@@ -3326,7 +3390,7 @@ app.delete('/api/college/slots/:id', async (req, res) => {
   }
 
   savePersistentState();
-  deleteSlotFromMongoDB(slotId);
+  await deleteSlotFromMongoDB(slotId);
 
   if (isDbConnected && prisma) {
     try {
@@ -3336,6 +3400,10 @@ app.delete('/api/college/slots/:id', async (req, res) => {
       console.warn('[Database] Failed to delete GD slot from PostgreSQL:', dbErr.message);
     }
   }
+
+  try {
+    io.emit('slot-deleted', { slotId });
+  } catch {}
 
   res.json({ success: true, slotId });
 });

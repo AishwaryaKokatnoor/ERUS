@@ -193,19 +193,41 @@ export function saveLocalFaculty(collegeCode: string, faculty: any[]) {
   }
 }
 
+export function getDeletedSlotIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem('erus_deleted_slot_ids');
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter(Boolean) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function markSlotDeletedLocally(slotId: string) {
+  if (!slotId) return;
+  try {
+    const deleted = getDeletedSlotIds();
+    deleted.add(slotId);
+    localStorage.setItem('erus_deleted_slot_ids', JSON.stringify(Array.from(deleted)));
+  } catch {}
+}
+
 export function getLocalSlots(collegeCode: string): any[] {
   try {
+    const deleted = getDeletedSlotIds();
     const raw = localStorage.getItem(`erus_college_slots_${collegeCode.toUpperCase()}`);
     const list = raw ? JSON.parse(raw) : [];
-    return (list || []).map((s: any) => {
-      const topic = s.topic ? String(s.topic).trim() : '';
-      const numMatch = (s.slotName || '').match(/^(Slot\s+\d+)/i) || (s.id || '').match(/slot-.*?-(\d+)/i);
-      const prefix = numMatch ? (numMatch[1].startsWith('Slot') ? numMatch[1] : `Slot ${numMatch[1]}`) : '';
-      if (prefix && topic && !topic.toLowerCase().includes('pending') && !s.description?.includes('Waiting for College Admin to allot')) {
-        return { ...s, slotName: `${prefix}: ${topic}` };
-      }
-      return s;
-    });
+    return (list || [])
+      .filter((s: any) => s && s.id && !deleted.has(s.id))
+      .map((s: any) => {
+        const topic = s.topic ? String(s.topic).trim() : '';
+        const numMatch = (s.slotName || '').match(/^(Slot\s+\d+)/i) || (s.id || '').match(/slot-.*?-(\d+)/i);
+        const prefix = numMatch ? (numMatch[1].startsWith('Slot') ? numMatch[1] : `Slot ${numMatch[1]}`) : '';
+        if (prefix && topic && !topic.toLowerCase().includes('pending') && !s.description?.includes('Waiting for College Admin to allot')) {
+          return { ...s, slotName: `${prefix}: ${topic}` };
+        }
+        return s;
+      });
   } catch {
     return [];
   }
@@ -213,7 +235,9 @@ export function getLocalSlots(collegeCode: string): any[] {
 
 export function saveLocalSlots(collegeCode: string, slots: any[]) {
   try {
-    localStorage.setItem(`erus_college_slots_${collegeCode.toUpperCase()}`, JSON.stringify(slots));
+    const deleted = getDeletedSlotIds();
+    const filtered = (slots || []).filter((s: any) => s && s.id && !deleted.has(s.id));
+    localStorage.setItem(`erus_college_slots_${collegeCode.toUpperCase()}`, JSON.stringify(filtered));
   } catch (e) {
     console.warn('Error saving local slots:', e);
   }
@@ -746,25 +770,27 @@ export async function fetchStudentAssignedSlots(
 ): Promise<any[]> {
   const raw = collegeCode.toUpperCase();
   const code = raw === 'BMSIT2002' || raw === 'BMSI' || raw === 'BMS' || raw.includes('BMS') ? 'BMSIT' : raw;
+  const deleted = getDeletedSlotIds();
   try {
     const url = `/api/college/slots?collegeCode=${encodeURIComponent(code)}&studentId=${encodeURIComponent(studentId)}&email=${encodeURIComponent(studentEmail || '')}&role=student`;
     const res = await fetch(url);
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.slots)) {
-        return data.slots;
+        return data.slots.filter((s: any) => s && s.id && !deleted.has(s.id));
       }
     }
   } catch (e) {
     console.warn('Error fetching student assigned slots:', e);
   }
   const allSlots = await fetchCollegeSlots(code);
-  return allSlots.filter((s) => isSlotAssignedToFaculty(s) || isStudentAssignedToSlot(s, { id: studentId, email: studentEmail, role: 'student' }));
+  return allSlots.filter((s) => !deleted.has(s.id) && (isSlotAssignedToFaculty(s) || isStudentAssignedToSlot(s, { id: studentId, email: studentEmail, role: 'student' })));
 }
 
 export async function fetchCollegeSlots(collegeCode: string = 'DIT'): Promise<any[]> {
   const raw = collegeCode.toUpperCase();
   const code = raw === 'BMSIT2002' || raw === 'BMSI' || raw === 'BMS' || raw.includes('BMS') ? 'BMSIT' : raw;
+  const deleted = getDeletedSlotIds();
   let backendSlots: any[] | null = null;
   try {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -776,7 +802,7 @@ export async function fetchCollegeSlots(collegeCode: string = 'DIT'): Promise<an
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.slots)) {
-        backendSlots = data.slots;
+        backendSlots = data.slots.filter((s: any) => s && s.id && !deleted.has(s.id));
       }
     }
   } catch (e) {
@@ -795,6 +821,9 @@ export async function fetchCollegeSlots(collegeCode: string = 'DIT'): Promise<an
 export async function deleteCollegeSlot(slotId: string, collegeCode: string = 'DIT') {
   const raw = collegeCode.toUpperCase();
   const code = raw === 'BMSIT2002' || raw === 'BMSI' || raw === 'BMS' || raw.includes('BMS') ? 'BMSIT' : raw;
+
+  // 0. Permanently mark slotId as deleted locally
+  markSlotDeletedLocally(slotId);
 
   // 1. Purge from local slots cache
   try {
@@ -815,7 +844,7 @@ export async function deleteCollegeSlot(slotId: string, collegeCode: string = 'D
 
   // 3. Request backend deletion
   try {
-    const res = await fetch('/api/college/slots/' + encodeURIComponent(slotId), {
+    const res = await fetch(`/api/college/slots/${encodeURIComponent(slotId)}?collegeCode=${encodeURIComponent(code)}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
     });
