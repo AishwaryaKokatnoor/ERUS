@@ -35,7 +35,7 @@ import { GDSession, Student, TranscriptEntry } from '../../types/gd';
 import { INITIAL_SESSION, calculateStudentOverallScore } from '../../data/mockGDData';
 import { formatSlotDate } from '../../utils/studentBooking';
 import { downloadFacultyReport } from '../../utils/managementReports';
-import { isFacultyAssignedToSlot } from '../../utils/authApi';
+import { isFacultyAssignedToSlot, isSlotCompletedLocally } from '../../utils/authApi';
 import { 
   BarChart, 
   Bar, 
@@ -449,12 +449,22 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
             <span>Download Transcript</span>
           </button>
 
-          <button
-            onClick={onBackToRoom}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md shadow-indigo-600/20 cursor-pointer"
-          >
-            <span>{session.status === 'completed' ? 'Go to Active GD Room' : 'Back to Live Room'}</span>
-          </button>
+          {safeSession.status === 'completed' || isSlotCompletedLocally(safeSession.id) ? (
+            <button
+              onClick={() => onViewStudentReport(safeSession.students?.[0]?.id || '')}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white transition-all shadow-md shadow-purple-600/20 cursor-pointer"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>View Assessment Reports</span>
+            </button>
+          ) : (
+            <button
+              onClick={onBackToRoom}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md shadow-indigo-600/20 cursor-pointer"
+            >
+              <span>Back to Live Room</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -512,7 +522,7 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
                 <div className="p-3 space-y-2">
                   {slots.map((sl) => {
                     const isSelected = sl.id === safeSession.id;
-                    const isCompleted = sl.status === 'completed';
+                    const isCompleted = sl.status === 'completed' || isSlotCompletedLocally(sl.id);
 
                     return (
                       <div
@@ -559,7 +569,7 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
                         </button>
 
                         <div className="flex items-center gap-2 shrink-0">
-                          {(sl.status === 'completed' || sl.recordingUrl) && (
+                          {(isCompleted || sl.recordingUrl) && (
                             <button
                               onClick={async (e) => {
                                 e.stopPropagation();
@@ -588,22 +598,20 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
                             <button
                               onClick={() => {
                                 if (onSelectSlot) onSelectSlot(sl.id);
-                                const firstStudentId = sl.students?.[0]?.id;
+                                const firstStudentId = sl.students?.[0]?.id || '';
                                 if (onViewStudentReport) {
                                   onViewStudentReport(firstStudentId);
-                                } else if (onEnterGDRoom) {
-                                  onEnterGDRoom(sl.id);
                                 }
                               }}
                               className="px-3 py-1.5 rounded-lg text-xs font-bold bg-purple-600 hover:bg-purple-500 text-white shadow-sm transition-all flex items-center gap-1.5 cursor-pointer"
                               title="View candidate assessment reports for this completed slot"
                             >
                               <FileText className="w-3.5 h-3.5" />
-                              <span>Reports</span>
+                              <span>Assessment Reports</span>
                             </button>
                           )}
 
-                          {sl.status === 'active' && (
+                          {!isCompleted && sl.status === 'active' && (
                             <button
                               onClick={() => {
                                 if (onSelectSlot) onSelectSlot(sl.id);

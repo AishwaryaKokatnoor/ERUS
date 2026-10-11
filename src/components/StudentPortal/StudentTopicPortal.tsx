@@ -27,7 +27,7 @@ import {
 import { GDSession, Student } from '../../types/gd';
 import { AuthUser } from '../../types/auth';
 import { checkCanReviveSlot, formatSlotDate } from '../../utils/studentBooking';
-import { isStudentAssignedToSlot, isSlotAssignedToFaculty, hasStudentParticipatedInSlot, normalizeClientCollegeCode } from '../../utils/authApi';
+import { isStudentAssignedToSlot, isSlotAssignedToFaculty, hasStudentParticipatedInSlot, normalizeClientCollegeCode, isSlotCompletedLocally } from '../../utils/authApi';
 
 interface StudentTopicPortalProps {
   availableSlots: GDSession[];
@@ -89,7 +89,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
       (s) =>
         bookedIds.has(s.id) ||
         hasStudentParticipatedInSlot(s, currentUser) ||
-        (s.status === 'completed' && isStudentAssignedToSlot(s, currentUser))
+        ((s.status === 'completed' || isSlotCompletedLocally(s.id)) && isStudentAssignedToSlot(s, currentUser))
     );
   }, [assignedSlots, bookedSlotsMap, currentUser]);
 
@@ -118,7 +118,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
       const maxCap = slot.maxCapacity || 15;
       const enrolled = slot.enrolledCount ?? slot.students?.length ?? 0;
       const bookedSlotForThisTopic = bookedSlotsMap[topicTitle];
-      const isCompletedForStudent = slot.status === 'completed' || hasStudentParticipatedInSlot(slot, currentUser);
+      const isCompletedForStudent = slot.status === 'completed' || isSlotCompletedLocally(slot.id) || hasStudentParticipatedInSlot(slot, currentUser);
 
       if (!existing) {
         topicMap.set(topicTitle, {
@@ -248,7 +248,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
 
           <div className="grid grid-cols-1 gap-3.5">
             {allBookedSlots.map((bSlot) => {
-              const isBCompleted = bSlot.status === 'completed' || hasStudentParticipatedInSlot(bSlot, currentUser);
+              const isBCompleted = bSlot.status === 'completed' || isSlotCompletedLocally(bSlot.id) || hasStudentParticipatedInSlot(bSlot, currentUser);
               const canReviveInfo = checkCanReviveSlot(bSlot);
               const isLockedDueToTime = !canReviveInfo.canRevive;
 
@@ -301,8 +301,6 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                           onClick={() => {
                             if (onViewReport) {
                               onViewReport(bSlot.id);
-                            } else {
-                              onEnterRoom(bSlot.id);
                             }
                           }}
                           className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs sm:text-sm shadow-md shadow-purple-600/30 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
@@ -549,7 +547,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                   const seatsLeft = Math.max(0, maxCap - enrolled);
                   const occupancyPercent = Math.min(100, Math.round((enrolled / maxCap) * 100));
 
-                  const isSlotCompleted = slot.status === 'completed' || hasStudentParticipatedInSlot(slot, currentUser);
+                  const isSlotCompleted = slot.status === 'completed' || isSlotCompletedLocally(slot.id) || hasStudentParticipatedInSlot(slot, currentUser);
                   const canReviveInfo = checkCanReviveSlot(slot);
                   const isReviveLockedByTime = !canReviveInfo.canRevive;
 
@@ -684,8 +682,6 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                               onClick={() => {
                                 if (onViewReport) {
                                   onViewReport(slot.id);
-                                } else {
-                                  onEnterRoom(slot.id);
                                 }
                               }}
                               className="flex-1 py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"

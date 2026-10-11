@@ -61,6 +61,8 @@ import {
   generateCollegeSlots,
   getDeletedSlotIds,
   markSlotDeletedLocally,
+  isSlotCompletedLocally,
+  markSlotCompletedLocally,
   normalizeClientCollegeCode
 } from '../../utils/authApi';
 import { formatSlotDate } from '../../utils/studentBooking';
@@ -215,6 +217,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
 
       // Strictly synchronize slot title to the allotted topic so there is never a topic mismatch
       const cleanName = cleanTopic ? `${prefix}: ${cleanTopic}` : prefix;
+      const resolvedStatus = s.status === 'completed' || isSlotCompletedLocally(s.id) ? 'completed' : (s.status || 'scheduled');
 
       return {
         id: s.id,
@@ -223,7 +226,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
         description: s.description || '',
         slotTiming: s.slotTiming || '',
         slotDate: s.slotDate || (s as any).scheduledTime || (s as any).rawSession?.slotDate || 'Today',
-        status: s.status || 'scheduled',
+        status: resolvedStatus,
         durationMinutes: s.durationMinutes || 15,
         enrolledCount: s.enrolledCount ?? s.students?.length ?? (s.rawSession?.students?.length ?? 15),
         maxCapacity: s.maxCapacity || 15,
@@ -366,7 +369,22 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     const socket = io({ transports: ['websocket', 'polling'] });
     socket.on('college-limit-updated', handleSlotsEvent);
     socket.on('slots-regenerated', handleSlotsEvent);
-    socket.on('slot-updated', () => loadAllData(true));
+    socket.on('session-ended', (data: any) => {
+      if (data?.slotId) {
+        markSlotCompletedLocally(data.slotId);
+        setSlots((prev) => prev.map((s) => (s.id === data.slotId ? { ...s, status: 'completed' } : s)));
+      }
+      loadAllData(true);
+    });
+    socket.on('slot-updated', (data: any) => {
+      if (data?.slot?.id) {
+        if (data.slot.status === 'completed') {
+          markSlotCompletedLocally(data.slot.id);
+        }
+        setSlots((prev) => prev.map((s) => (s.id === data.slot.id ? { ...s, ...data.slot } : s)));
+      }
+      loadAllData(true);
+    });
 
     const pollInterval = setInterval(() => {
       loadAllData(true);
@@ -1760,29 +1778,29 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                       <span>Delete</span>
                     </button>
 
-                    <button
-                      onClick={() => handleOpenAllotModal(sl)}
-                      className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer truncate ${
-                        !isAllotted
-                          ? 'bg-amber-600 hover:bg-amber-700 text-white ring-2 ring-amber-400/50'
-                          : 'border border-amber-300 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50'
-                      }`}
-                      title="Allot discussion topic and faculty incharge for this slot"
-                    >
-                      <Edit3 className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">
-                        {!isAllotted ? 'Allot Topic & Faculty' : 'Edit Allotment'}
-                      </span>
-                    </button>
-
-                    {sl.status === 'completed' && (
+                    {sl.status === 'completed' ? (
                       <button
                         onClick={() => setSelectedReportSlotId(sl.id)}
-                        className="py-2 px-3 rounded-xl border border-purple-300 dark:border-purple-800/80 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/50 font-bold text-xs flex items-center justify-center gap-1 transition-all cursor-pointer truncate shadow-2xs"
+                        className="flex-1 py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer truncate shadow-xs"
                         title="View student evaluation reports for this completed slot"
                       >
                         <FileText className="w-3.5 h-3.5 shrink-0" />
-                        <span className="truncate">Reports</span>
+                        <span className="truncate">Assessment Reports</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleOpenAllotModal(sl)}
+                        className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer truncate ${
+                          !isAllotted
+                            ? 'bg-amber-600 hover:bg-amber-700 text-white ring-2 ring-amber-400/50'
+                            : 'border border-amber-300 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50'
+                        }`}
+                        title="Allot discussion topic and faculty incharge for this slot"
+                      >
+                        <Edit3 className="w-3.5 h-3.5 shrink-0" />
+                        <span className="truncate">
+                          {!isAllotted ? 'Allot Topic & Faculty' : 'Edit Allotment'}
+                        </span>
                       </button>
                     )}
 

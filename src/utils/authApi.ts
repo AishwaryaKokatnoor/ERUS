@@ -138,16 +138,18 @@ export async function verifyCurrentSession(): Promise<AuthUser | null> {
   return null;
 }
 
+const COMPLETED_SLOTS_KEY = 'erus_completed_slots_v1';
+
 // ==========================================
 // PURGE LEGACY LOCALSTORAGE ON BOOT
-// All data is stored in MongoDB, no need for localStorage!
+// Preserve auth token, user, and completed slot IDs
 // ==========================================
 if (typeof localStorage !== 'undefined') {
   try {
     const keysToRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.startsWith('erus_') && k !== TOKEN_KEY && k !== USER_KEY) {
+      if (k && k.startsWith('erus_') && k !== TOKEN_KEY && k !== USER_KEY && k !== COMPLETED_SLOTS_KEY) {
         keysToRemove.push(k);
       }
     }
@@ -161,6 +163,46 @@ const inMemoryStudentsMap = new Map<string, any[]>();
 const inMemoryFacultyMap = new Map<string, any[]>();
 const inMemorySlotsMap = new Map<string, any[]>();
 const inMemoryDeletedSlotIds = new Set<string>();
+const inMemoryCompletedSlotIds = new Set<string>(
+  (() => {
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const raw = localStorage.getItem(COMPLETED_SLOTS_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) return parsed.map((id) => String(id));
+        }
+      } catch {}
+    }
+    return [];
+  })()
+);
+
+export function getCompletedSlotIds(): Set<string> {
+  return new Set(inMemoryCompletedSlotIds);
+}
+
+export function isSlotCompletedLocally(slotId?: string): boolean {
+  if (!slotId) return false;
+  return inMemoryCompletedSlotIds.has(String(slotId));
+}
+
+export function markSlotCompletedLocally(slotId?: string) {
+  if (!slotId) return;
+  const cleanId = String(slotId).trim();
+  if (!cleanId) return;
+  inMemoryCompletedSlotIds.add(cleanId);
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(COMPLETED_SLOTS_KEY, JSON.stringify(Array.from(inMemoryCompletedSlotIds)));
+    } catch {}
+  }
+  // Also update any cached slots in memory immediately
+  for (const [code, list] of inMemorySlotsMap.entries()) {
+    const updated = list.map((s: any) => (s && s.id === cleanId ? { ...s, status: 'completed' } : s));
+    inMemorySlotsMap.set(code, updated);
+  }
+}
 
 export function getLocalCustomColleges(): any[] {
   return inMemoryCustomColleges.filter((c: any) => !['DIT', 'IITB'].includes(c?.code?.toUpperCase()) && !['col-1', 'col-2'].includes(c?.id));
@@ -224,13 +266,15 @@ export function getLocalSlots(collegeCode: string): any[] {
       return sCode === targetCode;
     })
     .map((s: any) => {
+      if (s.status === 'completed') markSlotCompletedLocally(s.id);
+      const resolvedStatus = s.status === 'completed' || isSlotCompletedLocally(s.id) ? 'completed' : s.status;
       const topic = s.topic ? String(s.topic).trim() : '';
       const numMatch = (s.slotName || '').match(/^(Slot\s+\d+)/i) || (s.id || '').match(/slot-.*?-(\d+)/i);
       const prefix = numMatch ? (numMatch[1].startsWith('Slot') ? numMatch[1] : `Slot ${numMatch[1]}`) : '';
       if (prefix && topic && !topic.toLowerCase().includes('pending') && !s.description?.includes('Waiting for College Admin to allot')) {
-        return { ...s, collegeCode: targetCode, slotName: `${prefix}: ${topic}` };
+        return { ...s, status: resolvedStatus, collegeCode: targetCode, slotName: `${prefix}: ${topic}` };
       }
-      return { ...s, collegeCode: targetCode };
+      return { ...s, status: resolvedStatus, collegeCode: targetCode };
     });
 }
 
@@ -243,7 +287,11 @@ export function saveLocalSlots(collegeCode: string, slots: any[]) {
       const sCode = normalizeClientCollegeCode(s.collegeCode || targetCode);
       return sCode === targetCode;
     })
-    .map((s: any) => ({ ...s, collegeCode: targetCode }));
+    .map((s: any) => {
+      if (s.status === 'completed') markSlotCompletedLocally(s.id);
+      const resolvedStatus = s.status === 'completed' || isSlotCompletedLocally(s.id) ? 'completed' : s.status;
+      return { ...s, status: resolvedStatus, collegeCode: targetCode };
+    });
   inMemorySlotsMap.set(targetCode, filtered);
 }
 
@@ -749,7 +797,11 @@ export async function fetchStudentAssignedSlots(
       if (data.success && Array.isArray(data.slots)) {
         return data.slots
           .filter((s: any) => s && s.id && !deleted.has(s.id) && normalizeClientCollegeCode(s.collegeCode || code) === code)
-          .map((s: any) => ({ ...s, collegeCode: code }));
+          .map((s: any) => {
+            if (s.status === 'completed') markSlotCompletedLocally(s.id);
+            const resolvedStatus = s.status === 'completed' || isSlotCompletedLocally(s.id) ? 'completed' : s.status;
+            return { ...s, status: resolvedStatus, collegeCode: code };
+          });
       }
     }
   } catch (e) {
@@ -781,7 +833,11 @@ export async function fetchCollegeSlots(collegeCode: string = 'DIT'): Promise<an
       if (data.success && Array.isArray(data.slots)) {
         backendSlots = data.slots
           .filter((s: any) => s && s.id && !deleted.has(s.id) && normalizeClientCollegeCode(s.collegeCode || code) === code)
-          .map((s: any) => ({ ...s, collegeCode: code }));
+          .map((s: any) => {
+            if (s.status === 'completed') markSlotCompletedLocally(s.id);
+            const resolvedStatus = s.status === 'completed' || isSlotCompletedLocally(s.id) ? 'completed' : s.status;
+            return { ...s, status: resolvedStatus, collegeCode: code };
+          });
       }
     }
   } catch (e) {
@@ -1318,7 +1374,11 @@ export async function fetchFacultyAssignedSlots(
               normalizeClientCollegeCode(s.collegeCode || code) === code &&
               isFacultyAssignedToSlot(s, { id: facultyId, facultyId, email: facultyEmail, name: facultyName, collegeCode: code, role: 'faculty' })
           )
-          .map((s: any) => ({ ...s, collegeCode: code }));
+          .map((s: any) => {
+            if (s.status === 'completed') markSlotCompletedLocally(s.id);
+            const resolvedStatus = s.status === 'completed' || isSlotCompletedLocally(s.id) ? 'completed' : s.status;
+            return { ...s, status: resolvedStatus, collegeCode: code };
+          });
       }
     }
   } catch (e) {

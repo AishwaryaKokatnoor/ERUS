@@ -142,8 +142,8 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Faculty Live GD Room Tab */}
-          {isFaculty && (
+          {/* Faculty Live GD Room Tab (Hidden once session is completed) */}
+          {isFaculty && session?.status !== 'completed' && (
             <button
               id="tab-room-btn"
               onClick={() => setCurrentTab('room')}

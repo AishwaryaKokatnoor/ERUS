@@ -979,16 +979,22 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   // Conclude or leave GD discussion with automatic video recording preservation
   const handleConcludeOrLeaveSession = useCallback(async () => {
+    if (isFacultyOrAdmin && rtcFinishSession) {
+      rtcFinishSession();
+    }
     if (gdRecorder.isRecording) {
       try {
-        await gdRecorder.stopAndUploadRecording(session.slotId || session.id);
+        await Promise.race([
+          gdRecorder.stopAndUploadRecording(session.slotId || session.id),
+          new Promise((resolve) => setTimeout(resolve, 1200)),
+        ]);
       } catch (recErr) {
         console.warn('[GD Room] Recording upload on exit failed:', recErr);
       }
     }
     // Session completion and report persistence are handled by the authorized onFinishSession callback.
     onFinishSession();
-  }, [gdRecorder, session.slotId, session.id, isFaculty, rtcFinishSession, onFinishSession]);
+  }, [gdRecorder, session.slotId, session.id, isFacultyOrAdmin, rtcFinishSession, onFinishSession]);
 
   const latestSpeakerTranscript = transcripts.slice().reverse().find((t) => !t.isFacilitator);
   const activeStudentUser = !isFaculty ? activeDisplayStudents.find((s) => s.isUser) : null;
@@ -2893,8 +2899,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   onClick={() => {
                     handleConcludeOrLeaveSession();
                   }}
-                  disabled={!isSessionActive}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md shadow-emerald-700/20 dark:shadow-emerald-900/30 transition-all active:scale-95 disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md shadow-emerald-700/20 dark:shadow-emerald-900/30 transition-all active:scale-95 cursor-pointer"
                 >
                   <Award className="w-4 h-4" />
                   <span>Conclude & Generate Report</span>

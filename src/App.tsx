@@ -33,6 +33,8 @@ import {
   getStoredToken,
   getDeletedSlotIds,
   markSlotDeletedLocally,
+  isSlotCompletedLocally,
+  markSlotCompletedLocally,
   verifyCurrentSession, 
   createCollegeSlot, 
   fetchCollegeSlots, 
@@ -124,7 +126,7 @@ function GDAppContent() {
   const { theme } = useTheme();
   const isFinishingSessionRef = useRef(false);
 
-  // Guard: Role-based navigation restrictions
+  // Guard: Role-based navigation restrictions & Completed Slot Room Lock
   useEffect(() => {
     if (currentUser?.role === 'super_admin' && currentTab !== 'super_admin') {
       setCurrentTab('super_admin');
@@ -146,7 +148,11 @@ function GDAppContent() {
       setCurrentTab(currentUser?.role === 'student' ? 'topics' : 'faculty');
       return;
     }
-  }, [currentUser, currentTab]);
+    if (currentTab === 'room' && (session?.status === 'completed' || isSlotCompletedLocally(session?.id))) {
+      setCurrentTab('report');
+      return;
+    }
+  }, [currentUser, currentTab, session?.id, session?.status]);
 
   // Guard: When currentUser is faculty or admin, ensure all students have isUser: false so observer mode is respected
   useEffect(() => {
@@ -218,6 +224,11 @@ function GDAppContent() {
             const recUrlStr = typeof s.recordingUrl === 'string' ? s.recordingUrl : (s.recordingUrl?.recordingUrl || s.recordingUrl?.url || '');
             const finalRecUrl = (recUrlStr && !recUrlStr.startsWith('blob:')) ? recUrlStr : '';
 
+            if (s.status === 'completed') {
+              markSlotCompletedLocally(s.id);
+            }
+            const isDone = s.status === 'completed' || isSlotCompletedLocally(s.id);
+
             return {
               ...INITIAL_SESSION,
               id: s.id,
@@ -230,9 +241,9 @@ function GDAppContent() {
             durationMinutes: s.durationMinutes || 15,
             difficulty: s.difficulty || 'Intermediate',
             assessmentRubric: s.assessmentRubric || 'Standard Academic 7-Parameter Rubric',
-            status: s.status === 'active' ? 'active' : s.status === 'completed' ? 'completed' : 'waiting',
+            status: isDone ? 'completed' : s.status === 'active' ? 'active' : 'waiting',
             students: Array.isArray(s.students) && s.students.length > 0 ? s.students : generateSlotParticipants(Math.max(s.enrolledCount || 0, s.maxCapacity || 8)),
-            currentPhase: 'intro',
+            currentPhase: isDone ? 'conclusion' : 'intro',
             facilitatorSpeech: `Welcome to ${s.slotName || 'this GD slot'}. Session begins once started by the Faculty In-Charge.`,
             facilitatorAction: 'Waiting for Faculty In-Charge to commence session',
             isFacilitatorSpeaking: false,
@@ -279,14 +290,18 @@ function GDAppContent() {
             const fresh = mappedSlots.find((s) => s.id === prev.id);
             if (!fresh) return mappedSlots[0] ? { ...prev, ...mappedSlots[0] } : prev;
 
-            // If session was completed while student is in room, automatically finish GD and transition to report
-            if (fresh.status === 'completed' && prev.status !== 'completed' && currentUser?.role === 'student' && currentTab === 'room') {
+            const isCompletedNow = fresh.status === 'completed' || isSlotCompletedLocally(fresh.id);
+
+            // If session was completed while user is in room, automatically finish GD and transition to report
+            if (isCompletedNow && prev.status !== 'completed' && currentTab === 'room') {
               setTimeout(() => {
                 handleFinishSession();
               }, 50);
             }
 
-            const resolvedStatus = prev.status === 'active' && fresh.status !== 'completed' ? 'active' : fresh.status;
+            const resolvedStatus = isCompletedNow
+              ? 'completed'
+              : (prev.status === 'active' && fresh.status !== 'completed' ? 'active' : fresh.status);
 
             if (
               prev.status === resolvedStatus &&
@@ -295,7 +310,7 @@ function GDAppContent() {
               prev.recordingUrl === fresh.recordingUrl &&
               prev.assignedFacultyName === fresh.assignedFacultyName &&
               (prev.students?.length || 0) === (fresh.students?.length || 0) &&
-              (prev.facultyLiveNotes?.length || 0) === (fresh.facultyLiveNotes?.length || 0)
+              (prev.facultyLiveNotes?.length || 0) === (nsNotesLength(fresh))
             ) {
               return prev;
             }
@@ -314,6 +329,10 @@ function GDAppContent() {
       }
     };
 
+    function nsNotesLength(s: GDSession) {
+      return s.facultyLiveNotes?.length || 0;
+    }
+
     // Run immediately on mount / currentUser change
     syncSlots();
 
@@ -330,12 +349,14 @@ function GDAppContent() {
     const handleRemoteSessionStarted = (data: any) => {
       const slotId = String(data?.slotId || '').trim();
       if (!slotId || currentUser.role !== 'student') return;
+      if (isSlotCompletedLocally(slotId)) return;
 
       const bookedSlotIds = Object.values(studentBookedSlotsByTopic);
       const isMySession = session?.id === slotId || bookedSlotIds.includes(slotId);
       if (!isMySession) return;
 
       const targetSlot = availableSlots.find((slot) => slot.id === slotId);
+      if (targetSlot?.status === 'completed') return;
       const alreadyActive = session?.id === slotId && session.status === 'active';
 
       setAvailableSlots((prev) =>
@@ -359,6 +380,7 @@ function GDAppContent() {
     };
     const handleRemoteSessionEnded = (data: any) => {
       if (data?.slotId) {
+        markSlotCompletedLocally(data.slotId);
         setAvailableSlots((prev) =>
           prev.map((s) => (s.id === data.slotId ? { ...s, status: 'completed' } : s))
         );
@@ -376,8 +398,12 @@ function GDAppContent() {
               addReportToStudentHistory(myReport);
             }
           }
-          if (currentUser.role === 'student' && currentTab === 'room') {
-            handleFinishSession();
+          if (currentTab === 'room') {
+            if (currentUser.role === 'student') {
+              handleFinishSession();
+            } else {
+              setCurrentTab('report');
+            }
           }
         }
       }
@@ -388,11 +414,21 @@ function GDAppContent() {
         if (userCollegeCode && incomingCode && incomingCode !== userCollegeCode) {
           return;
         }
+        if (data.slot.status === 'completed') {
+          markSlotCompletedLocally(data.slot.id);
+        }
+        const resolvedSlot = {
+          ...data.slot,
+          status: (data.slot.status === 'completed' || isSlotCompletedLocally(data.slot.id)) ? 'completed' : data.slot.status,
+        };
         setAvailableSlots((prev) =>
-          prev.map((s) => (s.id === data.slot.id ? { ...s, ...data.slot } : s))
+          prev.map((s) => (s.id === data.slot.id ? { ...s, ...resolvedSlot } : s))
         );
         if (session?.id === data.slot.id) {
-          setSession((prev) => ({ ...prev, ...data.slot }));
+          setSession((prev) => ({ ...prev, ...resolvedSlot }));
+          if (resolvedSlot.status === 'completed' && currentTab === 'room') {
+            setCurrentTab('report');
+          }
         }
       }
     };
@@ -809,49 +845,9 @@ function GDAppContent() {
 
     try {
       if (currentUser?.role === 'faculty') {
-        // Faculty completion is the authoritative finalization point.
-        // The backend evaluates every real participant, persists every report,
-        // finalizes the transcript, and then closes the slot.
-        const completeToken = getStoredToken();
-        const endRes = await fetch('/api/college/slots/' + encodeURIComponent(finishedSlotId) + '/complete', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(completeToken ? { Authorization: 'Bearer ' + completeToken } : {}),
-          },
-          body: JSON.stringify({
-            facultyId: (currentUser as any).facultyId || currentUser.id,
-            id: currentUser.id,
-            email: currentUser.email,
-            name: currentUser.name,
-            role: currentUser.role,
-          }),
-        });
-        const endData = await endRes.json().catch(() => ({}));
-        if (!endRes.ok) throw new Error(endData.error || 'Unable to finalize GD session');
-
-        try {
-          const socket = getSocket();
-          if (socket) {
-            socket.emit('finish-session', { slotId: finishedSlotId });
-          }
-        } catch (e) {
-          console.warn('Socket finish-session emit error:', e);
-        }
-
-        const ownReport = Array.isArray(endData.reports)
-          ? endData.reports.find((r: StudentAssessmentReport) => r.studentId === userStudent.id)
-          : null;
-        if (ownReport) {
-          const enhancedReport: StudentAssessmentReport = {
-            ...ownReport,
-            facultyLiveNotes: session.facultyLiveNotes?.filter(
-              (n) => n.studentId === userStudent.id || n.studentName.toLowerCase() === userStudent.name.toLowerCase()
-            ),
-          };
-          setActiveReport(enhancedReport);
-          addReportToStudentHistory(enhancedReport);
-        }
+        // 1. Immediately mark the slot as completed locally and in state so all portals and tabs lock the GD room instantaneously
+        markSlotCompletedLocally(finishedSlotId);
+        facilitatorVoice.stop();
 
         setSession((prev) => ({
           ...prev,
@@ -866,6 +862,62 @@ function GDAppContent() {
               : slot
           )
         );
+
+        // Prepare an immediate fallback report for the first participant so the Report tab renders right away
+        const initialFacultyReport = generateStudentReport(userStudent, session.topic, session.durationMinutes, undefined, finishedSlotId);
+        initialFacultyReport.sessionId = finishedSlotId;
+        initialFacultyReport.topic = session.topic;
+        initialFacultyReport.facultyLiveNotes = session.facultyLiveNotes?.filter(
+          (n) => n.studentId === userStudent.id || n.studentName.toLowerCase() === userStudent.name.toLowerCase()
+        );
+        setViewingStudentId(userStudent.id);
+        setActiveReport(initialFacultyReport);
+        setCurrentTab('report');
+
+        try {
+          const socket = getSocket();
+          if (socket) {
+            socket.emit('finish-session', { slotId: finishedSlotId });
+          }
+        } catch (e) {
+          console.warn('Socket finish-session emit error:', e);
+        }
+
+        // 2. Authoritative backend finalization: evaluates every participant, persists reports, and broadcasts completion across all portals
+        const completeToken = getStoredToken();
+        const endRes = await fetch('/api/college/slots/' + encodeURIComponent(finishedSlotId) + '/complete', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(completeToken ? { Authorization: 'Bearer ' + completeToken } : {}),
+          },
+          body: JSON.stringify({
+            facultyId: (currentUser as any).facultyId || currentUser.id,
+            id: currentUser.id,
+            userId: currentUser.id,
+            email: currentUser.email,
+            name: currentUser.name,
+            role: currentUser.role,
+            collegeCode: userCollegeCode,
+            transcriptHistory: transcripts,
+          }),
+        });
+        const endData = await endRes.json().catch(() => ({}));
+
+        const ownReport = Array.isArray(endData.reports)
+          ? (endData.reports.find((r: StudentAssessmentReport) => r.studentId === userStudent.id) || endData.reports[0])
+          : null;
+        if (ownReport) {
+          const enhancedReport: StudentAssessmentReport = {
+            ...ownReport,
+            facultyLiveNotes: session.facultyLiveNotes?.filter(
+              (n) => n.studentId === (ownReport.studentId || userStudent.id) || n.studentName.toLowerCase() === (ownReport.studentName || userStudent.name).toLowerCase()
+            ),
+          };
+          setViewingStudentId(ownReport.studentId || userStudent.id);
+          setActiveReport(enhancedReport);
+          addReportToStudentHistory(enhancedReport);
+        }
       } else {
         // Students can request their own evaluation, but cannot close the GD.
         // First check if an authoritative report already exists on the backend (e.g., generated by faculty completion)
@@ -1244,7 +1296,7 @@ function GDAppContent() {
     // Never open the GD room again or play AI voice.
     // - Students see their individual 7-parameter assessment report.
     // - Faculty & Admins see overall reports and cohort analytics.
-    if (targetSlot.status === 'completed') {
+    if (targetSlot.status === 'completed' || isSlotCompletedLocally(slotId)) {
       handleOpenAssessmentReport(slotId);
       return;
     }
@@ -1710,7 +1762,7 @@ function GDAppContent() {
             onReviveSlot={handleReviveSlot}
             onEnterRoom={(slotId) => {
               const target = availableSlots.find((s) => s.id === slotId);
-              if (target?.status === 'completed') {
+              if (target?.status === 'completed' || isSlotCompletedLocally(slotId)) {
                 setInitialReportTab('single');
                 handleOpenAssessmentReport(slotId);
                 return;
@@ -1725,9 +1777,9 @@ function GDAppContent() {
             onViewJourneyProfile={() => {
               setInitialReportTab('journey');
               const target =
-                studentParticipatedSlots.find((s) => s.status === 'completed') ||
+                studentParticipatedSlots.find((s) => s.status === 'completed' || isSlotCompletedLocally(s.id)) ||
                 studentParticipatedSlots[0] ||
-                availableSlots.find((s) => s.status === 'completed' && (isSlotAssignedToFaculty(s) || isStudentAssignedToSlot(s, currentUser))) ||
+                availableSlots.find((s) => (s.status === 'completed' || isSlotCompletedLocally(s.id)) && (isSlotAssignedToFaculty(s) || isStudentAssignedToSlot(s, currentUser))) ||
                 (studentBookedSlotId ? availableSlots.find((s) => s.id === studentBookedSlotId) : null);
               if (target) {
                 handleOpenAssessmentReport(target.id);
@@ -1738,7 +1790,7 @@ function GDAppContent() {
           />
         )}
 
-        {currentTab === 'room' && currentUser?.role !== 'college_admin' && currentUser?.role !== 'super_admin' && (
+        {currentTab === 'room' && currentUser?.role !== 'college_admin' && currentUser?.role !== 'super_admin' && session.status !== 'completed' && !isSlotCompletedLocally(session.id) && (
           <RealisticGDRoom
             session={session}
             setSession={setSession}
@@ -1780,14 +1832,9 @@ function GDAppContent() {
                 setCurrentTab('topics');
                 return;
               }
-              if (session.status === 'completed') {
-                if (currentUser?.role !== 'student') {
-                  const openSlot = facultyAssignedSlots.find((s) => s.status !== 'completed') || availableSlots.find((s) => s.status !== 'completed');
-                  if (openSlot) {
-                    handleSelectSlot(openSlot.id);
-                    return;
-                  }
-                }
+              if (session.status === 'completed' || isSlotCompletedLocally(session.id)) {
+                setCurrentTab('faculty');
+                return;
               }
               setCurrentTab('room');
             }}
@@ -1818,26 +1865,25 @@ function GDAppContent() {
             transcripts={transcripts}
             onViewStudentReport={handleViewStudentReport}
             onBackToRoom={() => {
-              if (session.status === 'completed') {
-                const openSlot = facultyAssignedSlots.find((s) => s.status !== 'completed');
-                if (openSlot) {
-                  handleSelectSlot(openSlot.id);
-                  setCurrentTab('room');
-                  return;
-                }
+              if (session.status === 'completed' || isSlotCompletedLocally(session.id)) {
+                handleOpenAssessmentReport(session.id);
+                return;
               }
               setCurrentTab('room');
             }}
             onEnterGDRoom={(slotId) => {
               if (slotId) {
                 const target = availableSlots.find((s) => s.id === slotId);
-                if (target?.status === 'completed') {
+                if (target?.status === 'completed' || isSlotCompletedLocally(slotId)) {
                   handleOpenAssessmentReport(slotId);
                   return;
                 }
                 if (slotId !== session.id) {
                   handleSelectSlot(slotId);
                 }
+              } else if (session.status === 'completed' || isSlotCompletedLocally(session.id)) {
+                handleOpenAssessmentReport(session.id);
+                return;
               }
               setCurrentTab('room');
             }}

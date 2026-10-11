@@ -50,8 +50,11 @@ import {
   updateServerCapacity,
   updateCollegeStudentLimit,
   fetchCollegeSlots,
+  isSlotCompletedLocally,
+  markSlotCompletedLocally,
   ServerCapacityData
 } from '../../utils/authApi';
+import { getSocket } from '../../utils/socket';
 import { SlotStudentReportsView } from '../AssessmentReport/SlotStudentReportsView';
 import { downloadSuperAdminReport } from '../../utils/managementReports';
 
@@ -129,12 +132,17 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
     setSelectedCollegeCode(collegeCode);
     setLoadingSlots(true);
     try {
-      const slots = await fetchCollegeSlots(collegeCode);
-      setCollegeSlots(slots || []);
-      const topics = Array.from(new Set((slots || []).map((s: any) => s.topic || s.slotName))).filter(Boolean) as string[];
+      const rawSlots = await fetchCollegeSlots(collegeCode);
+      const slots = (rawSlots || []).map((s: any) =>
+        s && (s.status === 'completed' || isSlotCompletedLocally(s.id))
+          ? { ...s, status: 'completed' }
+          : s
+      );
+      setCollegeSlots(slots);
+      const topics = Array.from(new Set(slots.map((s: any) => s.topic || s.slotName))).filter(Boolean) as string[];
       const firstTopic = topics[0] || '';
       setSelectedTopic(firstTopic);
-      const matchingSlots = (slots || []).filter((s: any) => (s.topic || s.slotName) === firstTopic);
+      const matchingSlots = slots.filter((s: any) => (s.topic || s.slotName) === firstTopic);
       setSelectedSlotId(matchingSlots[0]?.id || '');
     } catch (err) {
       console.warn('Error loading slots for college:', err);
@@ -174,6 +182,36 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
       loadData(true);
     }, 15000);
     return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+    const handleSessionEnded = (data: any) => {
+      const slotId = String(data?.slotId || '').trim();
+      if (!slotId) return;
+      markSlotCompletedLocally(slotId);
+      setCollegeSlots((prev) =>
+        prev.map((s: any) => (s.id === slotId ? { ...s, status: 'completed' } : s))
+      );
+      loadData(true);
+    };
+    const handleSlotUpdated = (data: any) => {
+      const slot = data?.slot;
+      if (!slot?.id) return;
+      if (slot.status === 'completed') {
+        markSlotCompletedLocally(slot.id);
+      }
+      setCollegeSlots((prev) =>
+        prev.map((s: any) => (s.id === slot.id ? { ...s, ...slot, status: slot.status === 'completed' || isSlotCompletedLocally(slot.id) ? 'completed' : slot.status } : s))
+      );
+    };
+    socket.on('session-ended', handleSessionEnded);
+    socket.on('slot-updated', handleSlotUpdated);
+    return () => {
+      socket.off('session-ended', handleSessionEnded);
+      socket.off('slot-updated', handleSlotUpdated);
+    };
   }, []);
 
   const loadData = async (silent = false) => {

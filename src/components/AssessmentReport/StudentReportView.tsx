@@ -939,7 +939,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
               onClick={onBackToRoom}
               className="px-6 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition-all shadow-md shadow-indigo-600/20 cursor-pointer"
             >
-              Back to Assigned Slots &amp; Room
+              Back to Topics &amp; Slots
             </button>
           </div>
         </div>
