@@ -760,18 +760,24 @@ export function useWebRTCRoom({
     // the same contribution, so AI participants behave like room participants.
     socket.on('ai-participant-speech', (data) => {
       if (!active) return;
-      // Keep the server-authoritative AI roster in sync with every turn so
-      // the seat cards immediately show 1, 2, 3... speaking turns instead of
-      // being reset to zero by the roster effect.
       if (data?.participant?.id) {
-        setAiParticipants((prev) => prev.map((p) =>
-          p.id === data.participant.id ? { ...p, ...data.participant } : p
-        ));
+        setAiParticipants((prev) => {
+          const found = prev.some((p) => p.id === data.participant.id);
+          return found
+            ? prev.map((p) => p.id === data.participant.id ? { ...p, ...data.participant } : p)
+            : [...prev, data.participant];
+        });
       }
       if (data?.transcript?.id) {
         handledAiTranscriptIdsRef.current.add(String(data.transcript.id));
       }
       onAiParticipantSpeechRef.current?.(data);
+    });
+
+    socket.on('ai-participants-updated', (data) => {
+      if (!active) return;
+      setAiParticipants(Array.isArray(data?.aiParticipants) ? data.aiParticipants : []);
+      setSimulationMode(Boolean(data?.simulationMode));
     });
 
     // Faculty Commences Session Broadcast
