@@ -283,6 +283,7 @@ export function normalizeReport(raw: any, fallback?: StudentAssessmentReport): S
 interface StudentReportViewProps {
   session: GDSession;
   report?: StudentAssessmentReport;
+  initialTab?: 'single' | 'comparison' | 'journey';
   onBackToRoom: () => void;
   onViewFacultyDashboard: () => void;
   currentUser?: AuthUser | null;
@@ -295,6 +296,7 @@ interface StudentReportViewProps {
 export const StudentReportView: React.FC<StudentReportViewProps> = ({
   session,
   report: initialReport,
+  initialTab,
   onBackToRoom,
   onViewFacultyDashboard,
   currentUser,
@@ -306,7 +308,13 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
   const isStudent = currentUser?.role === 'student';
   const isFaculty = currentUser?.role === 'faculty';
 
-  const [activeReportTab, setActiveReportTab] = useState<'single' | 'comparison' | 'journey'>('single');
+  const [activeReportTab, setActiveReportTab] = useState<'single' | 'comparison' | 'journey'>(initialTab || 'single');
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveReportTab(initialTab);
+    }
+  }, [initialTab]);
 
   // Check if currentUser is a recognized participant in this session
   const studentParticipant = useMemo(() => {
@@ -851,6 +859,32 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
   const currentWpmStatus = currentReport.wpmStatus || (currentWpm === 0 ? 'No Speech' : currentWpm >= 120 && currentWpm <= 150 ? 'Optimal' : currentWpm < 120 ? 'Too Slow' : 'Too Fast');
   const fillerCount = currentReport.fillerWordsCount ?? 0;
 
+  if (activeReportTab === 'comparison') {
+    return (
+      <GDComparisonReport
+        currentReport={currentReport}
+        onBackToSingleReport={() => setActiveReportTab('single')}
+        onBackToRoom={onBackToRoom}
+      />
+    );
+  }
+
+  if (activeReportTab === 'journey') {
+    return (
+      <StudentGDJourneyProfile
+        currentReport={currentReport}
+        currentUser={currentUser}
+        onBackToSessionReport={() => {
+          if (isStudent && !hasParticipatedInCurrentSession) {
+            onBackToRoom();
+          } else {
+            setActiveReportTab('single');
+          }
+        }}
+      />
+    );
+  }
+
   if (isStudent && !hasParticipatedInCurrentSession) {
     return (
       <div className="max-w-3xl mx-auto p-4 sm:p-8 my-8">
@@ -894,7 +928,13 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
             </div>
           )}
 
-          <div className="flex justify-center gap-3 pt-2">
+          <div className="flex flex-wrap justify-center gap-3 pt-2">
+            <button
+              onClick={() => setActiveReportTab('journey')}
+              className="px-5 py-2.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-slate-950 transition-all shadow-md shadow-amber-500/20 cursor-pointer"
+            >
+              ⭐ View My GD Journey &amp; Growth Profile
+            </button>
             <button
               onClick={onBackToRoom}
               className="px-6 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition-all shadow-md shadow-indigo-600/20 cursor-pointer"
@@ -957,26 +997,6 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
           </div>
         </div>
       </div>
-    );
-  }
-
-  if (activeReportTab === 'comparison') {
-    return (
-      <GDComparisonReport
-        currentReport={currentReport}
-        onBackToSingleReport={() => setActiveReportTab('single')}
-        onBackToRoom={onBackToRoom}
-      />
-    );
-  }
-
-  if (activeReportTab === 'journey') {
-    return (
-      <StudentGDJourneyProfile
-        currentReport={currentReport}
-        currentUser={currentUser}
-        onBackToSessionReport={() => setActiveReportTab('single')}
-      />
     );
   }
 
@@ -1757,8 +1777,8 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
 
       </div>
 
-      {/* GD Video Recording Playback Modal (Faculty & Admin Only) */}
-      {showVideoModal && !isStudent && (
+      {/* GD Video Recording Playback Modal */}
+      {showVideoModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200"
           onClick={() => setShowVideoModal(false)}

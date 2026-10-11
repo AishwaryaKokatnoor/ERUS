@@ -898,6 +898,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                       <button
                         onClick={() =>
                           setCredentialsModal({
+                            id: c.id,
                             email: c.adminEmail || c.contactEmail,
                             password: c.adminPassword || `Erus@${c.code}2026`,
                             role: 'college_admin',
@@ -1786,8 +1787,9 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => {
-                    setBannerMsg(`Credentials dispatched to ${credentialsModal.email}.`);
+                  onClick={async () => {
+                    const targetId = credentialsModal.id || credentialsModal.collegeCode || '';
+                    await handleSendCredentials(targetId, credentialsModal.email);
                     setCredentialsModal(null);
                   }}
                   className="px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"

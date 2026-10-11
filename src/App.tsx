@@ -200,6 +200,7 @@ function GDAppContent() {
     return slots[0]?.status === 'active' ? 315 : 0;
   });
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
+  const [initialReportTab, setInitialReportTab] = useState<'single' | 'comparison' | 'journey'>('single');
   const { theme } = useTheme();
   const isFinishingSessionRef = useRef(false);
 
@@ -1764,6 +1765,9 @@ function GDAppContent() {
               return;
             }
           }
+          if (tab === 'report') {
+            setInitialReportTab('single');
+          }
           setCurrentTab(tab);
         }}
         session={session}
@@ -1793,6 +1797,7 @@ function GDAppContent() {
             onEnterRoom={(slotId) => {
               const target = availableSlots.find((s) => s.id === slotId);
               if (target?.status === 'completed') {
+                setInitialReportTab('single');
                 handleOpenAssessmentReport(slotId);
                 return;
               }
@@ -1800,9 +1805,11 @@ function GDAppContent() {
               setCurrentTab('room');
             }}
             onViewReport={(slotId) => {
+              setInitialReportTab('single');
               handleOpenAssessmentReport(slotId);
             }}
             onViewJourneyProfile={() => {
+              setInitialReportTab('journey');
               const target =
                 studentParticipatedSlots.find((s) => s.status === 'completed') ||
                 studentParticipatedSlots[0] ||
@@ -1848,6 +1855,7 @@ function GDAppContent() {
           <StudentReportView
             session={session}
             report={activeReport}
+            initialTab={initialReportTab}
             onBackToRoom={() => {
               if (currentUser?.role === 'super_admin') {
                 setCurrentTab('super_admin');
@@ -1863,7 +1871,7 @@ function GDAppContent() {
               }
               if (session.status === 'completed') {
                 if (currentUser?.role !== 'student') {
-                  const openSlot = availableSlots.find((s) => s.status !== 'completed');
+                  const openSlot = facultyAssignedSlots.find((s) => s.status !== 'completed') || availableSlots.find((s) => s.status !== 'completed');
                   if (openSlot) {
                     handleSelectSlot(openSlot.id);
                     return;
@@ -1899,6 +1907,14 @@ function GDAppContent() {
             transcripts={transcripts}
             onViewStudentReport={handleViewStudentReport}
             onBackToRoom={() => {
+              if (session.status === 'completed') {
+                const openSlot = facultyAssignedSlots.find((s) => s.status !== 'completed');
+                if (openSlot) {
+                  handleSelectSlot(openSlot.id);
+                  setCurrentTab('room');
+                  return;
+                }
+              }
               setCurrentTab('room');
             }}
             onEnterGDRoom={(slotId) => {
@@ -1937,16 +1953,23 @@ function GDAppContent() {
             onDeleteSlot={handleDeleteSession}
             onEnterGDRoom={(slot) => {
               if (slot) {
-                handleSelectSlot(typeof slot === 'string' ? slot : (slot.id || ''));
-                setCurrentTab('report');
+                const targetSlotId = typeof slot === 'string' ? slot : (slot.id || '');
+                if (targetSlotId) {
+                  handleOpenAssessmentReport(targetSlotId);
+                }
               }
             }}
           />
         )}
       </main>
 
-
-
+      <SessionCreationModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        onCreateSession={handleCreateSession}
+        onCreateSessions={handleCreateSessions}
+        collegeCode={userCollegeCode || 'DIT'}
+      />
     </div>
   );
 }
