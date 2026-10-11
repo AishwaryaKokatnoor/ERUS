@@ -8271,6 +8271,98 @@ CRITICAL RULES:
       targetSeatNumber: targetReal.seatNumber,
       transcript
     });
+
+    // AI participants take a real turn only after the facilitator invitation.
+    // All clients receive the same transcript and synthesize the same speaker.
+    const aiParticipant = room.aiParticipants.get(targetReal.userId);
+    if (aiParticipant) {
+      room.currentSpeakerId = aiParticipant.id;
+      room.currentSpeakerSocketId = null;
+      room.waitingForParticipantId = aiParticipant.id;
+      const facilitatorWaitMs = Math.max(7000, invWordCount * 480) + 500;
+      room.turnTimer = setTimeout(async () => {
+        room.turnTimer = undefined;
+        if (room.status !== 'active' || room.currentSpeakerId !== aiParticipant.id) return;
+
+        const recentHistory = room.transcripts
+          .filter((entry) => !entry.isFacilitator)
+          .slice(-10)
+          .map((entry) => `${entry.speakerName}: ${entry.text}`)
+          .join('\\n');
+        const priorAiStatements = room.transcripts
+          .filter((entry) => !entry.isFacilitator && String(entry.speakerId).startsWith('ai-'))
+          .map((entry) => String(entry.text || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim());
+
+        let statement = '';
+        if (ai) {
+          try {
+            const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 4500));
+            const response: any = await Promise.race([
+              ai.models.generateContent({
+                model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+                contents: `You are ${aiParticipant.name}, a student in a live college group discussion about "${room.topic}". Respond naturally in 2-3 sentences (35-65 words). Add one specific, useful argument or example and, where relevant, respond to the previous speaker. Do not repeat any earlier point, phrasing, or conclusion. Do not praise the speaker generically. Do not mention being an AI. Use only this discussion context.\\nRecent discussion:\\n${recentHistory}\\nYour new contribution:`,
+              }),
+              timeoutPromise,
+            ]);
+            statement = String(response?.text || '').replace(/^["'`]+|["'`]+$/g, '').trim();
+          } catch (err) {
+            console.warn('[GD] AI participant generation failed; using a local fallback.');
+          }
+        }
+
+        const fallbackStatements = [
+          `One practical dimension of "${room.topic}" is implementation. A policy may look strong on paper, but outcomes depend on funding, accountability, and whether the people affected can actually access it.`,
+          `I would add a long-term perspective on "${room.topic}". We should measure success with transparent outcomes over time, rather than relying only on initial adoption or short-term publicity.`,
+          `There is also an equity question in "${room.topic}": the same change can benefit well-resourced groups while leaving others behind. Any solution should include safeguards and a way to measure who is being missed.`,
+          `My concern with "${room.topic}" is unintended consequences. Before scaling a solution, we should test it in different real-world settings, collect feedback, and adjust the approach using evidence.`,
+          `A useful way to assess "${room.topic}" is to compare alternatives against clear criteria such as cost, accessibility, reliability, and accountability, instead of assuming that one approach works for everyone.`,
+        ];
+        const normalizeStatement = (value: string) => value.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+        if (!statement || priorAiStatements.includes(normalizeStatement(statement))) {
+          statement = fallbackStatements.find((candidate) => !priorAiStatements.includes(normalizeStatement(candidate))) || fallbackStatements[(aiParticipant.speakingTurns + 1) % fallbackStatements.length];
+        }
+
+        if (room.status !== 'active' || room.currentSpeakerId !== aiParticipant.id) return;
+        aiParticipant.speakingTurns += 1;
+        aiParticipant.lastSpokeAt = Date.now();
+        aiParticipant.speakingDurationSeconds += Math.max(1, Math.round(statement.split(/\\s+/).length * 60 / 130));
+        const aiTranscript: BackendTranscript = {
+          id: `t-${aiParticipant.id}-${Date.now()}`,
+          sessionId: room.slotId,
+          speakerId: aiParticipant.id,
+          speakerName: aiParticipant.name,
+          seatNumber: aiParticipant.seatNumber,
+          isFacilitator: false,
+          timestamp: '00:00',
+          timestampSeconds: Math.floor((Date.now() - (room.transcripts[0]?.timestampSeconds || Date.now())) / 1000),
+          text: statement,
+          type: 'statement',
+          sentiment: 'neutral',
+        };
+        room.transcripts.push(aiTranscript);
+        persistTranscriptToMongoDB(aiTranscript);
+        io.to('room-' + room.slotId).emit('ai-participant-speech', {
+          participant: { ...aiParticipant },
+          transcript: aiTranscript,
+        });
+
+        const speechDurationMs = Math.max(4500, statement.split(/\\s+/).length * 360);
+        room.turnTimer = setTimeout(() => {
+          room.turnTimer = undefined;
+          if (room.status !== 'active' || room.currentSpeakerId !== aiParticipant.id) return;
+          room.currentSpeakerId = null;
+          room.currentSpeakerSocketId = null;
+          room.waitingForParticipantId = undefined;
+          room.floorVersion += 1;
+          io.to('room-' + room.slotId).emit('floor-state', {
+            speakerId: null,
+            speakerSocketId: null,
+            floorVersion: room.floorVersion,
+          });
+          scheduleNextTurn(room, aiParticipant.id);
+        }, speechDurationMs);
+      }, facilitatorWaitMs);
+    }
   }, 1200);
 }
 
