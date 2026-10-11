@@ -3543,7 +3543,6 @@ app.post('/api/college/slots/:id/complete', async (req, res) => {
     try {
       // Preserve existing transcript history; insert only new transcript IDs.
       await prisma.transcriptEntry.createMany({
-        skipDuplicates: true,
         data: transcriptHistory.map((t: any) => ({
           id: t.id, sessionId: slotId, speakerId: t.speakerId, speakerName: t.speakerName,
           seatNumber: t.seatNumber ?? null, isFacilitator: !!t.isFacilitator, timestamp: t.timestamp || '00:00',
