@@ -383,9 +383,9 @@ async function syncMongoDBWithPersistentState() {
     }
 
     // 1. Colleges Sync: Read from MongoDB as sole authoritative store
-    persistentState.colleges = [];
     const dbColleges = await CollegeModel.find();
     if (dbColleges.length > 0) {
+      persistentState.colleges = [];
       for (const c of dbColleges) {
         // Do not delete records based on hard-coded legacy codes during routine sync.
         const normCode = normalizeCollegeCode(c.code);
@@ -418,11 +418,11 @@ async function syncMongoDBWithPersistentState() {
     const activeCollegeSet = new Set(persistentState.colleges.map((c) => normalizeCollegeCode(c.code)));
 
     // 2. Users Sync: Read all users from MongoDB as sole authoritative store
-    persistentState.users = [...DEFAULT_USERS];
-    persistentState.students = {};
-    persistentState.faculty = {};
     const dbUsers = await UserModel.find();
     if (dbUsers.length > 0) {
+      persistentState.users = [...DEFAULT_USERS];
+      persistentState.students = {};
+      persistentState.faculty = {};
       for (const u of dbUsers) {
         const uColCode = normalizeCollegeCode(u.collegeCode);
         if (u.role !== 'super_admin' && (!uColCode || !activeCollegeSet.has(uColCode))) {
@@ -510,12 +510,14 @@ async function syncMongoDBWithPersistentState() {
     }
 
     // 4. Hydrate Slots (Parent Table: gd_sessions) from MongoDB
-    persistentState.slots = {};
+    const previousSlots = persistentState.slots || {};
     const deletedSet = new Set(persistentState.deletedSlotIds || []);
     // Tombstones hide intentionally deleted slots from normal views, but do not
     // physically erase database history during routine startup synchronization.
     const dbSessions = await GDSessionModel.find();
     if (dbSessions.length > 0) {
+      // Only replace the snapshot after MongoDB returned authoritative session records.
+      persistentState.slots = {};
       for (const s of dbSessions) {
         if (!s?.id || deletedSet.has(s.id)) continue;
         // Preserve sessions even when their college record is missing. A temporary
@@ -574,6 +576,16 @@ async function syncMongoDBWithPersistentState() {
           persistentState.slots[colCode].push(slotItem);
         }
       }
+    } else {
+      // An empty collection can mean an incomplete migration or accidental database reset.
+      // Keep the recoverable snapshot, while still honoring explicit deletion tombstones.
+      persistentState.slots = Object.fromEntries(
+        Object.entries(previousSlots).map(([code, slots]: [string, any]) => [
+          code,
+          (Array.isArray(slots) ? slots : []).filter((slot: any) => slot?.id && !deletedSet.has(slot.id)),
+        ]).filter(([, slots]: [string, any]) => slots.length > 0)
+      );
+      console.warn('[MongoDB] No sessions returned; preserved non-deleted local slot snapshot for recovery.');
     }
 
     // 5. Hydrate Assessment Reports (Sub-Table: assessment_reports) — prefer non-zero reports
