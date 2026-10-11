@@ -8359,6 +8359,10 @@ CRITICAL RULES:
         aiParticipant.speakingTurns += 1;
         aiParticipant.lastSpokeAt = Date.now();
         aiParticipant.speakingDurationSeconds += Math.max(1, Math.round(statement.split(/\\s+/).length * 60 / 130));
+        const aiElapsedSeconds = room.transcripts.reduce((max, entry) => {
+          const value = Number(entry.timestampSeconds || 0);
+          return value >= 0 && value < 100000000 ? Math.max(max, value) : max;
+        }, 0) + Math.max(1, Math.round(statement.split(/\\s+/).length * 60 / 130));
         const aiTranscript: BackendTranscript = {
           id: `t-${aiParticipant.id}-${Date.now()}`,
           sessionId: room.slotId,
@@ -8366,8 +8370,8 @@ CRITICAL RULES:
           speakerName: aiParticipant.name,
           seatNumber: aiParticipant.seatNumber,
           isFacilitator: false,
-          timestamp: '00:00',
-          timestampSeconds: Math.floor((Date.now() - (room.transcripts[0]?.timestampSeconds || Date.now())) / 1000),
+          timestamp: `${String(Math.floor(aiElapsedSeconds / 60)).padStart(2, '0')}:${String(aiElapsedSeconds % 60).padStart(2, '0')}`,
+          timestampSeconds: aiElapsedSeconds,
           text: statement,
           type: 'statement',
           sentiment: 'neutral',
