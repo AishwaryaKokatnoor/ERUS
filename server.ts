@@ -8400,8 +8400,8 @@ CRITICAL RULES:
           .slice(-10)
           .map((entry) => `${entry.speakerName}: ${entry.text}`)
           .join('\\n');
-        const priorAiStatements = room.transcripts
-          .filter((entry) => !entry.isFacilitator && String(entry.speakerId).startsWith('ai-'))
+        const priorDiscussionStatements = room.transcripts
+          .filter((entry) => !entry.isFacilitator)
           .map((entry) => String(entry.text || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim());
 
         let statement = '';
@@ -8429,8 +8429,8 @@ CRITICAL RULES:
           `A useful way to assess "${room.topic}" is to compare alternatives against clear criteria such as cost, accessibility, reliability, and accountability, instead of assuming that one approach works for everyone.`,
         ];
         const normalizeStatement = (value: string) => value.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
-        if (!statement || priorAiStatements.includes(normalizeStatement(statement))) {
-          statement = fallbackStatements.find((candidate) => !priorAiStatements.includes(normalizeStatement(candidate))) || fallbackStatements[(aiParticipant.speakingTurns + 1) % fallbackStatements.length];
+        if (!statement || priorDiscussionStatements.includes(normalizeStatement(statement))) {
+          statement = fallbackStatements.find((candidate) => !priorDiscussionStatements.includes(normalizeStatement(candidate))) || fallbackStatements[(aiParticipant.speakingTurns + 1) % fallbackStatements.length];
         }
 
         if (room.status !== 'active' || room.currentSpeakerId !== aiParticipant.id) return;
