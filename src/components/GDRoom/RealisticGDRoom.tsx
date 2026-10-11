@@ -284,6 +284,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     notifySpeakingFinished: rtcNotifySpeakingFinished,
     aiParticipants: rtcAiParticipants,
     simulationMode: rtcSimulationMode,
+    isFloorLocked: rtcIsFloorLocked,
+    floorSpeakerName: rtcFloorSpeakerName,
+    floorSpeakerId: rtcFloorSpeakerId,
   } = useWebRTCRoom({
     slotId: session.slotId || session.id || 'slot-1',
     currentUser,
@@ -756,10 +759,25 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       });
     });
 
-    // 4. Place server-authoritative AI participants into their assigned seats.
-    (rtcAiParticipants || []).forEach((participant: any) => {
+    // 4. Place server-authoritative AI participants (exactly 6 Indian student personas) into their assigned seats.
+    const fallbackProfiles = [
+      { id: 'ai-p1', name: 'Aarav Mehta', college: 'IIT Bombay', avatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80', seatNumber: 2 },
+      { id: 'ai-p2', name: 'Priya Sharma', college: 'BITS Pilani', avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80', seatNumber: 3 },
+      { id: 'ai-p3', name: 'Rohan Iyer', college: 'NIT Trichy', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80', seatNumber: 4 },
+      { id: 'ai-p4', name: 'Ananya Reddy', college: 'IIIT Hyderabad', avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80', seatNumber: 5 },
+      { id: 'ai-p5', name: 'Kabir Nair', college: 'Delhi Tech Univ', avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80', seatNumber: 6 },
+      { id: 'ai-p6', name: 'Meera Kapoor', college: 'SRM Institute', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80', seatNumber: 7 },
+    ];
+    const sourceAiList = (rtcAiParticipants && rtcAiParticipants.length >= 6)
+      ? rtcAiParticipants
+      : [
+          ...(rtcAiParticipants || []),
+          ...fallbackProfiles.slice((rtcAiParticipants || []).length),
+        ];
+
+    sourceAiList.forEach((participant: any) => {
       if (!participant?.id) return;
-      const alreadyPlaced = Array.from(seatMap.values()).some((p) => p.id === participant.id);
+      const alreadyPlaced = Array.from(seatMap.values()).some((p) => p.id === participant.id || p.name === participant.name);
       if (alreadyPlaced) return;
 
       let targetSeat = Number(participant.seatNumber);
@@ -1139,9 +1157,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       audioChunksRef.current = [];
 
       mr.ondataavailable = (e) => {
-        if (!roomVoice.isSpeaking()) {
+        if (!roomVoice.isSpeaking() && !rtcIsFloorLocked) {
           aiVoicePausedMicRef.current = false;
         } else {
+          aiVoicePausedMicRef.current = true;
           return;
         }
         if (e.data && e.data.size > 0) {
@@ -1265,8 +1284,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
         recognition.onresult = (event: any) => {
           // Ignore microphone input while AI Facilitator voice is playing through speakers
-          // so speaker echo does NOT cut off the AI Facilitator mid-sentence or transcribe AI speech as student speech!
-          if (roomVoice.isSpeaking()) {
+          // OR when another participant is currently speaking on the floor (auto-mute to prevent interruptions)
+          if (roomVoice.isSpeaking() || rtcIsFloorLocked) {
             aiVoicePausedMicRef.current = true;
             committedResultIndexRef.current = event.results.length - 1;
             return;
@@ -1470,6 +1489,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         }));
       }
     } else {
+      if (rtcIsFloorLocked) {
+        alert(`The floor is currently held by ${rtcFloorSpeakerName || 'another participant'}. Microphones are automatically muted by AI to prevent interruptions. You can speak as soon as they finish.`);
+        return;
+      }
       if (roomVoice.isSpeaking() || session.isFacilitatorSpeaking) {
         roomVoice.stop();
         setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
@@ -2533,6 +2556,42 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               <span className="text-indigo-600 dark:text-indigo-400">Topic:</span>
               <span>{session?.topic || 'Group Discussion'}</span>
             </h1>
+
+            {/* Anti-Interruption Automatic Mute & Floor Control Banner */}
+            {isSessionActive && (
+              <div className={`mt-2.5 px-3 py-2 rounded-xl flex items-center justify-between gap-2 shadow-2xs border transition-all ${
+                rtcIsFloorLocked
+                  ? 'bg-amber-500/15 dark:bg-amber-950/50 border-amber-500/40 text-amber-900 dark:text-amber-200'
+                  : 'bg-emerald-500/10 dark:bg-emerald-950/40 border-emerald-500/25 text-emerald-900 dark:text-emerald-200'
+              }`}>
+                <div className="flex items-center gap-2">
+                  {rtcIsFloorLocked ? (
+                    <>
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping inline-block shrink-0" />
+                      <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                      <span className="text-xs font-bold">
+                        Floor Held by: <span className="underline font-extrabold">{rtcFloorSpeakerName || 'Active Speaker'}</span>
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block shrink-0" />
+                      <Mic className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300">
+                        Floor is Open — You or peers can speak now
+                      </span>
+                    </>
+                  )}
+                </div>
+                <span className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-lg border ${
+                  rtcIsFloorLocked
+                    ? 'bg-amber-100 dark:bg-amber-900/70 border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-200'
+                    : 'bg-emerald-100 dark:bg-emerald-900/60 border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200'
+                }`}>
+                  {rtcIsFloorLocked ? '🔒 Other mics auto-muted (Anti-Interruption)' : 'AI Floor Arbitration Active'}
+                </span>
+              </div>
+            )}
 
             {/* Session Completed Banner OR Waiting Lobby Banner OR 20-Second Silence Watchdog */}
             {session.status === 'completed' ? (

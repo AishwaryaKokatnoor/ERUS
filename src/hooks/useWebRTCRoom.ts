@@ -82,6 +82,9 @@ export function useWebRTCRoom({
   const [isMicMuted, setIsMicMuted] = useState(true);
   const [isSpeakingLive, setIsSpeakingLive] = useState(false);
   const [localVolume, setLocalVolume] = useState(0);
+  const [isFloorLocked, setIsFloorLocked] = useState(false);
+  const [floorSpeakerName, setFloorSpeakerName] = useState<string | null>(null);
+  const [floorSpeakerId, setFloorSpeakerId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
@@ -421,10 +424,11 @@ export function useWebRTCRoom({
           setLocalVolume(Math.min(100, Math.round((avg / 128) * 100)));
 
           // Detect speaking when volume exceeds threshold
-          // When AI Facilitator is actively speaking, ignore acoustic bleed in the local microphone.
-          // Do not cut off the AI and do not emit false speaking claims while AI is speaking!
+          // When AI Facilitator or another participant is actively speaking, ignore microphone input
+          // and do not emit false speaking claims to prevent interruptions.
           const isAiSpeaking = roomVoice.isSpeaking();
-          const speakingNow = !isAiSpeaking && avg > 14 && !isMicMutedRef.current;
+          const isFloorHeldByOther = !!floorSpeakerIdRef.current && floorSpeakerIdRef.current !== currentUserRef.current?.id;
+          const speakingNow = !isAiSpeaking && !isFloorHeldByOther && avg > 14 && !isMicMutedRef.current;
           setIsSpeakingLive(speakingNow);
 
           if (speakingNow) {
@@ -745,9 +749,27 @@ export function useWebRTCRoom({
       }
     });
 
-    socket.on('floor-state', ({ speakerId }) => {
+    socket.on('floor-state', ({ speakerId, speakerName }: any) => {
       if (!active) return;
       floorSpeakerIdRef.current = speakerId || null;
+      setFloorSpeakerId(speakerId || null);
+      const isOtherSpeaking = !!speakerId && speakerId !== currentUserRef.current?.id;
+      setIsFloorLocked(isOtherSpeaking);
+      setFloorSpeakerName(speakerName || (isOtherSpeaking ? 'Another Participant' : null));
+
+      // Auto-mute audio transmission over WebRTC if another participant is speaking!
+      if (localStreamRef.current) {
+        const audioTracks = localStreamRef.current.getAudioTracks();
+        audioTracks.forEach((track) => {
+          if (isOtherSpeaking) {
+            track.enabled = false; // MUTE local track so user cannot interrupt
+          } else {
+            // Restore microphone track to user's intended mute status
+            track.enabled = !isMicMutedRef.current;
+          }
+        });
+      }
+
       if (speakerId && speakerId !== 'facilitator' && roomVoice.isSpeaking()) {
         roomVoice.stop();
       }
@@ -1007,6 +1029,9 @@ export function useWebRTCRoom({
     requestAiIntervention,
     broadcastFacilitatorSpeech,
     notifySpeakingFinished,
+    isFloorLocked,
+    floorSpeakerName,
+    floorSpeakerId,
     error,
   };
 }

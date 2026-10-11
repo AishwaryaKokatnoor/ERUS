@@ -3555,17 +3555,26 @@ app.post('/api/college/slots/:id/complete', async (req, res) => {
   }
 
   const participantIds = new Set<string>();
-  if (room) for (const peer of room.peers.values()) if (peer.role === 'student' && peer.userId) participantIds.add(peer.userId);
+  if (room) {
+    for (const peer of room.peers.values()) {
+      if (peer.role === 'student' && peer.userId && !peer.userId.startsWith('ai-') && !peer.userId.startsWith('demo-')) {
+        participantIds.add(peer.userId);
+      }
+    }
+  }
   transcriptHistory.forEach((t: any) => {
     // AI simulation personas participate in the conversation but are not real students
     // and must never receive student assessment reports.
-    if (!t.isFacilitator && t.speakerId && !String(t.speakerId).startsWith('ai-')) {
+    if (!t.isFacilitator && t.speakerId && !String(t.speakerId).startsWith('ai-') && !String(t.speakerId).startsWith('demo-')) {
       participantIds.add(t.speakerId);
     }
   });
 
   const reports: any[] = [];
   for (const participantId of participantIds) {
+    if (!participantId || participantId.startsWith('ai-') || participantId.startsWith('demo-') || participantId.includes('ai-participant')) {
+      continue;
+    }
     let studentUser: any = persistentState.users.find((u) => u.id === participantId || u.studentId === participantId);
     if (!studentUser && isMongoConnected()) {
       try {
@@ -6542,6 +6551,12 @@ async function persistAssessmentReport(rawReport: any) {
     throw new Error('Assessment report requires both sessionId and studentId.');
   }
 
+  // Strict safeguard: NEVER persist reports for AI participants or simulation personas
+  const rawId = String(rawReport.studentId || '');
+  if (rawId.startsWith('ai-') || rawId.startsWith('demo-') || rawId.includes('ai-participant') || rawReport.isDemoAI || rawReport.isAiParticipant) {
+    return null;
+  }
+
   const report = ensureHealthyReport(rawReport);
   if (!(persistentState as any).reports) (persistentState as any).reports = {};
 
@@ -6661,6 +6676,10 @@ app.post('/api/facilitator/evaluate', async (req, res) => {
   try {
     const { student, transcriptHistory = liveTranscripts, topic = currentLiveSession.topic, durationMinutes = 20 } = req.body;
     if (!student?.id) return res.status(400).json({ success: false, error: 'student is required' });
+    const sId = String(student.id || '');
+    if (sId.startsWith('ai-') || sId.startsWith('demo-') || sId.includes('ai-participant') || student.isDemoAI || student.isAiParticipant) {
+      return res.status(400).json({ success: false, error: 'AI participants cannot receive assessment reports.' });
+    }
     const report = await generateAssessmentReport(student, transcriptHistory, topic, durationMinutes, {
       sessionId: req.body.sessionId || currentLiveSession.id,
       speakingDurationSeconds: student.speakingDurationSeconds,
@@ -7239,12 +7258,15 @@ app.get(['/api/college/slots/:id/reports', '/api/admin/sessions/:id/reports'], a
       }
     }
 
-    // Filter participants strictly to evaluated students or active speakers
+    // Filter participants strictly to evaluated students or active speakers (excluding AI simulation participants)
     participants = participants.filter((p) =>
-      reportStudentIds.has(p.id) ||
+      !String(p.id).startsWith('ai-') &&
+      !String(p.id).startsWith('demo-') &&
+      !String(p.id).includes('ai-participant') &&
+      (reportStudentIds.has(p.id) ||
       reportStudentNames.has((p.name || '').toLowerCase()) ||
       (p.speakingDurationSeconds && p.speakingDurationSeconds > 0) ||
-      (p.speakingTurns && p.speakingTurns > 0)
+      (p.speakingTurns && p.speakingTurns > 0))
     );
   } else if (participants.length === 0) {
     // If no enrolled students and no reports, pull top students from college roster for demo
@@ -7263,8 +7285,10 @@ app.get(['/api/college/slots/:id/reports', '/api/admin/sessions/:id/reports'], a
   }
 
   // 4. If existingReports exist, do not generate synthetic reports for absent students!
-  const finalReports: any[] = [...existingReports];
-  if (existingReports.length === 0) {
+  const finalReports: any[] = existingReports.filter(
+    (r) => !String(r.studentId).startsWith('ai-') && !String(r.studentId).startsWith('demo-')
+  );
+  if (finalReports.length === 0) {
     let dbTranscripts: any[] = [];
     if (isMongoConnected()) {
       try {
@@ -7273,6 +7297,9 @@ app.get(['/api/college/slots/:id/reports', '/api/admin/sessions/:id/reports'], a
     }
 
     for (const part of participants) {
+      if (String(part.id).startsWith('ai-') || String(part.id).startsWith('demo-') || String(part.id).includes('ai-participant')) {
+        continue;
+      }
       const existing = finalReports.find((r) => r.studentId === part.id || (r.studentName && r.studentName.toLowerCase() === part.name.toLowerCase()));
       if (!existing) {
         const room = LIVE_ROOMS.get(sessionId);
@@ -7523,27 +7550,70 @@ const LIVE_ROOMS = new Map<string, LiveGDRoomState>();
 function getSlotCapacity(slotId: string) {
   for (const slots of Object.values(persistentState.slots)) {
     const slot = slots.find((s) => s.id === slotId);
-    if (slot) return Math.max(1, Number(slot.maxCapacity || 6));
+    if (slot) return Math.max(8, Number(slot.maxCapacity || 8));
   }
-  return Math.max(1, Number((currentLiveSession as any)?.maxCapacity || 6));
+  return Math.max(8, Number((currentLiveSession as any)?.maxCapacity || 8));
 }
 
-const AI_PARTICIPANT_NAMES = [
-  'Aarav Mehta', 'Priya Sharma', 'Rohan Iyer',
-  'Ananya Reddy', 'Kabir Nair', 'Meera Kapoor',
+export interface AIParticipantProfile {
+  name: string;
+  college: string;
+  avatar: string;
+  gender: 'male' | 'female';
+}
+
+const AI_PARTICIPANT_PROFILES: AIParticipantProfile[] = [
+  {
+    name: 'Aarav Mehta',
+    college: 'IIT Bombay',
+    avatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
+    gender: 'male',
+  },
+  {
+    name: 'Priya Sharma',
+    college: 'BITS Pilani',
+    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    gender: 'female',
+  },
+  {
+    name: 'Rohan Iyer',
+    college: 'NIT Trichy',
+    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+    gender: 'male',
+  },
+  {
+    name: 'Ananya Reddy',
+    college: 'IIIT Hyderabad',
+    avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
+    gender: 'female',
+  },
+  {
+    name: 'Kabir Nair',
+    college: 'Delhi Tech Univ',
+    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
+    gender: 'male',
+  },
+  {
+    name: 'Meera Kapoor',
+    college: 'SRM Institute',
+    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
+    gender: 'female',
+  },
 ];
+
+const AI_PARTICIPANT_NAMES = AI_PARTICIPANT_PROFILES.map((p) => p.name);
 const AI_GD_SIMULATION_MODE = true;
 const AI_GD_SIMULATION_PARTICIPANTS = 6;
 
 function syncAiParticipants(room: LiveGDRoomState) {
   const humanStudents = Array.from(room.peers.values()).filter((peer) => peer.role === 'student');
-  const capacity = Math.max(1, getSlotCapacity(room.slotId));
-  const availableAiCount = Math.max(0, Math.min(AI_GD_SIMULATION_PARTICIPANTS, capacity - humanStudents.length));
+  const availableAiCount = 6; // Exactly 6 AI peers alongside the human student
   const occupiedSeats = new Set(humanStudents.map((peer) => Number(peer.seatNumber)).filter((seat) => seat > 0));
   const next = new Map<string, AIParticipant>();
 
   for (let index = 0; index < availableAiCount; index++) {
-    const name = AI_PARTICIPANT_NAMES[index];
+    const profile = AI_PARTICIPANT_PROFILES[index];
+    const name = profile.name;
     const id = `ai-${room.slotId}-${index + 1}`;
     const existing = room.aiParticipants.get(id);
     let seatNumber = existing?.seatNumber || 1;
@@ -7557,9 +7627,9 @@ function syncAiParticipants(room: LiveGDRoomState) {
       id,
       name,
       seatNumber,
-      avatar: '',
+      avatar: profile.avatar,
       role: 'student',
-      college: 'ERUS AI Participant',
+      college: profile.college,
       speakingTurns: existing?.speakingTurns || 0,
       speakingDurationSeconds: existing?.speakingDurationSeconds || 0,
       lastSpokeAt: existing?.lastSpokeAt,
@@ -8401,6 +8471,14 @@ CRITICAL RULES:
       room.currentSpeakerId = aiParticipant.id;
       room.currentSpeakerSocketId = null;
       room.waitingForParticipantId = aiParticipant.id;
+      room.floorVersion += 1;
+      io.to('room-' + room.slotId).emit('floor-state', {
+        speakerId: aiParticipant.id,
+        speakerName: aiParticipant.name,
+        speakerSocketId: null,
+        isFloorLocked: true,
+        floorVersion: room.floorVersion,
+      });
       const facilitatorWaitMs = Math.max(7000, invWordCount * 480) + 500;
       room.turnTimer = setTimeout(async () => {
         room.turnTimer = undefined;
@@ -8410,7 +8488,7 @@ CRITICAL RULES:
           .filter((entry) => !entry.isFacilitator)
           .slice(-10)
           .map((entry) => `${entry.speakerName}: ${entry.text}`)
-          .join('\\n');
+          .join('\n');
         const priorDiscussionStatements = room.transcripts
           .filter((entry) => !entry.isFacilitator)
           .map((entry) => String(entry.text || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim());
@@ -8422,7 +8500,7 @@ CRITICAL RULES:
             const response: any = await Promise.race([
               ai.models.generateContent({
                 model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
-                contents: `You are ${aiParticipant.name}, a student in a live college group discussion about "${room.topic}". Respond naturally in 2-3 sentences (35-65 words). Add one specific, useful argument or example and, where relevant, respond to the previous speaker. Do not repeat any earlier point, phrasing, or conclusion. Do not praise the speaker generically. Do not mention being an AI. Use only this discussion context.\\nRecent discussion:\\n${recentHistory}\\nYour new contribution:`,
+                contents: `You are ${aiParticipant.name}, a student in a live college group discussion about "${room.topic}". Respond naturally in 2-3 sentences (35-65 words). Add one specific, useful argument or example and, where relevant, respond to the previous speaker. Do not repeat any earlier point, phrasing, or conclusion. Do not praise the speaker generically. Do not mention being an AI. Use only this discussion context.\nRecent discussion:\n${recentHistory}\nYour new contribution:`,
               }),
               timeoutPromise,
             ]);
@@ -8447,11 +8525,11 @@ CRITICAL RULES:
         if (room.status !== 'active' || room.currentSpeakerId !== aiParticipant.id) return;
         aiParticipant.speakingTurns += 1;
         aiParticipant.lastSpokeAt = Date.now();
-        aiParticipant.speakingDurationSeconds += Math.max(1, Math.round(statement.split(/\\s+/).length * 60 / 130));
+        aiParticipant.speakingDurationSeconds += Math.max(1, Math.round(statement.split(/\s+/).length * 60 / 130));
         const aiElapsedSeconds = room.transcripts.reduce((max, entry) => {
           const value = Number(entry.timestampSeconds || 0);
           return value >= 0 && value < 100000000 ? Math.max(max, value) : max;
-        }, 0) + Math.max(1, Math.round(statement.split(/\\s+/).length * 60 / 130));
+        }, 0) + Math.max(1, Math.round(statement.split(/\s+/).length * 60 / 130));
         const aiTranscript: BackendTranscript = {
           id: `t-${aiParticipant.id}-${Date.now()}`,
           sessionId: room.slotId,
@@ -8467,6 +8545,14 @@ CRITICAL RULES:
         };
         room.transcripts.push(aiTranscript);
         persistTranscriptToMongoDB(aiTranscript);
+        room.floorVersion += 1;
+        io.to('room-' + room.slotId).emit('floor-state', {
+          speakerId: aiParticipant.id,
+          speakerName: aiParticipant.name,
+          speakerSocketId: null,
+          isFloorLocked: true,
+          floorVersion: room.floorVersion,
+        });
         io.to('room-' + room.slotId).emit('ai-participant-speech', {
           participant: { ...aiParticipant },
           transcript: aiTranscript,
@@ -8474,7 +8560,7 @@ CRITICAL RULES:
 
         // Reserve an estimated spoken duration plus a small buffer so the
         // facilitator does not overlap the AI participant's voice.
-        const speechDurationMs = Math.max(12000, statement.split(/\\s+/).length * 450 + 2000);
+        const speechDurationMs = Math.max(12000, statement.split(/\s+/).length * 450 + 2000);
         room.turnTimer = setTimeout(() => {
           room.turnTimer = undefined;
           if (room.status !== 'active' || room.currentSpeakerId !== aiParticipant.id) return;
@@ -8484,7 +8570,9 @@ CRITICAL RULES:
           room.floorVersion += 1;
           io.to('room-' + room.slotId).emit('floor-state', {
             speakerId: null,
+            speakerName: null,
             speakerSocketId: null,
+            isFloorLocked: false,
             floorVersion: room.floorVersion,
           });
           scheduleNextTurn(room, aiParticipant.id);
@@ -8938,6 +9026,42 @@ io.on('connection', (socket) => {
     if (cameraActive !== undefined) peer.cameraActive = cameraActive;
 
     if (isSpeaking) {
+      // Automatic anti-interruption mute: if someone else already holds the floor, block the interruption!
+      const currentActiveSpeakerId = room.currentSpeakerId;
+      if (currentActiveSpeakerId && currentActiveSpeakerId !== peer.userId) {
+        let activeSpeakerName = 'another participant';
+        if (currentActiveSpeakerId === 'facilitator') {
+          activeSpeakerName = 'AI Facilitator';
+        } else if (currentActiveSpeakerId.startsWith('ai-')) {
+          const aiP = room.aiParticipants.get(currentActiveSpeakerId);
+          if (aiP) activeSpeakerName = aiP.name;
+        } else {
+          const activePeer = Array.from(room.peers.values()).find((p) => p.userId === currentActiveSpeakerId);
+          if (activePeer) activeSpeakerName = activePeer.name;
+        }
+
+        peer.interruptionCount = (peer.interruptionCount || 0) + 1;
+        peer.isSpeaking = false;
+
+        socket.emit('floor-busy', {
+          message: `Floor is held by ${activeSpeakerName}. Your microphone is muted by AI to prevent interruptions.`,
+          currentSpeakerId: currentActiveSpeakerId,
+          currentSpeakerName: activeSpeakerName,
+        });
+
+        io.to(`room-${safeSlotId}`).emit('peer-speaking-updated', {
+          socketId: socket.id,
+          userId: peer.userId,
+          seatNumber: peer.seatNumber,
+          role: peer.role,
+          isSpeaking: false,
+          micActive: false,
+          cameraActive: peer.cameraActive,
+          volumeLevel: 0,
+        });
+        return;
+      }
+
       // A participant has claimed the floor; cancel any pending AI timers
       if (room.turnTimer) clearTimeout(room.turnTimer);
       room.turnTimer = undefined;
@@ -8950,7 +9074,9 @@ io.on('connection', (socket) => {
       room.floorVersion += 1;
       io.to(`room-${safeSlotId}`).emit('floor-state', {
         speakerId: peer.userId,
+        speakerName: peer.name,
         speakerSocketId: socket.id,
+        isFloorLocked: true,
         floorVersion: room.floorVersion,
       });
     } else if (room.currentSpeakerSocketId === socket.id) {
@@ -8958,7 +9084,7 @@ io.on('connection', (socket) => {
         clearTimeout(room.speechYieldTimer);
         room.speechYieldTimer = undefined;
       }
-      // Release floor 1.5s after speech finishes so silence watchdog can track
+      // Release floor 1.2s after speech finishes so silence watchdog can track and other participants can speak
       room.speechYieldTimer = setTimeout(() => {
         room.speechYieldTimer = undefined;
         if (!peer.isSpeaking) {
@@ -8968,12 +9094,14 @@ io.on('connection', (socket) => {
           room.floorVersion += 1;
           io.to(`room-${safeSlotId}`).emit('floor-state', {
             speakerId: null,
+            speakerName: null,
             speakerSocketId: null,
+            isFloorLocked: false,
             floorVersion: room.floorVersion,
           });
           scheduleNextTurn(room, peer.userId);
         }
-      }, 1500);
+      }, 1200);
     }
 
     io.to(`room-${safeSlotId}`).emit('peer-speaking-updated', {
