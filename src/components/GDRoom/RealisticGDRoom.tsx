@@ -276,6 +276,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     localVolume: rtcLocalVolume,
     toggleMute: rtcToggleMute,
     setMicEnabled: rtcSetMicEnabled,
+    getLocalAudioStream,
     broadcastTranscript: rtcBroadcastTranscript,
     startSession: rtcStartSession,
     finishSession: rtcFinishSession,
@@ -342,6 +343,46 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             : s
         ),
       }));
+
+      // If this statement came from a remote human participant and direct P2P WebRTC audio
+      // is not currently streaming live on this device (e.g. behind restrictive NAT or typed statement),
+      // vocalize the statement so all connected devices always hear the participant clearly.
+      if (
+        !newTx.isFacilitator &&
+        newTx.speakerId &&
+        newTx.speakerId !== currentUser?.id &&
+        !voiceMuted &&
+        !isRoomAudioMuted &&
+        String(newTx.text || '').trim()
+      ) {
+        const remotePeer = (rtcPeers || []).find(
+          (p) => p.userId === newTx.speakerId || (newTx.seatNumber && p.seatNumber === newTx.seatNumber)
+        );
+        const remoteStream = remotePeer ? rtcPeerStreams.get(remotePeer.socketId) : null;
+        const hasLiveWebRTCAudio = Boolean(
+          remoteStream &&
+          remoteStream.getAudioTracks().some((t) => t.readyState === 'live' && t.enabled && !t.muted) &&
+          remotePeer?.isSpeaking
+        );
+        if (!hasLiveWebRTCAudio) {
+          const speakerName = String(newTx.speakerName || remotePeer?.name || 'Participant');
+          roomVoice.speakAsStudent(
+            {
+              id: String(newTx.speakerId),
+              name: speakerName,
+              seatNumber: Number(newTx.seatNumber || remotePeer?.seatNumber || 1),
+              gender: /^(priya|ananya|meera|sneha|neha|kavya|divya|pooja|riya|shreya|ishita|nandini|aishwarya|lakshmi|swathi)/i.test(speakerName) ? 'female' : 'male',
+            },
+            String(newTx.text),
+            () => {
+              setSession((prev) => ({
+                ...prev,
+                currentSpeakerId: prev.currentSpeakerId === newTx.speakerId ? null : prev.currentSpeakerId,
+              }));
+            }
+          );
+        }
+      }
     },
     onAiParticipantSpeech: (data: any) => {
       const participant = data?.participant;
@@ -733,6 +774,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
       usedSeats.add(desiredSeat);
       const remoteStream = rtcPeerStreams.get(peer.socketId) || null;
+      const hasActiveRemoteVideo = Boolean(
+        remoteStream &&
+        remoteStream.getVideoTracks().some((t) => t.readyState === 'live' && t.enabled && !t.muted)
+      );
       seatMap.set(desiredSeat, {
         id: peer.userId || peer.socketId,
         seatNumber: desiredSeat,
@@ -746,7 +791,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         isEmptySeat: false,
         isSpeaking: !!peer.isSpeaking,
         micActive: !!peer.micActive,
-        cameraActive: !!peer.cameraActive,
+        cameraActive: Boolean(peer.cameraActive || hasActiveRemoteVideo),
         speakingTurns: peer.speakingTurns || 0,
         speakingDurationSeconds: peer.speakingDurationSeconds || 0,
         volumeLevel: peer.volumeLevel || 0,
@@ -1501,15 +1546,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       isListeningMicRef.current = true;
       setIsListeningMic(true);
 
-      // Acquire and verify microphone stream & live VU analyser
-      let activeMicStream: MediaStream | null = null;
-      try {
-        activeMicStream = await startAudioAnalyser();
-      } catch (e) {
-        console.warn('startAudioAnalyser error:', e);
-      }
-
       await rtcSetMicEnabled(true);
+
+      // Reuse WebRTC microphone stream first so two getUserMedia calls don't contend for the mic
+      let activeMicStream: MediaStream | null = getLocalAudioStream ? getLocalAudioStream() : null;
+      if (!activeMicStream) {
+        try {
+          activeMicStream = await startAudioAnalyser();
+        } catch (e) {
+          console.warn('startAudioAnalyser error:', e);
+        }
+      }
 
       // Start MediaRecorder fallback using the verified stream
       if (activeMicStream) {
@@ -1975,12 +2022,12 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   };
   executeNextTurnRef.current = executeNextTurn;
 
-  // If no one speaks initially, AI Facilitator calls upon a student referencing their previous presentation
+  // If no one speaks initially, AI Facilitator calls upon a student or welcomes the room
   const handleInitiateOpeningSpeaker = (force: boolean = false) => {
     if (rtcSimulationMode) return;
-    if (hasInitiatedOpeningRef.current) return;
+    if (!force && hasInitiatedOpeningRef.current) return;
     const hasFacilitatorSpoken = transcripts.some((t) => t.isFacilitator);
-    if (hasFacilitatorSpoken) {
+    if (!force && hasFacilitatorSpoken) {
       hasInitiatedOpeningRef.current = true;
       return;
     }
@@ -1996,12 +2043,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
     hasInitiatedOpeningRef.current = true;
 
-    // Select candidate to initiate (Seat 1 or first available student)
-    const rawCandidates = (session.students && session.students.length > 0) ? session.students : generateSlotParticipants(8);
-    const openingCandidate = rawCandidates.find((s) => !s.isEmptySeat) || rawCandidates[0];
-    if (!openingCandidate) return;
+    // Select candidate to initiate from active live peers or enrolled students
+    const liveCandidates = activeDisplayStudents.filter((s) => !s.isEmptySeat);
+    const rawCandidates = liveCandidates.length > 0
+      ? liveCandidates
+      : (session.students && session.students.length > 0 ? session.students.filter((s) => !s.isEmptySeat) : []);
+    const openingCandidate = rawCandidates[0] || null;
 
-    const initiationPrompt = generateInitiationPrompt(openingCandidate, session.topic);
+    const initiationPrompt = openingCandidate
+      ? generateInitiationPrompt(openingCandidate, session.topic)
+      : `Welcome participants to today's group discussion on "${session.topic}". The discussion has now officially commenced. Each candidate will have the opportunity to present their views. Please unmute your microphone and share your opening thoughts on "${session.topic}".`;
 
     // Broadcast over socket so all connected peers receive the opening facilitator prompt
     if (rtcBroadcastFacilitatorSpeech) {
@@ -2009,13 +2060,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     }
 
     speakFacilitator(initiationPrompt, 'initiate_opening_speaker', 'intro', () => {
-      if (openingCandidate.isUser) {
+      if (openingCandidate?.isUser) {
         setInvitedStudentPrompt({
           student: openingCandidate,
-          reason: `AI Facilitator has invited you to initiate the discussion based on your previous presentation!`,
+          reason: `AI Facilitator has invited you to initiate the discussion!`,
           promptText: initiationPrompt,
         });
-      } else if (autoSimulatePeers && !hasRealStudentPeers) {
+      } else if (openingCandidate && autoSimulatePeers && !hasRealStudentPeers) {
         setTimeout(() => {
           const openingStmt = generateStudentOpeningStatement(openingCandidate, session.topic);
           startPeerSpeech(openingCandidate, openingStmt);
@@ -2032,12 +2083,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
     lastFacilitatorInterventionTimeRef.current = Date.now();
 
-    // Prioritize student who hasn't spoken yet, or lowest turn count
-    const targetStudent = getNextTurnSpeaker(session.students, null) || session.students.find(s => !s.isEmptySeat) || session.students[0];
-    if (!targetStudent) return;
+    const liveStudents = activeDisplayStudents.filter((s) => !s.isEmptySeat);
+    const pool = liveStudents.length > 0 ? liveStudents : (session.students || []).filter((s) => !s.isEmptySeat);
+    const targetStudent = getNextTurnSpeaker(pool, null) || pool[0] || null;
 
     const latestStudentTranscript = transcripts.slice().reverse().find((t) => !t.isFacilitator);
-    const targetedQuestion = generateTargetedQuestionForStudent(targetStudent, session.topic, latestStudentTranscript);
+    const targetedQuestion = targetStudent
+      ? generateTargetedQuestionForStudent(targetStudent, session.topic, latestStudentTranscript)
+      : getNextUniqueFacilitatorPrompt(session.topic, transcripts, pool, 'probing', true).text;
 
     // Broadcast over socket so all connected peers receive the question
     if (rtcBroadcastFacilitatorSpeech) {
@@ -2045,13 +2098,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     }
 
     speakFacilitator(targetedQuestion, 'targeted_question_student', 'probing', () => {
-      if (targetStudent.isUser) {
+      if (targetStudent?.isUser) {
         setInvitedStudentPrompt({
           student: targetStudent,
           reason: `AI Facilitator asked you directly: "${targetedQuestion}"`,
           promptText: targetedQuestion,
         });
-      } else if (autoSimulatePeers) {
+      } else if (targetStudent && autoSimulatePeers) {
         setTimeout(() => {
           const ansStmt = generateStudentFollowUpStatement(targetStudent, session.topic, { name: 'Facilitator' }, targetedQuestion);
           startPeerSpeech(targetStudent, ansStmt);
@@ -2709,18 +2762,21 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 <button
                   id="start-gd-btn"
                   onClick={() => {
+                    roomVoice.unlock();
                     setSession((prev) => ({
                       ...prev,
                       status: 'active',
                       startedAt: prev.startedAt || Date.now(),
                     }));
+                    if (rtcStartSession) {
+                      rtcStartSession(session.topic);
+                    }
                     if (onStartSession) {
                       onStartSession(session.id);
                     }
-                    // Session start is handled by the authorized onStartSession callback.
                     setTimeout(() => {
                       handleInitiateOpeningSpeaker(true);
-                    }, 400);
+                    }, 350);
                   }}
                   className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-700/30 transition-all hover:scale-105 active:scale-95 cursor-pointer animate-pulse ring-2 ring-emerald-400/50"
                 >
@@ -2733,10 +2789,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 <button
                   id="restart-gd-btn"
                   onClick={() => {
+                    roomVoice.unlock();
+                    if (rtcStartSession) {
+                      rtcStartSession(session.topic);
+                    }
                     if (onStartSession) {
                       onStartSession(session.id);
                     }
-                    // Session start is handled by the authorized onStartSession callback.
+                    setTimeout(() => {
+                      handleInitiateOpeningSpeaker(true);
+                    }, 350);
                   }}
                   className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-600 text-white shadow-md transition-all active:scale-95 cursor-pointer border border-emerald-500/50"
                   title="Restart discussion from beginning and deliver opening speech"
@@ -3871,6 +3933,48 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                     <FastForward className="w-5 h-5 text-indigo-300" />
                   </button>
 
+                  {/* 5.5 Start / Restart GD Call (Green Pill Button - Faculty & Admin only) */}
+                  {isFacultyOrAdmin && session.status !== 'completed' && (
+                    <button
+                      id="dock-start-gd-btn"
+                      onClick={() => {
+                        roomVoice.unlock();
+                        setSession((prev) => ({
+                          ...prev,
+                          status: 'active',
+                          startedAt: prev.startedAt || Date.now(),
+                        }));
+                        if (rtcStartSession) {
+                          rtcStartSession(session.topic);
+                        }
+                        if (onStartSession) {
+                          onStartSession(session.id);
+                        }
+                        setTimeout(() => {
+                          handleInitiateOpeningSpeaker(true);
+                        }, 350);
+                      }}
+                      className={`px-4 py-2.5 rounded-full font-bold text-xs text-white shadow-lg flex items-center gap-2 cursor-pointer transition-all ml-1 sm:ml-2 ${
+                        !isSessionActive
+                          ? 'bg-emerald-600 hover:bg-emerald-500 ring-2 ring-emerald-400/50 animate-pulse'
+                          : 'bg-emerald-700 hover:bg-emerald-600 border border-emerald-500/50'
+                      }`}
+                      title={!isSessionActive ? 'Start Group Discussion & Deliver AI Opening Speech' : 'Restart Discussion & Deliver AI Opening Speech'}
+                    >
+                      {!isSessionActive ? (
+                        <>
+                          <Play className="w-4 h-4 fill-white" />
+                          <span>Start GD</span>
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">Restart GD</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+
                   {/* 6. Conclude / Finish GD Call (Red Pill Button - Faculty & Admin only) */}
                   {isFacultyOrAdmin && (
                     <button
@@ -3907,7 +4011,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               {/* Live Voice Broadcast Console for Student OR Evaluator Audio Listening Console for Faculty */}
               <div className="w-full">
                 {isFaculty ? (
-                  <div className="w-full rounded-2xl bg-slate-100/90 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 p-2.5 sm:p-3 flex items-center justify-between transition-all">
+                  <div className="w-full rounded-2xl bg-slate-100/90 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 p-2.5 sm:p-3 flex flex-wrap items-center justify-between gap-2 transition-all">
                     <div className="flex items-center gap-2.5">
                       <div className="w-8 h-8 rounded-xl bg-indigo-100 dark:bg-indigo-950/80 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
                         <Volume2 className="w-4 h-4 animate-pulse" />
@@ -3920,12 +4024,53 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                           </span>
                         </div>
                         <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                          Listening to live student and AI participant speeches. You can record timestamped observation notes and prompt facilitator questions.
+                          Listening to live student and AI facilitator speeches. Use Start GD below to launch the AI Facilitator opening.
                         </p>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
+                      {session.status !== 'completed' && (
+                        <button
+                          type="button"
+                          id="console-start-gd-btn"
+                          onClick={() => {
+                            roomVoice.unlock();
+                            setSession((prev) => ({
+                              ...prev,
+                              status: 'active',
+                              startedAt: prev.startedAt || Date.now(),
+                            }));
+                            if (rtcStartSession) {
+                              rtcStartSession(session.topic);
+                            }
+                            if (onStartSession) {
+                              onStartSession(session.id);
+                            }
+                            setTimeout(() => {
+                              handleInitiateOpeningSpeaker(true);
+                            }, 350);
+                          }}
+                          className={`px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs font-bold text-white flex items-center gap-1.5 transition-all shadow-sm cursor-pointer active:scale-95 ${
+                            !isSessionActive
+                              ? 'bg-emerald-600 hover:bg-emerald-500 ring-2 ring-emerald-400/50 animate-pulse'
+                              : 'bg-emerald-700 hover:bg-emerald-600'
+                          }`}
+                          title={!isSessionActive ? 'Start Group Discussion & Deliver AI Opening Speech' : 'Restart Discussion & Deliver AI Opening Speech'}
+                        >
+                          {!isSessionActive ? (
+                            <>
+                              <Play className="w-3.5 h-3.5 fill-white" />
+                              <span>Start GD</span>
+                            </>
+                          ) : (
+                            <>
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              <span>Restart GD</span>
+                            </>
+                          )}
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => setShowAudioTestModal(true)}
@@ -4878,17 +5023,30 @@ const VideoStreamPlayer: React.FC<{ stream: MediaStream; className?: string; mut
       video.play().catch(() => {});
 
       const handlePlay = () => {
+        if (video.srcObject !== stream) {
+          video.srcObject = stream;
+        }
         video.play().catch(() => {});
       };
 
-      stream.addEventListener('addtrack', handlePlay);
+      const handleAddTrack = (e: MediaStreamTrackEvent) => {
+        if (e.track.kind === 'video') {
+          e.track.addEventListener('unmute', handlePlay);
+        }
+        // Force srcObject refresh so browsers render newly added remote WebRTC video tracks
+        video.srcObject = null;
+        video.srcObject = stream;
+        video.play().catch(() => {});
+      };
+
+      stream.addEventListener('addtrack', handleAddTrack);
       stream.addEventListener('removetrack', handlePlay);
       stream.getVideoTracks().forEach((track) => {
         track.addEventListener('unmute', handlePlay);
       });
 
       return () => {
-        stream.removeEventListener('addtrack', handlePlay);
+        stream.removeEventListener('addtrack', handleAddTrack);
         stream.removeEventListener('removetrack', handlePlay);
         stream.getVideoTracks().forEach((track) => {
           track.removeEventListener('unmute', handlePlay);
@@ -4930,8 +5088,14 @@ export const StudentVideoFrame: React.FC<{
 }) => {
   const isUser = !isFaculty && !!student.isUser;
   const effectiveStream = isUser ? videoStream : student.videoStream;
-  const isLiveWebcam = (isUser && isUserCameraOn && !!videoStream) || (!isUser && !!student.videoStream && student.cameraActive !== false);
-  const isCameraEnabled = isUser ? isUserCameraOn : (student.cameraActive !== false);
+  const hasRemoteVideoTrack =
+    !isUser &&
+    !!student.videoStream &&
+    student.videoStream.getVideoTracks().some((t) => t.readyState === 'live' && t.enabled);
+  const isLiveWebcam =
+    (isUser && isUserCameraOn && !!videoStream) ||
+    (!isUser && !!student.videoStream && (student.cameraActive === true || (student.cameraActive !== false && hasRemoteVideoTrack)));
+  const isCameraEnabled = isUser ? isUserCameraOn : (student.cameraActive !== false || hasRemoteVideoTrack);
   const isMicLive = isUser ? isListeningMic : (isCurrentSpeaker || student.isSpeaking);
 
   return (

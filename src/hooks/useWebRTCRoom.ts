@@ -186,6 +186,90 @@ export function useWebRTCRoom({
     setPeerStreams(new Map(peerStreamsRef.current));
   }, []);
 
+  // Helper: Synchronize local audio and video tracks across all transceivers on a peer connection
+  const syncTracksToPeerConnection = useCallback(async (pc: RTCPeerConnection) => {
+    const isFacultyUser = currentUserRef.current?.role === 'faculty';
+    if (isFacultyUser) return;
+
+    const audioTrack = localStreamRef.current ? localStreamRef.current.getAudioTracks()[0] || null : null;
+    const videoTrack = (isCameraOnRef.current && videoStreamRef.current) ? videoStreamRef.current.getVideoTracks()[0] || null : null;
+
+    const transceivers = pc.getTransceivers();
+    const audioTransceivers = transceivers.filter(
+      (t) => t.receiver?.track?.kind === 'audio' || t.sender?.track?.kind === 'audio'
+    );
+    const videoTransceivers = transceivers.filter(
+      (t) => t.receiver?.track?.kind === 'video' || t.sender?.track?.kind === 'video'
+    );
+
+    for (const at of audioTransceivers) {
+      try { at.direction = 'sendrecv'; } catch {}
+      if (audioTrack) {
+        try { await at.sender.replaceTrack(audioTrack); } catch {}
+      }
+    }
+
+    for (const vt of videoTransceivers) {
+      try { vt.direction = 'sendrecv'; } catch {}
+      try { await vt.sender.replaceTrack(videoTrack); } catch {}
+    }
+  }, []);
+
+  // Helper: Ensure audio & video transceivers exist BEFORE creating an SDP Offer
+  const ensureTransceiversForOffer = useCallback((pc: RTCPeerConnection) => {
+    const isFacultyUser = currentUserRef.current?.role === 'faculty';
+    const transceivers = pc.getTransceivers();
+
+    const hasAudio = transceivers.some(
+      (t) => t.receiver?.track?.kind === 'audio' || t.sender?.track?.kind === 'audio'
+    );
+    if (!hasAudio) {
+      const audioTrack = (!isFacultyUser && localStreamRef.current) ? localStreamRef.current.getAudioTracks()[0] || null : null;
+      try {
+        if (audioTrack) {
+          pc.addTransceiver(audioTrack, { direction: 'sendrecv' });
+        } else {
+          pc.addTransceiver('audio', { direction: 'sendrecv' });
+        }
+      } catch {}
+    }
+
+    const hasVideo = transceivers.some(
+      (t) => t.receiver?.track?.kind === 'video' || t.sender?.track?.kind === 'video'
+    );
+    if (!hasVideo) {
+      const videoTrack = (!isFacultyUser && isCameraOnRef.current && videoStreamRef.current) ? videoStreamRef.current.getVideoTracks()[0] || null : null;
+      try {
+        if (videoTrack) {
+          pc.addTransceiver(videoTrack, { direction: 'sendrecv' });
+        } else {
+          pc.addTransceiver('video', { direction: 'sendrecv' });
+        }
+      } catch {}
+    }
+  }, []);
+
+  // Helper: Renegotiate SDP offer with a specific peer when media tracks or directions change
+  const renegotiatePeer = useCallback(async (peerSocketId: string, pc: RTCPeerConnection) => {
+    if (!socketRef.current || pc.signalingState !== 'stable') return;
+    try {
+      ensureTransceiversForOffer(pc);
+      await syncTracksToPeerConnection(pc);
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true,
+      });
+      if (pc.signalingState !== 'stable') return;
+      await pc.setLocalDescription(offer);
+      socketRef.current.emit('signal-send', {
+        to: peerSocketId,
+        signal: { sdp: pc.localDescription },
+      });
+    } catch (e) {
+      console.warn('[WebRTC renegotiatePeer notice]:', e);
+    }
+  }, [ensureTransceiversForOffer, syncTracksToPeerConnection]);
+
   // 3. Create or get RTCPeerConnection for a specific peer
   const getOrCreatePeerConnection = useCallback((peerSocketId: string): RTCPeerConnection => {
     let pc = peerConnectionsRef.current.get(peerSocketId);
@@ -195,70 +279,6 @@ export function useWebRTCRoom({
 
     pc = new RTCPeerConnection(ICE_SERVERS);
     peerConnectionsRef.current.set(peerSocketId, pc);
-
-    const isFacultyUser = currentUserRef.current?.role === 'faculty';
-
-    // Initialize audio & video transceivers with active tracks synchronously
-    try {
-      if (pc.getTransceivers().length === 0) {
-        const audioTrack = (!isFacultyUser && localStreamRef.current) ? localStreamRef.current.getAudioTracks()[0] : null;
-        if (audioTrack) {
-          pc.addTransceiver(audioTrack, { direction: 'sendrecv' });
-        } else {
-          pc.addTransceiver('audio', { direction: isFacultyUser ? 'recvonly' : 'sendrecv' });
-        }
-
-        const videoTrack = (!isFacultyUser && isCameraOnRef.current && videoStreamRef.current) ? videoStreamRef.current.getVideoTracks()[0] : null;
-        if (videoTrack) {
-          pc.addTransceiver(videoTrack, { direction: 'sendrecv' });
-        } else {
-          pc.addTransceiver('video', { direction: isFacultyUser ? 'recvonly' : 'sendrecv' });
-        }
-      }
-    } catch (e) {
-      console.warn('[WebRTC Transceiver init]:', e);
-    }
-
-    // Add local microphone audio track to the connection (students only)
-    if (localStreamRef.current && !isFacultyUser) {
-      const audioTrack = localStreamRef.current.getAudioTracks()[0];
-      if (audioTrack) {
-        const audioTransceiver = pc.getTransceivers().find(
-          (t) => t.receiver?.track?.kind === 'audio' || t.sender?.track?.kind === 'audio'
-        );
-        if (audioTransceiver) {
-          try { audioTransceiver.direction = 'sendrecv'; } catch {}
-          audioTransceiver.sender.replaceTrack(audioTrack).catch(() => {});
-        } else {
-          const senders = pc.getSenders();
-          const audioSender = senders.find((s) => s.track?.kind === 'audio');
-          if (audioSender) {
-            audioSender.replaceTrack(audioTrack).catch(() => {});
-          } else {
-            try { pc.addTrack(audioTrack, localStreamRef.current); } catch (e) {}
-          }
-        }
-      }
-    }
-
-    // Add local webcam video track if camera is currently enabled
-    if (videoStreamRef.current && isCameraOnRef.current && !isFacultyUser) {
-      const videoTrack = videoStreamRef.current.getVideoTracks()[0];
-      if (videoTrack) {
-        const videoTransceiver = pc.getTransceivers().find(
-          (t) => t.receiver?.track?.kind === 'video' || t.sender?.track?.kind === 'video'
-        ) || pc.getTransceivers()[1];
-        const videoSender = videoTransceiver?.sender || pc.getSenders().find((s) => s.track?.kind === 'video');
-        if (videoTransceiver) {
-          try { videoTransceiver.direction = 'sendrecv'; } catch {}
-        }
-        if (videoSender) {
-          videoSender.replaceTrack(videoTrack).catch(() => {});
-        } else {
-          try { pc.addTrack(videoTrack, videoStreamRef.current); } catch (e) {}
-        }
-      }
-    }
 
     // ICE Candidate exchange
     pc.onicecandidate = (event) => {
@@ -285,6 +305,9 @@ export function useWebRTCRoom({
           combinedTracks.push(t);
         }
       });
+      if (!combinedTracks.some((ct) => ct.id === event.track.id)) {
+        combinedTracks.push(event.track);
+      }
 
       // Fresh MediaStream instance guarantees React re-render
       const updatedStream = new MediaStream(combinedTracks);
@@ -293,7 +316,12 @@ export function useWebRTCRoom({
 
       combinedTracks.forEach((track) => {
         track.onunmute = () => {
+          const refreshed = new MediaStream(peerStreamsRef.current.get(peerSocketId)?.getTracks() || combinedTracks);
+          peerStreamsRef.current.set(peerSocketId, refreshed);
           setPeerStreams(new Map(peerStreamsRef.current));
+          if (track.kind === 'audio') {
+            attachRemoteAudio(peerSocketId, new MediaStream([track]));
+          }
         };
       });
 
@@ -310,7 +338,12 @@ export function useWebRTCRoom({
 
     pc.onconnectionstatechange = () => {
       console.log(`[WebRTC Peer ${peerSocketId}] Connection state:`, pc?.connectionState);
-      if (pc?.connectionState === 'failed') {
+      if (pc?.connectionState === 'connected') {
+        const audioEl = audioElementsRef.current.get(peerSocketId);
+        if (audioEl && audioEl.paused) {
+          audioEl.play().catch(() => {});
+        }
+      } else if (pc?.connectionState === 'failed') {
         try {
           console.log(`[WebRTC Peer ${peerSocketId}] Attempting ICE restart...`);
           pc.restartIce();
@@ -335,10 +368,19 @@ export function useWebRTCRoom({
   detachRemoteAudioRef.current = detachRemoteAudio;
   const getOrCreatePeerConnectionRef = useRef(getOrCreatePeerConnection);
   getOrCreatePeerConnectionRef.current = getOrCreatePeerConnection;
+  const ensureTransceiversForOfferRef = useRef(ensureTransceiversForOffer);
+  ensureTransceiversForOfferRef.current = ensureTransceiversForOffer;
+  const syncTracksToPeerConnectionRef = useRef(syncTracksToPeerConnection);
+  syncTracksToPeerConnectionRef.current = syncTracksToPeerConnection;
+  const renegotiatePeerRef = useRef(renegotiatePeer);
+  renegotiatePeerRef.current = renegotiatePeer;
 
   // 4. Initialize Local Microphone & Real-time Volume Analyzer
   const initLocalMicrophone = useCallback(async () => {
     try {
+      if (localStreamRef.current && localStreamRef.current.getAudioTracks().some((t) => t.readyState === 'live')) {
+        return localStreamRef.current;
+      }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Microphone access is not supported by your browser.');
       }
@@ -361,27 +403,12 @@ export function useWebRTCRoom({
       setIsMicMuted(true);
 
       // Attach tracks to any peer connections that were established before mic was ready
-      peerConnectionsRef.current.forEach((pc) => {
-        const audioTrack = stream.getAudioTracks()[0];
-        if (audioTrack) {
-          const audioTransceiver = pc.getTransceivers().find(
-            (t) => t.receiver?.track?.kind === 'audio' || t.sender?.track?.kind === 'audio'
-          );
-          if (audioTransceiver) {
-            if (currentUserRef.current?.role !== 'faculty') {
-              try { audioTransceiver.direction = 'sendrecv'; } catch {}
-            }
-            audioTransceiver.sender.replaceTrack(audioTrack).catch(() => {});
-          } else {
-            const senders = pc.getSenders();
-            const audioSender = senders.find((s) => s.track?.kind === 'audio');
-            if (audioSender) {
-              audioSender.replaceTrack(audioTrack).catch(() => {});
-            } else {
-              try { pc.addTrack(audioTrack, stream); } catch (e) {}
-            }
+      peerConnectionsRef.current.forEach((pc, peerSocketId) => {
+        syncTracksToPeerConnectionRef.current(pc).then(() => {
+          if (pc.signalingState === 'stable') {
+            renegotiatePeerRef.current(peerSocketId, pc);
           }
-        }
+        });
       });
 
       // Setup Web Audio Analyser for speaking detection & audio visualizer
@@ -424,11 +451,9 @@ export function useWebRTCRoom({
           setLocalVolume(Math.min(100, Math.round((avg / 128) * 100)));
 
           // Detect speaking when volume exceeds threshold
-          // When AI Facilitator or another participant is actively speaking, ignore microphone input
-          // and do not emit false speaking claims to prevent interruptions.
           const isAiSpeaking = roomVoice.isSpeaking();
           const isFloorHeldByOther = !!floorSpeakerIdRef.current && floorSpeakerIdRef.current !== currentUserRef.current?.id;
-          const speakingNow = !isAiSpeaking && !isFloorHeldByOther && avg > 14 && !isMicMutedRef.current;
+          const speakingNow = !isAiSpeaking && !isFloorHeldByOther && avg > 10 && !isMicMutedRef.current;
           setIsSpeakingLive(speakingNow);
 
           if (speakingNow) {
@@ -441,6 +466,7 @@ export function useWebRTCRoom({
                 slotId,
                 isSpeaking: true,
                 micActive: !isMicMutedRef.current,
+                cameraActive: Boolean(isCameraOnRef.current && videoStreamRef.current),
                 volumeLevel: Math.round(avg),
               });
             }
@@ -451,6 +477,7 @@ export function useWebRTCRoom({
                   slotId,
                   isSpeaking: false,
                   micActive: !isMicMutedRef.current,
+                  cameraActive: Boolean(isCameraOnRef.current && videoStreamRef.current),
                   volumeLevel: 0,
                 });
                 speakingStateTimeoutRef.current = null;
@@ -482,6 +509,8 @@ export function useWebRTCRoom({
         audioContextRef.current.resume().catch(() => {});
       }
       audioElementsRef.current.forEach((el) => {
+        el.muted = false;
+        el.volume = 1.0;
         if (el.srcObject && el.paused) {
           el.play().catch(() => {});
         }
@@ -529,6 +558,8 @@ export function useWebRTCRoom({
           role: currentUserRef.current?.role || 'student',
           college: currentUserRef.current?.college || 'Campus Participant',
           seatNumber: currentUserRef.current && 'seatNumber' in currentUserRef.current ? (currentUserRef.current as any).seatNumber : undefined,
+          micActive: !isMicMutedRef.current,
+          cameraActive: Boolean(isCameraOnRef.current && videoStreamRef.current),
         },
       });
     });
@@ -568,6 +599,8 @@ export function useWebRTCRoom({
         for (const remotePeer of existingPeers) {
           try {
             const pc = getOrCreatePeerConnectionRef.current(remotePeer.socketId);
+            ensureTransceiversForOfferRef.current(pc);
+            await syncTracksToPeerConnectionRef.current(pc);
             const offer = await pc.createOffer({
               offerToReceiveAudio: true,
               offerToReceiveVideo: true,
@@ -584,16 +617,13 @@ export function useWebRTCRoom({
       }
     });
 
-    // A new peer joined the room
+    // A new peer joined the room (incoming peer will send offer; do NOT pre-create unassociated transceivers)
     socket.on('peer-joined', async ({ peer }) => {
       if (!active) return;
       setPeers((prev) => {
         const filtered = prev.filter((p) => p.socketId !== peer.socketId);
         return [...filtered, peer];
       });
-
-      // Prepare peer connection for incoming peer (incoming peer initiates offer in gd-room-joined)
-      getOrCreatePeerConnectionRef.current(peer.socketId);
     });
 
     // WebRTC Signaling Relay Received (Offer, Answer, ICE Candidate)
@@ -626,24 +656,8 @@ export function useWebRTCRoom({
             }
             iceCandidateQueueRef.current.delete(from);
 
-            // Ensure audio track is attached to audio transceiver/sender before answering
-            if (localStreamRef.current && currentUserRef.current?.role !== 'faculty') {
-              const audioTrack = localStreamRef.current.getAudioTracks()[0];
-              if (audioTrack) {
-                const audioTransceiver = pc.getTransceivers().find(
-                  (t) => t.receiver?.track?.kind === 'audio' || t.sender?.track?.kind === 'audio'
-                );
-                if (audioTransceiver) {
-                  try { audioTransceiver.direction = 'sendrecv'; } catch {}
-                  await audioTransceiver.sender.replaceTrack(audioTrack);
-                } else {
-                  const audioSender = pc.getSenders().find((s) => s.track?.kind === 'audio');
-                  if (audioSender) {
-                    await audioSender.replaceTrack(audioTrack);
-                  }
-                }
-              }
-            }
+            // Attach BOTH audio and video tracks to the exact transceivers created by setRemoteDescription(offer)
+            await syncTracksToPeerConnectionRef.current(pc);
 
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
@@ -664,18 +678,7 @@ export function useWebRTCRoom({
               }
               iceCandidateQueueRef.current.delete(from);
 
-              // Ensure audio sender has active audio track
-              if (localStreamRef.current && currentUserRef.current?.role !== 'faculty') {
-                const audioTrack = localStreamRef.current.getAudioTracks()[0];
-                if (audioTrack) {
-                  const audioTransceiver = pc.getTransceivers().find(
-                    (t) => t.receiver?.track?.kind === 'audio' || t.sender?.track?.kind === 'audio'
-                  );
-                  if (audioTransceiver) {
-                    audioTransceiver.sender.replaceTrack(audioTrack).catch(() => {});
-                  }
-                }
-              }
+              await syncTracksToPeerConnectionRef.current(pc);
             }
           }
         } else if (signal.candidate) {
@@ -697,6 +700,16 @@ export function useWebRTCRoom({
     // A peer updated speaking/mic/camera state
     socket.on('peer-speaking-updated', ({ socketId: peerSockId, isSpeaking, micActive, cameraActive, volumeLevel: peerVol }) => {
       if (!active) return;
+      if ((isSpeaking || micActive) && audioElementsRef.current.has(peerSockId)) {
+        const audioEl = audioElementsRef.current.get(peerSockId);
+        if (audioEl) {
+          audioEl.muted = false;
+          audioEl.volume = 1.0;
+          if (audioEl.paused) {
+            audioEl.play().catch(() => {});
+          }
+        }
+      }
       setPeers((prev) =>
         prev.map((p) =>
           p.socketId === peerSockId
@@ -883,18 +896,20 @@ export function useWebRTCRoom({
       }
       setIsMicMuted(!enabled);
 
-      // Synchronize audio track across all peer connections
-      peerConnectionsRef.current.forEach((pc) => {
+      // Synchronize audio track across all peer connections and renegotiate if needed
+      peerConnectionsRef.current.forEach(async (pc, peerSocketId) => {
         try {
-          const audioTransceiver = pc.getTransceivers().find(
-            (t) => t.receiver?.track?.kind === 'audio' || t.sender?.track?.kind === 'audio'
-          );
-          if (audioTransceiver && currentUserRef.current?.role !== 'faculty') {
-            try { audioTransceiver.direction = 'sendrecv'; } catch {}
-          }
-          const audioSender = audioTransceiver?.sender || pc.getSenders().find((s) => s.track?.kind === 'audio');
-          if (audioSender && audioTrack) {
-            audioSender.replaceTrack(audioTrack).catch(() => {});
+          await syncTracksToPeerConnectionRef.current(pc);
+          if (enabled && pc.signalingState === 'stable') {
+            const needsRenegotiation = pc.getTransceivers().some(
+              (t) =>
+                (t.receiver?.track?.kind === 'audio' || t.sender?.track?.kind === 'audio') &&
+                t.currentDirection !== 'sendrecv' &&
+                t.currentDirection !== 'sendonly'
+            );
+            if (needsRenegotiation) {
+              await renegotiatePeerRef.current(peerSocketId, pc);
+            }
           }
         } catch (e) {
           console.warn('[WebRTC Mic track update error]:', e);
@@ -911,7 +926,7 @@ export function useWebRTCRoom({
         });
       }
     }
-  }, [slotId, localVolume, initLocalMicrophone]);
+  }, [slotId, initLocalMicrophone]);
 
   // Toggle local microphone mute
   const toggleMute = useCallback(() => {
@@ -927,34 +942,32 @@ export function useWebRTCRoom({
     }
   }, [setMicEnabled]);
 
-  // Synchronize local webcam video track to all active WebRTC peer connections without renegotiation storm
+  // Synchronize local webcam video track & cameraActive state to all active WebRTC peer connections
   useEffect(() => {
-    const videoTrack = isCameraOn && videoStream ? videoStream.getVideoTracks()[0] : null;
+    if (currentUserRef.current?.role === 'faculty') return;
 
-    peerConnectionsRef.current.forEach(async (pc) => {
+    // Broadcast cameraActive state immediately to all room peers
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('peer-speaking-state', {
+        slotId,
+        isSpeaking: false,
+        micActive: !isMicMutedRef.current,
+        cameraActive: Boolean(isCameraOn && videoStream),
+        volumeLevel: 0,
+      });
+    }
+
+    peerConnectionsRef.current.forEach(async (pc, peerSocketId) => {
       try {
-        const videoTransceiver = pc.getTransceivers().find(
-          (t) => t.receiver?.track?.kind === 'video' || t.sender?.track?.kind === 'video'
-        );
-        const videoSender = videoTransceiver?.sender || pc.getSenders().find((s) => s.track?.kind === 'video');
-
-        if (videoTrack) {
-          if (videoTransceiver && currentUserRef.current?.role !== 'faculty') {
-            try { videoTransceiver.direction = 'sendrecv'; } catch (e) {}
-          }
-          if (videoSender) {
-            await videoSender.replaceTrack(videoTrack);
-          }
-        } else {
-          if (videoSender) {
-            await videoSender.replaceTrack(null);
-          }
+        await syncTracksToPeerConnectionRef.current(pc);
+        if (pc.signalingState === 'stable') {
+          await renegotiatePeerRef.current(peerSocketId, pc);
         }
       } catch (err) {
         console.warn('[WebRTC Video Track Sync Notice]:', err);
       }
     });
-  }, [isCameraOn, videoStream]);
+  }, [isCameraOn, videoStream, slotId]);
 
   // Broadcast spoken transcript to all room members
   const broadcastTranscript = useCallback((text: string, elapsedSeconds: number, transcriptId?: string) => {
@@ -970,9 +983,9 @@ export function useWebRTCRoom({
   }, [slotId]);
 
   // Start GD Session (emits start-session to server)
-  const startSession = useCallback(() => {
+  const startSession = useCallback((topicOverride?: string) => {
     if (socketRef.current) {
-      socketRef.current.emit('start-session', { slotId });
+      socketRef.current.emit('start-session', { slotId, topic: topicOverride });
     }
   }, [slotId]);
 
@@ -998,6 +1011,7 @@ export function useWebRTCRoom({
         slotId,
         isSpeaking: false,
         micActive: false,
+        cameraActive: Boolean(isCameraOnRef.current && videoStreamRef.current),
         volumeLevel: 0,
       });
     }
@@ -1009,6 +1023,8 @@ export function useWebRTCRoom({
       socketRef.current.emit('finish-session', { slotId });
     }
   }, [slotId]);
+
+  const getLocalAudioStream = useCallback(() => localStreamRef.current, []);
 
   return {
     connected,
@@ -1023,6 +1039,7 @@ export function useWebRTCRoom({
     localVolume,
     toggleMute,
     setMicEnabled,
+    getLocalAudioStream,
     broadcastTranscript,
     startSession,
     finishSession,

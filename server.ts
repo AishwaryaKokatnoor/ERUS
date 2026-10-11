@@ -3767,22 +3767,11 @@ app.post('/api/college/slots/:id/start', async (req, res) => {
   const callerRole = String(caller.role || '').toLowerCase();
 
   const isPlatformAdmin = callerRole === 'super_admin';
-  const isSameCollegeAdmin = callerRole === 'college_admin' && callerCollegeCode === normalizeCollegeCode(code);
-  const isAssignedFaculty = callerRole === 'faculty' &&
-    callerCollegeCode === normalizeCollegeCode(code) &&
-    ((!slotFacId && !slotFacName) ||
-      (slotFacId && (slotFacId === callerId || slotFacId === callerFacultyId || allottedFac.includes(callerId) || allottedFac.includes(callerFacultyId))) ||
-      (slotFacEmail && (slotFacEmail === callerEmail || allottedFac.includes(callerEmail))) ||
-      (slotFacName && String(caller.name || '').trim().toLowerCase() === slotFacName));
+  const isSameCollegeAdmin = callerRole === 'college_admin' && (!callerCollegeCode || !code || callerCollegeCode === normalizeCollegeCode(code));
+  const isAssignedFaculty = callerRole === 'faculty';
 
-  const isParticipantStudent = callerRole === 'student' && (
-    (target.students && target.students.some((s: any) => s.id === callerId || s.email === callerEmail || s.name === caller.name)) ||
-    (target.assignedStudentIds && target.assignedStudentIds.includes(callerId)) ||
-    callerCollegeCode === normalizeCollegeCode(code)
-  );
-
-  if (!isPlatformAdmin && !isSameCollegeAdmin && !isAssignedFaculty && !isParticipantStudent) {
-    return res.status(403).json({ success: false, error: 'Only participants assigned to this slot or faculty can start this session.' });
+  if (!isPlatformAdmin && !isSameCollegeAdmin && !isAssignedFaculty) {
+    return res.status(403).json({ success: false, error: 'Only faculty evaluators or administrators can start this GD session.' });
   }
 
   if (target.status === 'completed') return res.status(409).json({ success: false, error: 'Session is already completed' });
@@ -3799,7 +3788,6 @@ app.post('/api/college/slots/:id/start', async (req, res) => {
   }
 
   const room = getOrCreateLiveRoom(slotId, target.topic);
-  const wasAlreadyActive = room.status === 'active';
   room.status = 'active';
   room.silenceTimerSeconds = 0;
   syncAiParticipants(room);
@@ -3818,7 +3806,11 @@ app.post('/api/college/slots/:id/start', async (req, res) => {
   });
   io.emit('slot-updated', { slot: target });
 
-  if (!wasAlreadyActive && !room.openingStarted) {
+  const nowMs = Date.now();
+  const recentlySpokeOpening = room.facilitatorSpeakingUntil && room.facilitatorSpeakingUntil > nowMs;
+  if (!room.openingStarted || !recentlySpokeOpening) {
+    room.openingStarted = false;
+    room.initialSpeakerSelected = false;
     scheduleNextTurn(room);
   }
 
@@ -8187,9 +8179,30 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
       isAiParticipant: true,
     })),
   ];
-  if (!allParticipants.length) return;
 
   const isOpening = !room.openingStarted;
+
+  // If no live socket student has joined yet, check if the slot has enrolled students in persistentState
+  if (allParticipants.length === 0 && isOpening) {
+    for (const [, list] of Object.entries(persistentState.slots)) {
+      const slot = list.find((s) => s.id === room.slotId);
+      if (slot && Array.isArray(slot.students)) {
+        const realBooked = slot.students.filter((s: any) => s && !s.isEmptySeat && s.name && !String(s.name).startsWith('Seat '));
+        realBooked.forEach((s: any, idx: number) => {
+          allParticipants.push({
+            userId: s.id || `enrolled-${idx + 1}`,
+            name: s.name,
+            seatNumber: s.seatNumber || idx + 1,
+            role: 'student',
+            socketId: '',
+          });
+        });
+        break;
+      }
+    }
+  }
+
+  if (!allParticipants.length && !isOpening) return;
 
   let targetReal: LiveRoomPeer;
   let isSameSpeaker = false;
@@ -8225,9 +8238,29 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
 
   if (isOpening) {
     room.openingStarted = true;
-    const starter = allParticipants[Math.floor(Math.random() * allParticipants.length)];
-    targetReal = starter;
-    room.initialSpeakerSelected = true;
+    if (allParticipants.length > 0) {
+      const starter = allParticipants[Math.floor(Math.random() * allParticipants.length)];
+      targetReal = starter;
+      room.initialSpeakerSelected = realStudents.length > 0;
+    } else {
+      targetReal = {
+        socketId: '',
+        userId: 'all-participants',
+        name: 'Participants',
+        avatar: '',
+        role: 'student',
+        college: '',
+        seatNumber: 1,
+        isSpeaking: false,
+        micActive: false,
+        cameraActive: false,
+        speakingDurationSeconds: 0,
+        speakingTurns: 0,
+        interruptionCount: 0,
+        joinedAt: Date.now(),
+      };
+      room.initialSpeakerSelected = false;
+    }
   } else if (utteranceClassification.category === 'greeting' || utteranceClassification.category === 'mic_check') {
     // Participant only checked their mic or greeted the room.
     // KEEP the floor with them so they can present their actual argument on the topic!
@@ -8259,9 +8292,10 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
       return;
     }
 
-    room.waitingForParticipantId = targetReal.userId;
-    const firstName = targetReal.name.split(' ')[0];
-    const seatStr = targetReal.seatNumber ? `Seat ${targetReal.seatNumber}` : 'your seat';
+    const isGenericTarget = targetReal.userId === 'all-participants';
+    room.waitingForParticipantId = isGenericTarget ? undefined : targetReal.userId;
+    const firstName = isGenericTarget ? 'everyone' : targetReal.name.split(' ')[0];
+    const seatStr = isGenericTarget ? 'the floor' : (targetReal.seatNumber ? `Seat ${targetReal.seatNumber}` : 'your seat');
 
     let invitation = '';
     const roomDomain = detectTopicDomain(room.topic);
@@ -8829,8 +8863,8 @@ io.on('connection', (socket) => {
       college: user?.college || 'Campus Participant',
       seatNumber,
       isSpeaking: false,
-      micActive: !isObserver,
-      cameraActive: false,
+      micActive: !isObserver && Boolean(user?.micActive),
+      cameraActive: !isObserver && Boolean(user?.cameraActive),
       speakingDurationSeconds: prevDuration,
       speakingTurns: prevTurns,
       interruptionCount: prevInterruption,
@@ -8865,13 +8899,14 @@ io.on('connection', (socket) => {
       peer,
     });
 
-    if (room.status === 'active' && !room.openingStarted && !room.currentSpeakerId && !room.waitingForParticipantId) {
+    if (room.status === 'active' && (!room.openingStarted || (!room.initialSpeakerSelected && !isObserver)) && !room.currentSpeakerId && !room.waitingForParticipantId) {
+      room.openingStarted = false;
       scheduleNextTurn(room);
     }
   });
 
   // 1.5 Start Discussion Session
-  socket.on('start-session', ({ slotId }: { slotId: string }) => {
+  socket.on('start-session', ({ slotId, topic }: { slotId: string; topic?: string }) => {
     const safeSlotId = slotId || 'session-101';
 
     let targetSlot: any = null;
@@ -8879,14 +8914,13 @@ io.on('connection', (socket) => {
       const found = list.find((s) => s.id === safeSlotId);
       if (found) { targetSlot = found; break; }
     }
-    if (!targetSlot) {
-      console.warn(`[GD] Slot not found for start ${safeSlotId}.`);
-      return;
+    if (targetSlot) {
+      targetSlot.status = 'active';
+      savePersistentState();
     }
-    targetSlot.status = 'active';
 
-    const room = getOrCreateLiveRoom(safeSlotId, targetSlot.topic);
-    const wasAlreadyActive = room.status === 'active';
+    const room = getOrCreateLiveRoom(safeSlotId, topic || targetSlot?.topic);
+    if (topic) room.topic = topic;
     room.status = 'active';
     room.silenceTimerSeconds = 0;
     syncAiParticipants(room);
@@ -8902,7 +8936,10 @@ io.on('connection', (socket) => {
       status: 'active',
       topic: room.topic || targetSlot?.topic,
     });
-    if (!wasAlreadyActive && !room.openingStarted) {
+
+    const nowMs = Date.now();
+    const recentlySpokeOpening = room.facilitatorSpeakingUntil && room.facilitatorSpeakingUntil > nowMs;
+    if (!room.openingStarted || !recentlySpokeOpening) {
       room.openingStarted = false;
       room.initialSpeakerSelected = false;
       room.deadlockCount = 0;
