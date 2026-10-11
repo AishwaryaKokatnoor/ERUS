@@ -7458,7 +7458,7 @@ function syncAiParticipants(room: LiveGDRoomState) {
     const id = `ai-${room.slotId}-${index + 1}`;
     const existing = room.aiParticipants.get(id);
     let seatNumber = existing?.seatNumber || 1;
-    if (!existing || occupiedSeats.has(seatNumber)) {
+    if (!existing || occupiedSeats.has(seatNumber) || Array.from(next.values()).some((p) => p.seatNumber === seatNumber)) {
       seatNumber = 1;
       while (occupiedSeats.has(seatNumber) || Array.from(next.values()).some((p) => p.seatNumber === seatNumber)) {
         seatNumber++;
