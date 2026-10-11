@@ -611,6 +611,13 @@ function GDAppContent() {
     }
   }, [currentTab]);
 
+  // If GD session is marked completed, automatically navigate to report view - no re-entering room
+  useEffect(() => {
+    if (currentTab === 'room' && session.status === 'completed') {
+      setCurrentTab('report');
+    }
+  }, [currentTab, session.status]);
+
   // Main session elapsed timer (Strictly active only when room is live; silence moderation is handled by RealisticGDRoom & server)
   useEffect(() => {
     if (!currentUser || currentTab !== 'room' || session.status !== 'active') return;

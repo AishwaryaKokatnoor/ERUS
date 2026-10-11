@@ -139,7 +139,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   const isFaculty = currentUser?.role === 'faculty';
   const isFacultyOrAdmin = currentUser?.role === 'faculty' || currentUser?.role === 'college_admin' || currentUser?.role === 'super_admin';
-  const canStartSession = true;
+  const canStartSession = isFacultyOrAdmin;
   const isStudent = currentUser?.role === 'student';
   const isSessionActive = session.status === 'active';
   const [showVideoModal, setShowVideoModal] = useState(false);
@@ -1233,16 +1233,23 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   };
 
   // Speech Recognition Setup (Web Speech API) with robust auto-recovery and continuous watchdog
+  const stopAudioAnalyserRef = useRef(stopAudioAnalyser);
+  stopAudioAnalyserRef.current = stopAudioAnalyser;
+  const rtcSetMicEnabledRef = useRef(rtcSetMicEnabled);
+  rtcSetMicEnabledRef.current = rtcSetMicEnabled;
+  const isFacultyRef = useRef(isFaculty);
+  isFacultyRef.current = isFaculty;
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognitionClass) {
-      console.warn('SpeechRecognition API not supported in this browser; MediaRecorder fallback will be active.');
-      return;
-    }
 
     const startRecognitionInstance = () => {
       if (!isListeningMicRef.current) return;
+      if (!SpeechRecognitionClass) {
+        console.warn('SpeechRecognition API not supported in this browser; acoustic speech detection will be active.');
+        return;
+      }
 
       // Clean up previous instance if any
       if (recognitionRef.current) {
@@ -1260,8 +1267,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         const recognition = new SpeechRecognitionClass();
         recognition.continuous = true;
         recognition.interimResults = true;
-        const navLang = typeof navigator !== 'undefined' ? (navigator.language || 'en-IN') : 'en-IN';
-        recognition.lang = (navLang && navLang.toLowerCase().includes('in')) ? 'en-IN' : (navLang.startsWith('en') ? navLang : 'en-IN');
+        recognition.maxAlternatives = 1;
+        // en-US or en-IN with automatic fallback
+        recognition.lang = 'en-US';
         recognitionRef.current = recognition;
 
         committedResultIndexRef.current = -1;
@@ -1271,9 +1279,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         };
 
         recognition.onresult = (event: any) => {
-          // Ignore microphone input while AI Facilitator voice is playing through speakers
-          // OR when another participant is currently speaking on the floor (auto-mute to prevent interruptions)
-          if (roomVoice.isSpeaking() || rtcIsFloorLocked) {
+          // If AI Facilitator is playing through speaker or another participant has floor lock, pause input
+          if (roomVoice.isSpeaking() || (rtcIsFloorLocked && !isListeningMicRef.current)) {
             aiVoicePausedMicRef.current = true;
             committedResultIndexRef.current = event.results.length - 1;
             return;
@@ -1302,7 +1309,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           setLiveSpeechTranscript(currentSpoken);
 
           // Mark speaker active on floor
-          if (!isFaculty) {
+          if (!isFacultyRef.current) {
             setSession((prev) => ({
               ...prev,
               currentSpeakerId: prev.students.find((s) => s.isUser)?.id || 's1',
@@ -1317,16 +1324,15 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             clearTimeout(speechPauseTimerRef.current);
           }
 
-          // Natural pause detection: auto-broadcast to room after 2.8s silence
-          if (currentSpoken.length > 3) {
+          // Natural pause detection: auto-broadcast to room after 2.2s silence
+          if (currentSpoken.length > 2) {
             speechPauseTimerRef.current = setTimeout(() => {
               commitLiveSpeechToRoom(currentSpoken);
-            }, 2800);
+            }, 2200);
           }
         };
 
         recognition.onerror = (event: any) => {
-          console.warn('[Speech recognition event]:', event.error);
           isRecognitionRunningRef.current = false;
 
           if (event.error === 'no-speech') {
@@ -1350,7 +1356,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             event.error === 'audio-capture' ||
             event.error === 'network'
           ) {
-            // Transient silence/network events: restart recognition cleanly
+            // Transient events: restart recognition cleanly
             if (isListeningMicRef.current) {
               if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
               restartRecognitionTimerRef.current = setTimeout(startRecognitionInstance, 300);
@@ -1363,10 +1369,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             setIsListeningMic(false);
             isListeningMicRef.current = false;
             isRecognitionRunningRef.current = false;
-            stopAudioAnalyser();
+            stopAudioAnalyserRef.current();
             stopMediaRecorderFallback();
-            rtcSetMicEnabled(false);
-            if (!isFaculty) {
+            rtcSetMicEnabledRef.current(false);
+            if (!isFacultyRef.current) {
               setSession((prev) => ({
                 ...prev,
                 students: prev.students.map((s) => (s.isUser ? { ...s, micActive: false } : s)),
@@ -1385,10 +1391,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           }
 
           setIsListeningMic(false);
-          stopAudioAnalyser();
+          stopAudioAnalyserRef.current();
           stopMediaRecorderFallback();
-          rtcSetMicEnabled(false);
-          if (!isFaculty) {
+          rtcSetMicEnabledRef.current(false);
+          if (!isFacultyRef.current) {
             setSession((prev) => ({
               ...prev,
               students: prev.students.map((s) => (s.isUser ? { ...s, micActive: false } : s)),
@@ -1398,7 +1404,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
         recognition.start();
       } catch (err) {
-        console.warn('SpeechRecognition start error:', err);
         isRecognitionRunningRef.current = false;
         if (isListeningMicRef.current) {
           if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
@@ -1412,7 +1417,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       if (isListeningMicRef.current && !isRecognitionRunningRef.current) {
         startRecognitionInstance();
       }
-    }, 2000);
+    }, 1500);
 
     // Save helper reference so toggleMicRecognition can invoke it directly
     (window as any).__startErusSpeechRecognition = startRecognitionInstance;
@@ -1432,7 +1437,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         recognitionRef.current = null;
       }
     };
-  }, [isFaculty, stopAudioAnalyser, rtcSetMicEnabled]);
+  }, []);
 
   const toggleMicRecognition = async () => {
     if (isListeningMic) {
@@ -1477,8 +1482,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         }));
       }
     } else {
-      if (rtcIsFloorLocked) {
-        alert(`The floor is currently held by ${rtcFloorSpeakerName || 'another participant'}. Microphones are automatically muted by AI to prevent interruptions. You can speak as soon as they finish.`);
+      if (rtcIsFloorLocked && rtcFloorSpeakerName && !rtcFloorSpeakerName.toLowerCase().includes('facilitator')) {
+        alert(`The floor is currently held by ${rtcFloorSpeakerName}. Microphones are automatically muted by AI to prevent interruptions. You can speak as soon as they finish.`);
         return;
       }
       if (roomVoice.isSpeaking() || session.isFacilitatorSpeaking) {
@@ -3866,18 +3871,20 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                     <FastForward className="w-5 h-5 text-indigo-300" />
                   </button>
 
-                  {/* 6. Leave / Finish GD Call (Red Pill Button) */}
-                  <button
-                    id="leave-call-btn"
-                    onClick={() => {
-                      handleConcludeOrLeaveSession();
-                    }}
-                    className="px-4 py-2.5 rounded-full font-bold text-xs bg-red-600 hover:bg-red-700 text-white shadow-lg flex items-center gap-2 cursor-pointer transition-all ml-1 sm:ml-2"
-                    title={isFaculty ? 'Finish Observation & Review Reports' : 'Leave Group Discussion & View Assessment Report'}
-                  >
-                    <PhoneOff className="w-4 h-4" />
-                    <span className="hidden sm:inline">{isFaculty ? 'Finish & Grade' : 'Finish GD'}</span>
-                  </button>
+                  {/* 6. Conclude / Finish GD Call (Red Pill Button - Faculty & Admin only) */}
+                  {isFacultyOrAdmin && (
+                    <button
+                      id="leave-call-btn"
+                      onClick={() => {
+                        handleConcludeOrLeaveSession();
+                      }}
+                      className="px-4 py-2.5 rounded-full font-bold text-xs bg-red-600 hover:bg-red-700 text-white shadow-lg flex items-center gap-2 cursor-pointer transition-all ml-1 sm:ml-2"
+                      title="Finish Observation & Review Reports"
+                    >
+                      <PhoneOff className="w-4 h-4" />
+                      <span className="hidden sm:inline">Finish & Grade</span>
+                    </button>
+                  )}
 
                 </div>
 

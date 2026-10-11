@@ -1236,76 +1236,78 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
         </div>
       )}
 
-      {/* Discussion Audio & Video Archive & Playback Player */}
-      <div className="no-print p-4 rounded-2xl bg-gradient-to-r from-teal-500/10 via-emerald-500/10 to-indigo-500/10 dark:from-teal-950/40 dark:via-emerald-950/40 dark:to-indigo-950/40 border border-teal-500/30 dark:border-teal-700/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-teal-500/20 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0">
-            <Video className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-bold text-slate-900 dark:text-white">
-                Live GD Discussion Recording
-              </span>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-100 dark:bg-teal-900 text-teal-800 dark:text-teal-200 border border-teal-300 dark:border-teal-700">
-                Video &amp; Audio Archive (.webm)
-              </span>
+      {/* Discussion Audio & Video Archive & Playback Player (Visible exclusively to Faculty and Admins, hidden from students) */}
+      {!isStudent && (
+        <div className="no-print p-4 rounded-2xl bg-gradient-to-r from-teal-500/10 via-emerald-500/10 to-indigo-500/10 dark:from-teal-950/40 dark:via-emerald-950/40 dark:to-indigo-950/40 border border-teal-500/30 dark:border-teal-700/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-teal-500/20 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0">
+              <Video className="w-5 h-5" />
             </div>
-            <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
-              Watch or listen to the full discussion recording, evaluate speaking turns, and review participant interactions.
-            </p>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-bold text-slate-900 dark:text-white">
+                  Live GD Discussion Recording
+                </span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-100 dark:bg-teal-900 text-teal-800 dark:text-teal-200 border border-teal-300 dark:border-teal-700">
+                  Video &amp; Audio Archive (.webm)
+                </span>
+              </div>
+              <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+                Watch or listen to the full discussion recording, evaluate speaking turns, and review participant interactions.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-start sm:self-center flex-wrap">
+            <button
+              onClick={async () => {
+                const targetId = session?.id || currentReport?.sessionId;
+                const cachedUrl = null;
+                let recUrl = session?.recordingUrl || currentReport?.recordingUrl || cachedUrl;
+                if (!recUrl && targetId) {
+                  try {
+                    const res = await fetch(`/api/sessions/${encodeURIComponent(targetId)}/recording`);
+                    const d = await res.json();
+                    if (d.success && d.recordingUrl) {
+                      recUrl = d.recordingUrl;
+                      if (session) session.recordingUrl = d.recordingUrl;
+                      /* persisted in MongoDB */
+                      setCurrentReport((prev) => ({ ...prev, recordingUrl: d.recordingUrl }));
+                    }
+                  } catch {}
+                }
+                setVideoError(false);
+                setShowVideoModal(true);
+              }}
+              className="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+              title="Watch full recorded video of this discussion"
+            >
+              <Video className="w-3.5 h-3.5" />
+              <span>Watch Video</span>
+            </button>
+            {(session?.recordingUrl || currentReport?.recordingUrl) && (
+              <>
+                <audio
+                  controls
+                  src={session?.recordingUrl || currentReport?.recordingUrl}
+                  className="h-8 w-44 sm:w-56"
+                />
+                <a
+                  href={session?.recordingUrl || currentReport?.recordingUrl}
+                  download={`GD-${session?.id || 'session'}-Recording.webm`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white flex items-center gap-1.5 shadow-xs transition-all"
+                  title="Download audio/video recording to device"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download</span>
+                </a>
+              </>
+            )}
           </div>
         </div>
-
-        <div className="flex items-center gap-2 self-start sm:self-center flex-wrap">
-          <button
-            onClick={async () => {
-              const targetId = session?.id || currentReport?.sessionId;
-              const cachedUrl = null;
-              let recUrl = session?.recordingUrl || currentReport?.recordingUrl || cachedUrl;
-              if (!recUrl && targetId) {
-                try {
-                  const res = await fetch(`/api/sessions/${encodeURIComponent(targetId)}/recording`);
-                  const d = await res.json();
-                  if (d.success && d.recordingUrl) {
-                    recUrl = d.recordingUrl;
-                    if (session) session.recordingUrl = d.recordingUrl;
-                    /* persisted in MongoDB */
-                    setCurrentReport((prev) => ({ ...prev, recordingUrl: d.recordingUrl }));
-                  }
-                } catch {}
-              }
-              setVideoError(false);
-              setShowVideoModal(true);
-            }}
-            className="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
-            title="Watch full recorded video of this discussion"
-          >
-            <Video className="w-3.5 h-3.5" />
-            <span>Watch Video</span>
-          </button>
-          {(session?.recordingUrl || currentReport?.recordingUrl) && (
-            <>
-              <audio
-                controls
-                src={session?.recordingUrl || currentReport?.recordingUrl}
-                className="h-8 w-44 sm:w-56"
-              />
-              <a
-                href={session?.recordingUrl || currentReport?.recordingUrl}
-                download={`GD-${session?.id || 'session'}-Recording.webm`}
-                target="_blank"
-                rel="noreferrer"
-                className="px-3 py-1.5 rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white flex items-center gap-1.5 shadow-xs transition-all"
-                title="Download audio/video recording to device"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Download</span>
-              </a>
-            </>
-          )}
-        </div>
-      </div>
+      )}
 
       {/* Main Printable Assessment Report Card */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-sm dark:shadow-2xl space-y-6 print-card transition-colors duration-200">
