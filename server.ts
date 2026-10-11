@@ -3440,7 +3440,13 @@ app.post('/api/college/slots/:id/complete', async (req, res) => {
   const callerId = String(caller.id || '').trim().toLowerCase();
   const callerEmail = String(caller.email || '').trim().toLowerCase();
   const callerFacultyId = String(caller.facultyId || caller.facultyProfile?.facultyId || caller.id || '').trim().toLowerCase();
-  const callerCollegeCode = normalizeCollegeCode(caller.collegeCode || caller.collegeOrg?.code);
+  const callerCollegeCode = normalizeCollegeCode(
+    caller.collegeCode ||
+    caller.collegeOrg?.code ||
+    persistentState.colleges.find((college) =>
+      String(college.name || '').trim().toLowerCase() === String(caller.college || '').trim().toLowerCase()
+    )?.code
+  );
   const callerRole = String(caller.role || '').toLowerCase();
 
   const isPlatformAdmin = callerRole === 'super_admin';
