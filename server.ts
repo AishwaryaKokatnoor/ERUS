@@ -7407,14 +7407,48 @@ function getSlotCapacity(slotId: string) {
   return Math.max(1, Number((currentLiveSession as any)?.maxCapacity || 6));
 }
 
-const AI_PARTICIPANT_NAMES: string[] = [];
-const AI_GD_SIMULATION_MODE = false;
-const AI_GD_SIMULATION_PARTICIPANTS = 6; // Fallback only; simulation normally follows slot capacity.
+const AI_PARTICIPANT_NAMES = [
+  'Aarav Mehta', 'Priya Sharma', 'Rohan Iyer',
+  'Ananya Reddy', 'Kabir Nair', 'Meera Kapoor',
+];
+const AI_GD_SIMULATION_MODE = true;
+const AI_GD_SIMULATION_PARTICIPANTS = 6;
 
 function syncAiParticipants(room: LiveGDRoomState) {
-  // Real human students only. No simulated AI bot participants.
+  const humanStudents = Array.from(room.peers.values()).filter((peer) => peer.role === 'student');
+  const capacity = Math.max(1, getSlotCapacity(room.slotId));
+  const availableAiCount = Math.max(0, Math.min(AI_GD_SIMULATION_PARTICIPANTS, capacity - humanStudents.length));
+  const occupiedSeats = new Set(humanStudents.map((peer) => Number(peer.seatNumber)).filter((seat) => seat > 0));
+  const next = new Map<string, AIParticipant>();
+
+  for (let index = 0; index < availableAiCount; index++) {
+    const name = AI_PARTICIPANT_NAMES[index];
+    const id = `ai-${room.slotId}-${index + 1}`;
+    const existing = room.aiParticipants.get(id);
+    let seatNumber = existing?.seatNumber || 1;
+    if (!existing || occupiedSeats.has(seatNumber)) {
+      seatNumber = 1;
+      while (occupiedSeats.has(seatNumber) || Array.from(next.values()).some((p) => p.seatNumber === seatNumber)) {
+        seatNumber++;
+      }
+    }
+    next.set(id, {
+      id,
+      name,
+      seatNumber,
+      avatar: '',
+      role: 'student',
+      college: 'ERUS AI Participant',
+      speakingTurns: existing?.speakingTurns || 0,
+      speakingDurationSeconds: existing?.speakingDurationSeconds || 0,
+      lastSpokeAt: existing?.lastSpokeAt,
+    });
+  }
+
   room.aiParticipants.clear();
-  return [];
+  for (const [id, participant] of next) room.aiParticipants.set(id, participant);
+  room.simulationMode = true;
+  return Array.from(room.aiParticipants.values());
 }
 
 function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
@@ -7966,7 +8000,15 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
   if (isAnyPeerSpeaking) return;
 
   const realStudents = Array.from(room.peers.values()).filter((p) => p.role === 'student');
-  const allParticipants: any[] = realStudents;
+  const allParticipants: any[] = [
+    ...realStudents,
+    ...Array.from(room.aiParticipants.values()).map((participant) => ({
+      ...participant,
+      userId: participant.id,
+      socketId: '',
+      isAiParticipant: true,
+    })),
+  ];
   if (!allParticipants.length) return;
 
   const isOpening = !room.openingStarted;
@@ -7984,7 +8026,8 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
   );
   const speakerName = speakerPeer?.name || recentSpeakerTranscript?.speakerName || 'Candidate';
   const speakerFirstName = speakerName.split(' ')[0];
-  const speakerSeat = speakerPeer?.seatNumber ? `Seat ${speakerPeer.seatNumber}` : 'Seat 1';
+  const speakerSeatNumber = speakerPeer?.seatNumber ?? recentSpeakerTranscript?.seatNumber;
+  const speakerSeat = speakerSeatNumber ? `Seat ${speakerSeatNumber}` : 'Seat 1';
 
   // Gather all transcript fragments spoken by this student in this speaking turn
   const currentTurnTranscripts = room.transcripts
@@ -8066,6 +8109,8 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
       } else {
         invitation = `Welcome participants to today's group discussion on "${room.topic}". The discussion has now officially commenced. To begin, let us invite ${targetReal.name} from ${seatStr}. ${firstName}, please share your opening thoughts on this topic.`;
       }
+    } else if (missingTurnTranscript) {
+      invitation = `We did not capture the last response clearly. Let's keep the discussion moving: ${targetReal.name} from ${seatStr}, please share a fresh perspective on "${room.topic}" that has not already been covered.`;
     } else if (utteranceClassification.category === 'greeting' || utteranceClassification.category === 'mic_check') {
       const studentTurnCount = speakerPeer?.speakingTurns || 0;
       if (studentTurnCount > 1 && utteranceClassification.category === 'greeting') {
@@ -8500,6 +8545,10 @@ io.on('connection', (socket) => {
     room.peers.set(socket.id, peer);
 
     syncAiParticipants(room);
+    io.to(`room-${safeSlotId}`).emit('ai-participants-updated', {
+      aiParticipants: Array.from(room.aiParticipants.values()),
+      simulationMode: room.simulationMode,
+    });
 
     // Full WebRTC connectivity: transmit all peers in the room so students and faculty can establish end-to-end audio/video
     const allRoomPeers = Array.from(room.peers.values()).filter(p => p.socketId !== socket.id);
@@ -8507,7 +8556,7 @@ io.on('connection', (socket) => {
       assignedSeat: seatNumber,
       peers: allRoomPeers,
       aiParticipants: Array.from(room.aiParticipants.values()),
-      simulationMode: false,
+      simulationMode: room.simulationMode,
       transcripts: room.transcripts,
       topic: room.topic,
       silenceTimerSeconds: room.silenceTimerSeconds,
