@@ -842,11 +842,30 @@ export function cleanSlotName(name: string | undefined): string {
   return name.replace(/\s*\(\d{1,2}:\d{2}\s*(?:AM|PM)\s*-\s*\d{1,2}:\d{2}\s*(?:AM|PM)\)/gi, '').trim();
 }
 
-function generateRandomSlotsForCollege(code: string, studentLimit?: number): BackendCollegeSlotItem[] {
+function extractSlotNumber(slot: any): number {
+  const nameMatch = String(slot?.slotName || '').match(/Slot\s+(\d+)/i);
+  if (nameMatch) return parseInt(nameMatch[1], 10) || 0;
+  const idMatch = String(slot?.id || '').match(/slot-[a-z0-9_-]+?-(\d+)-/i);
+  if (idMatch) return parseInt(idMatch[1], 10) || 0;
+  return 0;
+}
+
+function generateRandomSlotsForCollege(
+  code: string,
+  studentLimit?: number,
+  startSlotIndex?: number
+): BackendCollegeSlotItem[] {
   const normCode = normalizeCollegeCode(code);
   const col = persistentState.colleges.find((c) => normalizeCollegeCode(c.code) === normCode);
   const limit = studentLimit || col?.studentLimit || 60;
   const numSlots = Math.max(1, Math.ceil(limit / 15));
+
+  const deletedSet = new Set(persistentState.deletedSlotIds || []);
+  const existingSlots = (persistentState.slots[normCode] || []).filter(
+    (s) => s && s.id && !deletedSet.has(s.id)
+  );
+  const maxExistingNum = existingSlots.reduce((max, s) => Math.max(max, extractSlotNumber(s)), existingSlots.length);
+  const baseSlotNumber = startSlotIndex !== undefined ? startSlotIndex : maxExistingNum;
 
   // Registered students for this college
   const registered = [...(persistentState.students[normCode] || [])];
@@ -870,31 +889,16 @@ function generateRandomSlotsForCollege(code: string, studentLimit?: number): Bac
     '04:00 PM - 04:15 PM',
   ];
 
-  const poolOfNames = [
-    'Aarav Sharma', 'Priya Nair', 'Rohan Gupta', 'Ananya Deshmukh', 'Karan Verma',
-    'Ishita Patel', 'Aditya Singh', 'Sneha Kulkarni', 'Vikram Malhotra', 'Divya Iyer',
-    'Rahul Mehta', 'Neha Joshi', 'Siddharth Rao', 'Pooja Reddy', 'Manish Choudhary',
-    'Tanvi Bhat', 'Akash Sen', 'Meera Pillai', 'Rishabh Tiwari', 'Shreya Banerjee',
-    'Varun Nambiar', 'Ritu Saxena', 'Kunal Kapoor', 'Simran Kaur', 'Arjun Namboodiri',
-    'Anjali Menon', 'Gaurav Das', 'Swati Mishra', 'Nikhil Agarwal', 'Kavita Hegde'
-  ];
-
-  const branches = [
-    'B.Tech Computer Science & Engineering',
-    'B.Tech Information Technology',
-    'B.Tech Electronics & Communication',
-    'B.Tech Artificial Intelligence & Data Science',
-    'B.Tech Mechanical Engineering',
-  ];
-
   let studentPoolIndex = 0;
   const todayStr = new Date().toISOString().split('T')[0];
+  const nowBaseMs = Date.now();
   const generatedSlots: BackendCollegeSlotItem[] = [];
 
   for (let sIdx = 0; sIdx < numSlots; sIdx++) {
+    const slotNumber = baseSlotNumber + sIdx + 1;
     const slotStudents: any[] = [];
-    const slotId = `slot-${normCode.toLowerCase()}-${sIdx + 1}-${Date.now()}`;
-    const timing = timings[sIdx % timings.length];
+    const slotId = `slot-${normCode.toLowerCase()}-${slotNumber}-${nowBaseMs + sIdx}`;
+    const timing = timings[(slotNumber - 1) % timings.length];
 
     // Enroll only real registered students into slot up to 15 seats
     for (let seat = 1; seat <= 15; seat++) {
@@ -930,7 +934,7 @@ function generateRandomSlotsForCollege(code: string, studentLimit?: number): Bac
 
     const slotItem: BackendCollegeSlotItem = {
       id: slotId,
-      slotName: `Slot ${sIdx + 1}`,
+      slotName: `Slot ${slotNumber}`,
       topic: '',
       description: `Cohort of 15 students. Waiting for College Admin to allot Topic & Faculty In-Charge.`,
       slotTiming: timing,
@@ -944,7 +948,7 @@ function generateRandomSlotsForCollege(code: string, studentLimit?: number): Bac
       assignedFacultyEmail: '',
       assignedFacultyDept: '',
       collegeCode: normCode,
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(nowBaseMs + sIdx).toISOString(),
       students: slotStudents,
     };
 
@@ -1283,16 +1287,21 @@ if (process.env.DATABASE_URL) {
 
 // --- ADMIN COLLEGES ---
 app.get('/api/admin/colleges', (req, res) => {
+  const deletedSet = new Set(persistentState.deletedSlotIds || []);
   const updatedColleges = persistentState.colleges.map((c) => {
-    const sCount = (persistentState.students[c.code] || []).length;
-    const fCount = (persistentState.faculty[c.code] || []).length;
-    const slCount = (persistentState.slots[c.code] || []).length;
-    
+    const normCode = normalizeCollegeCode(c.code);
+    const sCount = (persistentState.students[normCode] || persistentState.students[c.code] || []).length;
+    const fCount = (persistentState.faculty[normCode] || persistentState.faculty[c.code] || []).length;
+    const rawSlots = persistentState.slots[normCode] || persistentState.slots[c.code] || [];
+    const activeSlots = rawSlots.filter((s) => s && s.id && !deletedSet.has(s.id));
+    const slCount = activeSlots.length;
+    const effectiveStudentLimit = slCount > 0 ? Math.max(c.studentLimit || 60, slCount * 15) : (c.studentLimit || 60);
+
     // Find the college admin user for this institution to get their actual password
     const adminUser = persistentState.users.find(
       (u) =>
         u.role === 'college_admin' &&
-        (u.collegeCode === c.code ||
+        (normalizeCollegeCode(u.collegeCode) === normCode ||
           (u.email && c.contactEmail && u.email.toLowerCase() === c.contactEmail.toLowerCase()) ||
           (u.email && c.adminEmail && u.email.toLowerCase() === c.adminEmail.toLowerCase()))
     );
@@ -1304,7 +1313,7 @@ app.get('/api/admin/colleges', (req, res) => {
       studentCount: sCount,
       facultyCount: fCount,
       slotCount: slCount,
-      studentLimit: c.studentLimit || 60,
+      studentLimit: effectiveStudentLimit,
     };
   });
   res.json({ success: true, colleges: updatedColleges });
@@ -1315,7 +1324,7 @@ app.post('/api/admin/colleges', async (req, res) => {
   if (!payload || !payload.name || !payload.code) {
     return res.status(400).json({ success: false, error: 'Name and code are required' });
   }
-  const cleanCode = payload.code.trim().toUpperCase();
+  const cleanCode = normalizeCollegeCode(payload.code.trim().toUpperCase());
   const collegeName = payload.name.trim();
   const adminPass = payload.adminPassword || `Erus@${cleanCode}2026`;
   const quotaLimit = Number(payload.studentLimit) || 60;
@@ -1344,11 +1353,13 @@ app.post('/api/admin/colleges', async (req, res) => {
     }
   }
 
-  // Generate pristine slots for the assigned quota
-  const freshSlots = generateRandomSlotsForCollege(cleanCode, quotaLimit);
+  // Generate pristine slots for the assigned quota starting from Slot 1
+  const freshSlots = generateRandomSlotsForCollege(cleanCode, quotaLimit, 0);
   persistentState.students[cleanCode] = [];
   persistentState.faculty[cleanCode] = [];
   persistentState.slots[cleanCode] = freshSlots;
+  if (!persistentState.slotsInitializedColleges) persistentState.slotsInitializedColleges = {};
+  persistentState.slotsInitializedColleges[cleanCode] = true;
 
   const newCol: BackendCollege = {
     id: `col-${Date.now()}`,
@@ -1361,7 +1372,7 @@ app.post('/api/admin/colleges', async (req, res) => {
     studentCount: 0,
     facultyCount: 0,
     slotCount: freshSlots.length,
-    studentLimit: quotaLimit,
+    studentLimit: freshSlots.length * 15,
     adminEmail: payload.contactEmail || `admin@${cleanCode.toLowerCase()}.edu.in`,
     adminName: payload.adminName || `${cleanCode} Administrator`,
     adminPassword: adminPass,
@@ -1434,6 +1445,18 @@ app.post('/api/admin/colleges', async (req, res) => {
 
   persistCollegeToMongoDB(newCol);
   persistUserToMongoDB(adminUser);
+  for (const sl of freshSlots) {
+    persistSlotToMongoDB(sl);
+  }
+
+  try {
+    io.emit('college-limit-updated', {
+      collegeCode: cleanCode,
+      studentLimit: newCol.studentLimit,
+      slotCount: freshSlots.length,
+      slots: freshSlots,
+    });
+  } catch {}
 
   // 3. Clean and persist in PostgreSQL via Prisma (if connected)
   if (isDbConnected && prisma) {
@@ -1537,74 +1560,162 @@ app.post('/api/admin/colleges', async (req, res) => {
   });
 });
 
+async function addSlotsToCollegeAndPersist(col: BackendCollege, body: any) {
+  const normCode = normalizeCollegeCode(col.code);
+  const deletedSet = new Set(persistentState.deletedSlotIds || []);
+
+  // 1. Collect all existing non-deleted slots for this college (in-memory + MongoDB hydration)
+  const slotMap = new Map<string, BackendCollegeSlotItem>();
+  for (const s of (persistentState.slots[normCode] || [])) {
+    if (s && s.id && !deletedSet.has(s.id)) {
+      slotMap.set(s.id, { ...s, collegeCode: normCode });
+    }
+  }
+  if (col.code !== normCode) {
+    for (const s of (persistentState.slots[col.code] || [])) {
+      if (s && s.id && !deletedSet.has(s.id) && !slotMap.has(s.id)) {
+        slotMap.set(s.id, { ...s, collegeCode: normCode });
+      }
+    }
+  }
+
+  if (isMongoConnected()) {
+    try {
+      const dbSlots = await GDSessionModel.find({ collegeCode: normCode }).maxTimeMS(2000);
+      for (const s of dbSlots) {
+        if (s && s.id && !deletedSet.has(s.id) && !slotMap.has(s.id)) {
+          slotMap.set(s.id, {
+            id: s.id,
+            slotName: s.slotName || s.topic || 'Slot',
+            topic: s.topic || '',
+            description: s.description || '',
+            slotTiming: s.slotTiming || '10:30 AM - 10:45 AM',
+            slotDate: s.slotDate || 'Today',
+            status: s.status || 'scheduled',
+            durationMinutes: s.durationMinutes || 15,
+            enrolledCount: (s as any).students?.length || s.enrolledCount || 15,
+            maxCapacity: s.maxCapacity || 15,
+            assignedFacultyId: s.assignedFacultyId || '',
+            assignedFacultyName: s.assignedFacultyName || 'Unassigned',
+            assignedFacultyEmail: s.assignedFacultyEmail || '',
+            assignedFacultyDept: s.assignedFacultyDept || '',
+            collegeCode: normCode,
+            createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString(),
+            students: s.students || [],
+          });
+        }
+      }
+    } catch {}
+  }
+
+  const preservedSlots = Array.from(slotMap.values());
+
+  // 2. Determine how many NEW slots to add on top of preservedSlots
+  const rawAddSlots = Number(body?.addSlots || body?.slotsToAdd || 0);
+  const rawStudentLimit = Number(body?.studentLimit || 60);
+  const slotsToAdd = rawAddSlots > 0
+    ? Math.max(1, Math.floor(rawAddSlots))
+    : Math.max(1, Math.ceil(rawStudentLimit / 15));
+
+  // Ensure existing slots have sequential numbering 1..preservedSlots.length
+  preservedSlots.forEach((sl, idx) => {
+    const seqNum = idx + 1;
+    const rawTopic = sl.topic ? String(sl.topic).trim() : '';
+    const isTopicValid =
+      rawTopic !== '' &&
+      !rawTopic.toLowerCase().includes('pending') &&
+      !/^slot\s+\d+/i.test(rawTopic) &&
+      !sl.description?.includes('Waiting for College Admin to allot');
+    const cleanTopic = isTopicValid ? rawTopic : '';
+    sl.slotName = cleanTopic ? `Slot ${seqNum}: ${cleanTopic}` : `Slot ${seqNum}`;
+    sl.collegeCode = normCode;
+  });
+
+  // 3. Generate new slots starting right after preservedSlots.length
+  const additionalSlots = generateRandomSlotsForCollege(
+    normCode,
+    slotsToAdd * 15,
+    preservedSlots.length
+  );
+
+  const combinedSlots = [...preservedSlots, ...additionalSlots];
+  const updatedStudentLimit = combinedSlots.length * 15;
+
+  col.studentLimit = updatedStudentLimit;
+  col.slotCount = combinedSlots.length;
+
+  if (!persistentState.slotsInitializedColleges) {
+    persistentState.slotsInitializedColleges = {};
+  }
+  persistentState.slotsInitializedColleges[normCode] = true;
+  persistentState.slots[normCode] = combinedSlots;
+  if (col.code !== normCode) {
+    persistentState.slots[col.code] = combinedSlots;
+  }
+
+  savePersistentState();
+  await persistCollegeToMongoDB(col);
+  for (const sl of combinedSlots) {
+    await persistSlotToMongoDB(sl);
+  }
+
+  try {
+    io.emit('college-limit-updated', {
+      collegeCode: normCode,
+      studentLimit: updatedStudentLimit,
+      slotCount: combinedSlots.length,
+      addedSlotsCount: additionalSlots.length,
+      slots: combinedSlots,
+    });
+    io.emit('slots-regenerated', {
+      collegeCode: normCode,
+      studentLimit: updatedStudentLimit,
+      slotCount: combinedSlots.length,
+      addedSlotsCount: additionalSlots.length,
+      slots: combinedSlots,
+    });
+  } catch {}
+
+  return {
+    success: true,
+    college: {
+      ...col,
+      studentLimit: updatedStudentLimit,
+      slotCount: combinedSlots.length,
+    },
+    studentLimit: updatedStudentLimit,
+    slotCount: combinedSlots.length,
+    addedSlotsCount: additionalSlots.length,
+    slots: combinedSlots,
+  };
+}
+
 app.put(['/api/admin/colleges/:id/limit', '/api/admin/colleges/:id/quota'], async (req, res) => {
   const targetId = req.params.id;
-  const { studentLimit } = req.body;
-  const limitNum = Math.max(1, parseInt(studentLimit, 10) || 60);
-
   const col = persistentState.colleges.find(
-    (c) => c.id === targetId || c.code.toUpperCase() === targetId.toUpperCase()
+    (c) =>
+      c.id === targetId ||
+      c.code.toUpperCase() === targetId.toUpperCase() ||
+      normalizeCollegeCode(c.code) === normalizeCollegeCode(targetId)
   );
   if (!col) return res.status(404).json({ success: false, error: 'College not found' });
 
-  col.studentLimit = limitNum;
-  savePersistentState();
-  persistCollegeToMongoDB(col);
-
-  // Preserve all existing active, completed, or user-allotted slots
-  const existingCollegeSlots = persistentState.slots[col.code] || [];
-  const preservedSlots = existingCollegeSlots.filter(
-    (s) => s.status === 'completed' || s.status === 'active' || (s.topic && !s.topic.toLowerCase().includes('pending'))
-  );
-  const neededCount = Math.max(0, Math.ceil(limitNum / 15) - preservedSlots.length);
-  const additionalSlots = neededCount > 0 ? generateRandomSlotsForCollege(col.code, neededCount * 15) : [];
-  const newSlots = [...preservedSlots, ...additionalSlots];
-  persistentState.slots[col.code] = newSlots;
-  for (const sl of newSlots) {
-    persistSlotToMongoDB(sl);
-  }
-  savePersistentState();
-
-  try {
-    io.emit('college-limit-updated', { collegeCode: col.code, studentLimit: limitNum, slots: newSlots });
-  } catch {}
-
-  res.json({ success: true, college: col, studentLimit: limitNum, slots: newSlots });
+  const result = await addSlotsToCollegeAndPersist(col, req.body);
+  res.json(result);
 });
 
 app.post('/api/admin/colleges/:id/limit', async (req, res) => {
   const targetId = req.params.id;
-  const { studentLimit } = req.body;
-  const limitNum = Math.max(1, parseInt(studentLimit, 10) || 60);
-
   const col = persistentState.colleges.find(
-    (c) => c.id === targetId || c.code.toUpperCase() === targetId.toUpperCase()
+    (c) =>
+      c.id === targetId ||
+      c.code.toUpperCase() === targetId.toUpperCase() ||
+      normalizeCollegeCode(c.code) === normalizeCollegeCode(targetId)
   );
   if (!col) return res.status(404).json({ success: false, error: 'College not found' });
 
-  col.studentLimit = limitNum;
-  savePersistentState();
-  persistCollegeToMongoDB(col);
-
-  // Preserve all existing active, completed, or user-allotted slots
-  const existingAdminSlots = persistentState.slots[col.code] || [];
-  const preservedAdminSlots = existingAdminSlots.filter(
-    (s) => s.status === 'completed' || s.status === 'active' || (s.topic && !s.topic.toLowerCase().includes('pending'))
-  );
-  const adminNeededCount = Math.max(0, Math.ceil(limitNum / 15) - preservedAdminSlots.length);
-  const additionalAdminSlots = adminNeededCount > 0 ? generateRandomSlotsForCollege(col.code, adminNeededCount * 15) : [];
-  const newAdminSlots = [...preservedAdminSlots, ...additionalAdminSlots];
-  persistentState.slots[col.code] = newAdminSlots;
-  for (const sl of newAdminSlots) {
-    persistSlotToMongoDB(sl);
-  }
-  savePersistentState();
-
-  try {
-    io.emit('college-limit-updated', { collegeCode: col.code, studentLimit: limitNum, slots: newAdminSlots });
-  } catch {}
-
-  res.json({ success: true, college: col, studentLimit: limitNum, slots: newAdminSlots });
+  const result = await addSlotsToCollegeAndPersist(col, req.body);
+  res.json(result);
 });
 
 app.post('/api/admin/colleges/:id/send-credentials', async (req, res) => {
@@ -2093,18 +2204,21 @@ app.post('/api/user/heartbeat', (req, res) => {
 // --- COLLEGE ADMIN ENDPOINTS ---
 app.get('/api/college/stats', (req, res) => {
   const code = normalizeCollegeCode((req.query.collegeCode as string) || 'DIT');
-  const college = persistentState.colleges.find((c) => c.code === code);
+  const college = persistentState.colleges.find((c) => normalizeCollegeCode(c.code) === code);
   const stuList = persistentState.students[code] || [];
   const facList = persistentState.faculty[code] || [];
   const deletedSet = new Set(persistentState.deletedSlotIds || []);
   const slotList = (persistentState.slots[code] || []).filter((s) => s?.id && !deletedSet.has(s.id));
+  const effectiveStudentLimit = slotList.length > 0
+    ? Math.max(college?.studentLimit || 60, slotList.length * 15)
+    : (college?.studentLimit || 60);
 
   res.json({
     success: true,
     stats: {
       collegeName: college?.name || 'Delhi Institute of Technology',
       collegeCode: code,
-      studentLimit: college?.studentLimit || 60,
+      studentLimit: effectiveStudentLimit,
       totalStudents: stuList.length,
       totalFaculty: facList.length,
       scheduledSlots: slotList.filter((s) => s.status === 'scheduled').length,
@@ -2925,15 +3039,32 @@ app.get('/api/college/slots', async (req, res) => {
   // Preserve ALL non-deleted slots
   let finalSlots = slots.filter((s) => s?.id && !deletedSet.has(s.id));
 
-  // Sort slots: active first, then scheduled (newest first), then completed
+  // Sort chronologically / by slot number so previous slots appear first followed by newly added slots
   finalSlots.sort((a, b) => {
-    const statusOrder: Record<string, number> = { active: 0, scheduled: 1, waiting: 2, completed: 3 };
-    const orderA = statusOrder[a.status] ?? 2;
-    const orderB = statusOrder[b.status] ?? 2;
-    if (orderA !== orderB) return orderA - orderB;
+    const numA = extractSlotNumber(a);
+    const numB = extractSlotNumber(b);
+    if (numA !== numB && numA > 0 && numB > 0) return numA - numB;
     const timeA = new Date(a.createdAt || 0).getTime();
     const timeB = new Date(b.createdAt || 0).getTime();
-    return timeB - timeA;
+    return timeA - timeB;
+  });
+
+  // Ensure every slot in the college has a unique sequential Slot N label (Slot 1, Slot 2, ..., Slot K)
+  finalSlots = finalSlots.map((slot, idx) => {
+    const seqNum = idx + 1;
+    const rawTopic = slot.topic ? String(slot.topic).trim() : '';
+    const isTopicValid =
+      rawTopic !== '' &&
+      !rawTopic.toLowerCase().includes('pending') &&
+      !/^slot\s+\d+/i.test(rawTopic) &&
+      !slot.description?.includes('Waiting for College Admin to allot');
+    const currentTopic = isTopicValid ? rawTopic : '';
+    const resolvedSlotName = currentTopic ? `Slot ${seqNum}: ${currentTopic}` : `Slot ${seqNum}`;
+    return {
+      ...slot,
+      slotName: resolvedSlotName,
+      topic: currentTopic,
+    };
   });
 
   // Keep in-memory cache synchronized
@@ -3313,50 +3444,41 @@ app.post('/api/college/slots/:id/allot', async (req, res) => {
 app.post('/api/college/generate-slots', async (req, res) => {
   const code = normalizeCollegeCode(req.body.collegeCode || 'DIT');
   const studentLimit = req.body.studentLimit ? Number(req.body.studentLimit) : undefined;
+  const addSlots = req.body.addSlots ? Number(req.body.addSlots) : undefined;
 
-  const col = persistentState.colleges.find((c) => normalizeCollegeCode(c.code) === code);
-  const limit = studentLimit || col?.studentLimit || 60;
-
-  // Record old slots as deleted before regenerating
-  const oldSlots = persistentState.slots[code] || [];
-  if (!Array.isArray(persistentState.deletedSlotIds)) persistentState.deletedSlotIds = [];
-  for (const old of oldSlots) {
-    if (old?.id && !persistentState.deletedSlotIds.includes(old.id)) {
-      persistentState.deletedSlotIds.push(old.id);
-    }
+  let col = persistentState.colleges.find((c) => normalizeCollegeCode(c.code) === code);
+  if (!col) {
+    col = {
+      id: `col-${code.toLowerCase()}`,
+      name: `${code} Campus`,
+      code,
+      contactEmail: `admin@${code.toLowerCase()}.edu.in`,
+      phone: '',
+      address: '',
+      status: 'active',
+      studentCount: (persistentState.students[code] || []).length,
+      facultyCount: (persistentState.faculty[code] || []).length,
+      slotCount: (persistentState.slots[code] || []).length,
+      studentLimit: studentLimit || 60,
+      adminEmail: `admin@${code.toLowerCase()}.edu.in`,
+      adminName: `${code} Administrator`,
+      createdAt: new Date().toISOString(),
+    };
+    persistentState.colleges.push(col);
   }
 
-  // Clear old slots for this college from MongoDB & PostgreSQL
-  if (isMongoConnected()) {
-    try {
-      await GDSessionModel.deleteMany({ collegeCode: code });
-    } catch {}
-  }
-  if (isDbConnected && prisma) {
-    try {
-      await prisma.gDSession.deleteMany({ where: { college: { code } } });
-    } catch {}
-  }
-
-  const slots = generateRandomSlotsForCollege(code, limit);
-  persistentState.slots[code] = slots;
-  if (!persistentState.slotsInitializedColleges) persistentState.slotsInitializedColleges = {};
-  persistentState.slotsInitializedColleges[code] = true;
-  savePersistentState();
-
-  for (const sl of slots) {
-    await persistSlotToMongoDB(sl);
-  }
-
-  try {
-    io.emit('slots-regenerated', { collegeCode: code, slots });
-  } catch {}
+  const result = await addSlotsToCollegeAndPersist(col, {
+    studentLimit: studentLimit || 60,
+    addSlots,
+  });
 
   res.json({
     success: true,
-    message: `Generated ${slots.length} discussion slots with 15 students per slot based on student quota of ${limit}.`,
-    slots,
-    studentLimit: limit,
+    message: `Added ${result.addedSlotsCount} new discussion slot(s) (15 students per slot). Total slots for ${code}: ${result.slotCount}.`,
+    slots: result.slots,
+    slotCount: result.slotCount,
+    addedSlotsCount: result.addedSlotsCount,
+    studentLimit: result.studentLimit,
   });
 });
 

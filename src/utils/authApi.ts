@@ -859,45 +859,81 @@ export async function createCollegeSlot(payload: any) {
 
 export async function updateCollegeStudentLimit(
   collegeIdOrCode: string,
-  studentLimit: number
-): Promise<{ success: boolean; college?: any; slots?: any[]; studentLimit?: number; error?: string }> {
+  studentLimit: number,
+  addSlots?: number
+): Promise<{
+  success: boolean;
+  college?: any;
+  slots?: any[];
+  slotCount?: number;
+  addedSlotsCount?: number;
+  studentLimit?: number;
+  error?: string;
+}> {
   const limitNum = Math.max(1, studentLimit || 60);
-
-  // Update in-memory college limit
-  inMemoryCustomColleges = inMemoryCustomColleges.map((c: any) => {
-    if (c.id === collegeIdOrCode || c.code?.toUpperCase() === collegeIdOrCode.toUpperCase()) {
-      return { ...c, studentLimit: limitNum };
-    }
-    return c;
-  });
+  const slotsToAdd = addSlots && addSlots > 0 ? addSlots : Math.max(1, Math.ceil(limitNum / 15));
 
   try {
     const res = await fetch(`/api/admin/colleges/${encodeURIComponent(collegeIdOrCode)}/limit`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ studentLimit: limitNum }),
+      body: JSON.stringify({ studentLimit: limitNum, addSlots: slotsToAdd }),
     });
     if (res.ok) {
       const data = await res.json();
+      const resolvedCode = normalizeClientCollegeCode(data.college?.code || collegeIdOrCode);
       if (data.slots && Array.isArray(data.slots)) {
         saveLocalSlots(collegeIdOrCode, data.slots);
-        if (data.college?.code) {
-          saveLocalSlots(data.college.code, data.slots);
+        if (resolvedCode) {
+          saveLocalSlots(resolvedCode, data.slots);
+        }
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('erus-slots-updated', {
+              detail: {
+                collegeCode: resolvedCode,
+                slots: data.slots,
+                studentLimit: data.studentLimit || data.slots.length * 15,
+                slotCount: data.slots.length,
+              },
+            })
+          );
         }
       }
+      // Update in-memory college limit
+      inMemoryCustomColleges = inMemoryCustomColleges.map((c: any) => {
+        if (
+          c.id === collegeIdOrCode ||
+          normalizeClientCollegeCode(c.code) === resolvedCode
+        ) {
+          return {
+            ...c,
+            studentLimit: data.studentLimit || limitNum,
+            slotCount: data.slotCount || data.slots?.length || c.slotCount,
+          };
+        }
+        return c;
+      });
       return data;
     }
   } catch (e) {
     console.warn('Error updating college student limit:', e);
   }
-  return { success: true, studentLimit: limitNum };
+  return { success: true, studentLimit: limitNum, addedSlotsCount: slotsToAdd };
 }
 
 export async function generateCollegeSlots(
   collegeCode: string,
   studentLimit?: number
-): Promise<{ success: boolean; slots?: any[]; studentLimit?: number; message?: string }> {
-  const code = (collegeCode || 'DIT').toUpperCase();
+): Promise<{
+  success: boolean;
+  slots?: any[];
+  slotCount?: number;
+  addedSlotsCount?: number;
+  studentLimit?: number;
+  message?: string;
+}> {
+  const code = normalizeClientCollegeCode(collegeCode || 'DIT');
   try {
     const res = await fetch('/api/college/generate-slots', {
       method: 'POST',
@@ -908,6 +944,18 @@ export async function generateCollegeSlots(
       const data = await res.json();
       if (data.slots && Array.isArray(data.slots)) {
         saveLocalSlots(code, data.slots);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('erus-slots-updated', {
+              detail: {
+                collegeCode: code,
+                slots: data.slots,
+                studentLimit: data.studentLimit || data.slots.length * 15,
+                slotCount: data.slots.length,
+              },
+            })
+          );
+        }
       }
       return data;
     }

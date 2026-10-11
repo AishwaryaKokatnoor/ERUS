@@ -41,6 +41,7 @@ import {
   Volume2,
   Video
 } from 'lucide-react';
+import { io } from 'socket.io-client';
 import { CollegeAdminUser } from '../../types/auth';
 import { GDSession } from '../../types/gd';
 import { generateSlotParticipants } from '../../data/mockGDData';
@@ -59,7 +60,8 @@ import {
   allotSlotTopicAndFaculty,
   generateCollegeSlots,
   getDeletedSlotIds,
-  markSlotDeletedLocally
+  markSlotDeletedLocally,
+  normalizeClientCollegeCode
 } from '../../utils/authApi';
 import { formatSlotDate } from '../../utils/studentBooking';
 import { SlotStudentReportsView } from '../AssessmentReport/SlotStudentReportsView';
@@ -185,10 +187,10 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
           return sCode === collegeCode;
         });
   const seenSlotIds = new Set<string>();
+  const usedSlotNumbers = new Set<number>();
   const displaySlots = allRawSlots
     .filter((s) => {
       if (!s || !s.id || deletedSlotIds.has(s.id) || seenSlotIds.has(s.id)) return false;
-      
       seenSlotIds.add(s.id);
       return true;
     })
@@ -201,11 +203,15 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
         !s.description?.includes('Waiting for College Admin to allot');
       const cleanTopic = isTopicAllotted ? rawTopic : '';
 
-      // Derive consistent slot prefix: "Slot 1", "Slot 2", etc.
-      const slotNumMatch = (s.slotName || '').match(/^(Slot\s+\d+)/i) || (s.id || '').match(/slot-.*?-(\d+)/i);
-      const prefix = slotNumMatch
-        ? (slotNumMatch[1].startsWith('Slot') ? slotNumMatch[1] : `Slot ${slotNumMatch[1]}`)
-        : `Slot ${idx + 1}`;
+      // Derive unique sequential slot prefix: "Slot 1", "Slot 2", etc.
+      const slotNumMatch = (s.slotName || '').match(/Slot\s+(\d+)/i) || (s.id || '').match(/slot-[a-z0-9_-]+?-(\d+)-/i);
+      let slotNum = slotNumMatch ? parseInt(slotNumMatch[1], 10) : idx + 1;
+      if (!slotNum || usedSlotNumbers.has(slotNum)) {
+        slotNum = idx + 1;
+        while (usedSlotNumbers.has(slotNum)) slotNum++;
+      }
+      usedSlotNumbers.add(slotNum);
+      const prefix = `Slot ${slotNum}`;
 
       // Strictly synchronize slot title to the allotted topic so there is never a topic mismatch
       const cleanName = cleanTopic ? `${prefix}: ${cleanTopic}` : prefix;
@@ -286,13 +292,8 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     setRevealedPasswords((prev) => ({ ...prev, ...map }));
   };
 
-  // Load data on mount
-  useEffect(() => {
-    loadAllData();
-  }, [collegeCode]);
-
-  const loadAllData = async () => {
-    setLoading(true);
+  const loadAllData = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [stData, stuData, facData, slotData] = await Promise.all([
         fetchCollegeStats(collegeCode),
@@ -315,15 +316,76 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
       }
       if (slotData) {
         const deletedIds = getDeletedSlotIds();
-        setSlots(slotData.filter((s: any) => !deletedIds.has(s.id) && !deletedSlotIds.has(s.id)));
+        const filtered = slotData.filter((s: any) => !deletedIds.has(s.id) && !deletedSlotIds.has(s.id));
+        setSlots(filtered);
         setHasLoadedSlots(true);
+        if (stData) {
+          setStats((prev) => ({
+            ...prev,
+            ...stData,
+            totalSlots: filtered.length,
+            studentLimit: Math.max(stData.studentLimit || 60, filtered.length * 15),
+          }));
+        }
       }
     } catch (e) {
       console.warn('Dashboard load error:', e);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
+
+  // Load data on mount and listen for real-time Super Admin slot additions
+  useEffect(() => {
+    loadAllData();
+
+    const normTargetCode = normalizeClientCollegeCode(collegeCode);
+    const handleSlotsEvent = (e: any) => {
+      const payload = e?.detail || e;
+      const evtCode = normalizeClientCollegeCode(payload?.collegeCode || '');
+      if (!evtCode || evtCode === normTargetCode) {
+        if (Array.isArray(payload?.slots)) {
+          const deletedIds = getDeletedSlotIds();
+          const filtered = payload.slots.filter((s: any) => s && s.id && !deletedIds.has(s.id));
+          setSlots(filtered);
+          setHasLoadedSlots(true);
+          setStats((prev) => ({
+            ...prev,
+            totalSlots: filtered.length,
+            studentLimit: payload.studentLimit || Math.max(prev.studentLimit || 60, filtered.length * 15),
+          }));
+        }
+        loadAllData(true);
+      }
+    };
+
+    const handleFocus = () => loadAllData(true);
+    window.addEventListener('erus-slots-updated', handleSlotsEvent as EventListener);
+    window.addEventListener('focus', handleFocus);
+
+    const socket = io({ transports: ['websocket', 'polling'] });
+    socket.on('college-limit-updated', handleSlotsEvent);
+    socket.on('slots-regenerated', handleSlotsEvent);
+    socket.on('slot-updated', () => loadAllData(true));
+
+    const pollInterval = setInterval(() => {
+      loadAllData(true);
+    }, 8000);
+
+    return () => {
+      window.removeEventListener('erus-slots-updated', handleSlotsEvent as EventListener);
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(pollInterval);
+      socket.disconnect();
+    };
+  }, [collegeCode]);
+
+  // Also refresh silently whenever user switches to the 'slots' tab
+  useEffect(() => {
+    if (activeTab === 'slots') {
+      loadAllData(true);
+    }
+  }, [activeTab]);
 
   // Slot Allotment & Regeneration Actions
   const handleOpenAllotModal = (slot: any) => {
@@ -440,25 +502,18 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
   };
 
   const handleRegenerateSlots = async () => {
-    const studentCount = stats.studentLimit || 60;
-    const slotCount = Math.ceil(studentCount / 15);
-    const confirmed = window.confirm(
-      `Regenerate random discussion slots for ${stats.collegeName}?\n\n` +
-      `• Student Quota: ${studentCount} Students\n` +
-      `• Total Slots: ${slotCount} Slots (15 students per slot)\n\n` +
-      `Existing discussion slots will be refreshed with 15 randomly allotted students each.`
-    );
-    if (!confirmed) return;
-
     setIsRegeneratingSlots(true);
-    const res = await generateCollegeSlots(collegeCode, studentCount);
+    const res = await generateCollegeSlots(collegeCode, 60);
     setIsRegeneratingSlots(false);
 
     if (res && res.success) {
-      setBannerMsg(`Successfully generated ${res.slots?.length || slotCount} discussion slots with 15 students per slot.`);
+      setBannerMsg(
+        res.message ||
+          `Added ${res.addedSlotsCount || 4} new discussion slots (15 students per slot). Total slots: ${res.slots?.length || displaySlots.length}.`
+      );
       await loadAllData();
     } else {
-      setBannerMsg(res?.message || 'Failed to regenerate slots.');
+      setBannerMsg(res?.message || 'Failed to generate slots.');
     }
   };
 
