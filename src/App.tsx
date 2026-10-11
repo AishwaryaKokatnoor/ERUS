@@ -652,19 +652,14 @@ function GDAppContent() {
     setTranscripts([]);
 
     // Emit live WebRTC socket event so all room participants transition immediately
-    try {
-      const socket = getSocket();
-      if (socket) {
-        socket.emit('start-session', { slotId: targetSlotId });
-      }
-    } catch (e) {
-      console.warn('Socket start-session emit error:', e);
-    }
-
-    // Notify backend
+    // Validate authorization with the backend before broadcasting a session start.
+    const startToken = getStoredToken();
     fetch(`/api/college/slots/${encodeURIComponent(targetSlotId)}/start`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(startToken ? { Authorization: 'Bearer ' + startToken } : {}),
+      },
       body: JSON.stringify({
         facultyId: (currentUser as any).facultyId || currentUser.id,
         id: currentUser.id,
@@ -677,6 +672,8 @@ function GDAppContent() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Unable to start GD session');
       }
+      const socket = getSocket();
+      if (socket) socket.emit('start-session', { slotId: targetSlotId });
     }).catch((err) => console.warn('Backend start session sync:', err));
   };
 
@@ -780,9 +777,13 @@ function GDAppContent() {
         // Faculty completion is the authoritative finalization point.
         // The backend evaluates every real participant, persists every report,
         // finalizes the transcript, and then closes the slot.
+        const completeToken = getStoredToken();
         const endRes = await fetch('/api/college/slots/' + encodeURIComponent(finishedSlotId) + '/complete', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(completeToken ? { Authorization: 'Bearer ' + completeToken } : {}),
+          },
           body: JSON.stringify({
             facultyId: (currentUser as any).facultyId || currentUser.id,
             id: currentUser.id,
