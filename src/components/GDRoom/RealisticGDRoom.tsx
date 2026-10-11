@@ -236,6 +236,12 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     const next = !isRoomAudioMuted;
     setIsRoomAudioMuted(next);
     roomVoice.setMuted(next);
+
+    // Speak from this explicit click so browsers that block background speech
+    // still allow the student/faculty to verify built-in facilitator audio.
+    if (!next && !voiceMuted) {
+      roomVoice.speakAsFacilitator('AI facilitator audio is enabled. Welcome to the group discussion.');
+    }
   };
 
   useEffect(() => {
