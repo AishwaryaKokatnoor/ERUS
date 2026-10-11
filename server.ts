@@ -269,15 +269,49 @@ function recordUserActivity(user: { id: string; name?: string; email?: string; r
 }
 
 function loadPersistentState() {
-  // MongoDB is the primary store, but preserve legacy local state files for manual recovery.
-  // Never delete user data automatically during server startup.
-  if (fs.existsSync(PERSIST_FILE)) {
-    console.warn('[Persistence] Legacy local state file found and preserved for recovery:', PERSIST_FILE);
+  // MongoDB remains authoritative when available. A legacy local snapshot is only
+  // a recovery fallback when the database cannot be reached; never delete it.
+  if (!fs.existsSync(PERSIST_FILE)) return;
+  try {
+    const raw = JSON.parse(fs.readFileSync(PERSIST_FILE, 'utf8'));
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      console.warn('[Persistence] Legacy state snapshot is not an object; preserving it for manual recovery.');
+      return;
+    }
+    persistentState = {
+      ...persistentState,
+      ...raw,
+      colleges: Array.isArray(raw.colleges) ? raw.colleges : persistentState.colleges,
+      students: raw.students && typeof raw.students === 'object' ? raw.students : persistentState.students,
+      faculty: raw.faculty && typeof raw.faculty === 'object' ? raw.faculty : persistentState.faculty,
+      slots: raw.slots && typeof raw.slots === 'object' ? raw.slots : persistentState.slots,
+      users: Array.isArray(raw.users) ? raw.users : persistentState.users,
+      studentBookings: raw.studentBookings && typeof raw.studentBookings === 'object' ? raw.studentBookings : persistentState.studentBookings,
+      studentTopicBookings: raw.studentTopicBookings && typeof raw.studentTopicBookings === 'object' ? raw.studentTopicBookings : persistentState.studentTopicBookings,
+      deletedSlotIds: Array.isArray(raw.deletedSlotIds) ? raw.deletedSlotIds : persistentState.deletedSlotIds,
+      slotsInitializedColleges: raw.slotsInitializedColleges && typeof raw.slotsInitializedColleges === 'object' ? raw.slotsInitializedColleges : persistentState.slotsInitializedColleges,
+      recordings: raw.recordings && typeof raw.recordings === 'object' ? raw.recordings : persistentState.recordings,
+      systemSettings: raw.systemSettings && typeof raw.systemSettings === 'object'
+        ? { ...persistentState.systemSettings, ...raw.systemSettings }
+        : persistentState.systemSettings,
+    };
+    console.warn('[Persistence] Loaded preserved local snapshot as a recovery fallback. MongoDB sync will take precedence when connected.');
+  } catch (err: any) {
+    console.warn('[Persistence] Could not read legacy state snapshot; file was preserved:', err.message);
   }
 }
 
 function savePersistentState() {
-  if (!isMongoConnected()) return;
+  if (!isMongoConnected()) {
+    // Best-effort local durability during a database outage. Restrict permissions
+    // because the snapshot can contain account metadata and credentials.
+    try {
+      fs.writeFileSync(PERSIST_FILE, JSON.stringify(persistentState, null, 2), { encoding: 'utf8', mode: 0o600 });
+    } catch (err: any) {
+      console.warn('[Persistence] Local recovery snapshot could not be saved:', err.message);
+    }
+    return;
+  }
   SystemStateModel.findOneAndUpdate(
     { key: 'global' },
     {
