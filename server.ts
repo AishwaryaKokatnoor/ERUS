@@ -7538,13 +7538,15 @@ const AI_PARTICIPANT_NAMES = [
   'Aarav Mehta', 'Priya Sharma', 'Rohan Iyer',
   'Ananya Reddy', 'Kabir Nair', 'Meera Kapoor',
 ];
-const AI_GD_SIMULATION_MODE = true;
+const AI_GD_SIMULATION_MODE = false;
 const AI_GD_SIMULATION_PARTICIPANTS = 6;
 
 function syncAiParticipants(room: LiveGDRoomState) {
   const humanStudents = Array.from(room.peers.values()).filter((peer) => peer.role === 'student');
   const capacity = Math.max(1, getSlotCapacity(room.slotId));
-  const availableAiCount = Math.max(0, Math.min(AI_GD_SIMULATION_PARTICIPANTS, capacity - humanStudents.length));
+  const availableAiCount = AI_GD_SIMULATION_MODE
+    ? Math.max(0, Math.min(AI_GD_SIMULATION_PARTICIPANTS, capacity - humanStudents.length))
+    : 0;
   const occupiedSeats = new Set(humanStudents.map((peer) => Number(peer.seatNumber)).filter((seat) => seat > 0));
   const next = new Map<string, AIParticipant>();
 
@@ -7574,7 +7576,7 @@ function syncAiParticipants(room: LiveGDRoomState) {
 
   room.aiParticipants.clear();
   for (const [id, participant] of next) room.aiParticipants.set(id, participant);
-  room.simulationMode = true;
+  room.simulationMode = AI_GD_SIMULATION_MODE;
   return Array.from(room.aiParticipants.values());
 }
 
