@@ -3556,7 +3556,13 @@ app.post('/api/college/slots/:id/complete', async (req, res) => {
 
   const participantIds = new Set<string>();
   if (room) for (const peer of room.peers.values()) if (peer.role === 'student' && peer.userId) participantIds.add(peer.userId);
-  transcriptHistory.forEach((t: any) => { if (!t.isFacilitator && t.speakerId) participantIds.add(t.speakerId); });
+  transcriptHistory.forEach((t: any) => {
+    // AI simulation personas participate in the conversation but are not real students
+    // and must never receive student assessment reports.
+    if (!t.isFacilitator && t.speakerId && !String(t.speakerId).startsWith('ai-')) {
+      participantIds.add(t.speakerId);
+    }
+  });
 
   const reports: any[] = [];
   for (const participantId of participantIds) {
