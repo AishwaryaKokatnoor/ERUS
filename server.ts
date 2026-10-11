@@ -8709,19 +8709,14 @@ io.on('connection', (socket) => {
       const found = list.find((s) => s.id === safeSlotId);
       if (found) { targetSlot = found; break; }
     }
-    if (targetSlot) {
-      targetSlot.status = 'active';
-      savePersistentState();
-      if (isMongoConnected()) {
-        GDSessionModel.updateOne({ id: safeSlotId }, { $set: { status: 'active' } }).catch(() => null);
-      }
-      if (isDbConnected && prisma) {
-        prisma.gDSession.update({ where: { id: safeSlotId }, data: { status: 'active' } }).catch(() => null);
-      }
-      io.emit('slot-updated', { slot: targetSlot });
+    // The HTTP start endpoint validates the JWT and faculty/college assignment first.
+    // Socket events alone must never activate an arbitrary slot.
+    if (!targetSlot || targetSlot.status !== 'active') {
+      console.warn(`[GD] Ignoring unauthorised or premature socket start for slot ${safeSlotId}.`);
+      return;
     }
 
-    const room = getOrCreateLiveRoom(safeSlotId, targetSlot?.topic);
+    const room = getOrCreateLiveRoom(safeSlotId, targetSlot.topic);
     const wasAlreadyActive = room.status === 'active';
     room.status = 'active';
     room.silenceTimerSeconds = 0;
@@ -8754,18 +8749,11 @@ io.on('connection', (socket) => {
       const found = list.find((s) => s.id === safeSlotId);
       if (found) { targetSlot = found; break; }
     }
-    if (targetSlot) {
-      targetSlot.status = 'completed';
-      savePersistentState();
-      if (isMongoConnected()) {
-        GDSessionModel.updateOne({ id: safeSlotId }, { $set: { status: 'completed' } }).catch(() => null);
-        GDBookingModel.updateMany({ sessionId: safeSlotId, status: { $ne: 'CANCELLED' } }, { $set: { status: 'COMPLETED' } }).catch(() => null);
-      }
-      if (isDbConnected && prisma) {
-        prisma.gDSession.update({ where: { id: safeSlotId }, data: { status: 'completed' } }).catch(() => null);
-        prisma.gDBooking.updateMany({ where: { sessionId: safeSlotId, status: { not: 'CANCELLED' } }, data: { status: 'COMPLETED' } }).catch(() => null);
-      }
-      io.emit('slot-updated', { slot: targetSlot });
+    // The authorized HTTP completion endpoint generates and persists reports before
+    // changing the slot to completed. A socket event must not bypass that workflow.
+    if (!targetSlot || targetSlot.status !== 'completed') {
+      console.warn(`[GD] Ignoring premature socket finish for slot ${safeSlotId}; completion API has not finalized it.`);
+      return;
     }
     const room = LIVE_ROOMS.get(safeSlotId);
     if (room) {
