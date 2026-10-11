@@ -1029,7 +1029,7 @@ function GDAppContent() {
       const uHistory = getStudentReportHistory(currentUser.studentId || currentUser.id || currentUser.name || 'student');
       // A report belongs to a specific session, not just a matching topic.
       // Reusing a same-topic report from an earlier slot displayed stale scores.
-      const foundReport: any = uHistory.find((r) =>
+      let foundReport: any = uHistory.find((r) =>
         (r.sessionId === cleanSlotId || (r as any).slotId === cleanSlotId || r.id === cleanSlotId) &&
         (!targetSlot.topic || !r.topic || String(r.topic).trim().toLowerCase() === String(targetSlot.topic).trim().toLowerCase())
       );
