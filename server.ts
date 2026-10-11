@@ -377,6 +377,9 @@ function loadPersistentState() {
         if (data.recordings && typeof data.recordings === 'object') {
           persistentState.recordings = { ...data.recordings };
         }
+        if (data.reports && typeof data.reports === 'object') {
+          (persistentState as any).reports = { ...data.reports };
+        }
         if (data.systemSettings && typeof data.systemSettings === 'object') {
           persistentState.systemSettings = {
             dailyUserLimit: typeof data.systemSettings.dailyUserLimit === 'number' ? data.systemSettings.dailyUserLimit : 100,
@@ -425,8 +428,6 @@ function assignUniqueSeats<T extends { seatNumber?: number; email?: string }>(it
 async function syncMongoDBWithPersistentState() {
   if (!isMongoConnected()) return;
   try {
-    await initMongoDBTablesAndSubTables();
-
     // 1. Colleges Sync: Read from MongoDB & merge with persistent state
     const dbColleges = await CollegeModel.find();
     if (dbColleges.length > 0) {
@@ -631,9 +632,14 @@ async function syncMongoDBWithPersistentState() {
         if (!colCode || !persistentState.colleges.some((c) => c.code.toUpperCase() === colCode)) continue;
         if (!persistentState.slots[colCode]) persistentState.slots[colCode] = [];
         const existingSlot = persistentState.slots[colCode]?.find((slot) => slot.id === s.id);
+        const savedRec = persistentState.recordings?.[s.id];
         const rawStudents = (s as any).students && (s as any).students.length > 0
           ? (s as any).students
           : existingSlot?.students;
+        const resolvedRecordingUrl = (s as any).recordingUrl || existingSlot?.recordingUrl || savedRec?.recordingUrl || '';
+        const resolvedRecordingDuration = (s as any).recordingDurationSeconds || existingSlot?.recordingDurationSeconds || savedRec?.durationSeconds || 0;
+        const resolvedRecordingSize = (s as any).recordingFileSize || existingSlot?.recordingFileSize || savedRec?.fileSize || 0;
+        const resolvedRecordedAt = (s as any).recordedAt || existingSlot?.recordedAt || savedRec?.recordedAt || undefined;
         let slotItem: BackendCollegeSlotItem = {
           id: s.id,
           slotName: s.slotName,
@@ -652,7 +658,22 @@ async function syncMongoDBWithPersistentState() {
           collegeCode: colCode,
           createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString(),
           students: rawStudents,
+          recordingUrl: resolvedRecordingUrl || undefined,
+          recordingDurationSeconds: resolvedRecordingDuration || undefined,
+          recordingFileSize: resolvedRecordingSize || undefined,
+          recordedAt: resolvedRecordedAt,
         };
+        if (resolvedRecordingUrl) {
+          if (!persistentState.recordings) persistentState.recordings = {};
+          persistentState.recordings[s.id] = {
+            slotId: s.id,
+            recordingUrl: resolvedRecordingUrl,
+            durationSeconds: resolvedRecordingDuration,
+            fileSize: resolvedRecordingSize,
+            mimeType: savedRec?.mimeType || 'video/webm',
+            recordedAt: resolvedRecordedAt || new Date().toISOString(),
+          };
+        }
         slotItem = ensureSlotParticipants(slotItem, colCode);
         const existingSlotIdx = persistentState.slots[colCode].findIndex((slot) => slot.id === s.id);
         if (existingSlotIdx >= 0) {
@@ -676,6 +697,58 @@ async function syncMongoDBWithPersistentState() {
     const dbBookings = await GDBookingModel.find({ status: { $ne: 'CANCELLED' } });
     for (const b of dbBookings) {
       persistentState.studentBookings[b.studentId] = b.sessionId;
+    }
+
+    // Hydrate Assessment Reports (Sub-Table: assessment_reports) — prefer non-zero reports
+    if (!(persistentState as any).reports) (persistentState as any).reports = {};
+    const dbReports = await AssessmentReportModel.find().sort({ overallScore: -1, createdAt: -1 });
+    for (const r of dbReports) {
+      const raw = (r as any).fullReportJson || {};
+      const durationSec = r.speakingDurationSeconds ?? raw.speakingTimeSeconds ?? raw.speakingDurationSeconds ?? 0;
+      const turns = r.speakingTurns ?? raw.speakingTurns ?? 0;
+      const wpmVal = r.wpm ?? raw.wpm ?? (durationSec > 0 ? 130 : 0);
+      const rep = ensureHealthyReport({
+        id: r.id,
+        sessionId: r.sessionId,
+        studentId: r.studentId,
+        studentName: r.studentName || raw.studentName || '',
+        seatNumber: r.seatNumber ?? raw.seatNumber,
+        topic: r.topic || raw.topic || '',
+        overallScore: r.overallScore ?? raw.overallScore ?? 0,
+        grade: r.grade || gradeForScore(r.overallScore ?? 0),
+        skills: r.rubricJson || raw.skills || {},
+        speakingTimeSeconds: durationSec,
+        speakingDurationSeconds: durationSec,
+        speakingTimeFormatted: r.speakingTimeFormatted || raw.speakingTimeFormatted || `${Math.floor(durationSec / 60)} min ${durationSec % 60} sec`,
+        speakingTurns: turns,
+        wpm: wpmVal,
+        wpmStatus: r.wpmStatus || raw.wpmStatus || (durationSec === 0 ? 'No Speech' : wpmVal < 115 ? 'Too Slow' : wpmVal > 165 ? 'Too Fast' : 'Optimal'),
+        fillerWordsCount: r.fillerWordsCount ?? raw.fillerWordsCount ?? 0,
+        fillerWordsBreakdown: r.fillerWordsBreakdown || raw.fillerWordsBreakdown || [],
+        interruptions: r.interruptionCount ?? raw.interruptions ?? 0,
+        questionsAnswered: r.questionsAnswered ?? raw.questionsAnswered ?? 0,
+        questionsInitiated: r.questionsInitiated ?? raw.questionsInitiated ?? 0,
+        feedback: r.feedback || raw.aiSummary || '',
+        aiSummary: r.feedback || raw.aiSummary || '',
+        strengths: r.strengths || raw.strengths || [],
+        areasForImprovement: r.improvements || raw.areasForImprovement || [],
+        aiRecommendations: r.aiRecommendations || raw.aiRecommendations || [],
+        generatedAt: r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString(),
+        facultyEndorsement: raw.facultyEndorsement || { endorsed: false },
+        recordingUrl: r.recordingUrl || raw.recordingUrl || '',
+      });
+      const keyById = `${rep.sessionId}_${rep.studentId}`;
+      const existingById = (persistentState as any).reports[keyById];
+      if (!existingById || (Number(rep.overallScore || 0) >= Number(existingById.overallScore || 0))) {
+        (persistentState as any).reports[keyById] = rep;
+      }
+      if (rep.studentName) {
+        const keyByName = `${rep.sessionId}_${String(rep.studentName).trim().toLowerCase()}`;
+        const existingByName = (persistentState as any).reports[keyByName];
+        if (!existingByName || (Number(rep.overallScore || 0) >= Number(existingByName.overallScore || 0))) {
+          (persistentState as any).reports[keyByName] = rep;
+        }
+      }
     }
 
     savePersistentState();
@@ -708,7 +781,7 @@ async function persistCollegeToMongoDB(col: BackendCollege) {
         adminName: col.adminName || '',
         adminPassword: col.adminPassword || '',
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
   } catch (e: any) {
     console.warn('[MongoDB] Save college error:', e.message);
@@ -754,7 +827,7 @@ async function persistUserToMongoDB(u: StoredAuthUser) {
               }
             : undefined,
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
   } catch (e: any) {
     console.warn('[MongoDB] Save user error:', e.message);
@@ -852,7 +925,7 @@ async function persistSlotToMongoDB(slot: BackendCollegeSlotItem) {
         recordingFileSize: slot.recordingFileSize || 0,
         recordedAt: slot.recordedAt || null,
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
   } catch (e: any) {
     console.warn('[MongoDB] Save slot error:', e.message);
@@ -6530,11 +6603,9 @@ app.get('/api/student/reports', async (req, res) => {
       if (sessionId) filter.sessionId = sessionId;
       if (topic) filter.topic = new RegExp(`^${topic.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 
-      const mongoReports = await AssessmentReportModel.find(filter).sort({ createdAt: -1 }).maxTimeMS(2000);
+      const mongoReports = await AssessmentReportModel.find(filter).sort({ overallScore: -1, createdAt: -1 }).maxTimeMS(2000);
       if (mongoReports.length > 0) {
-        return res.json({
-          success: true,
-          reports: mongoReports.map((r: any) => {
+        const mappedReports = mongoReports.map((r: any) => {
             const raw = r.fullReportJson || {};
             const durationSec = r.speakingDurationSeconds ?? raw.speakingTimeSeconds ?? raw.speakingDurationSeconds ?? 0;
             const turns = r.speakingTurns ?? raw.speakingTurns ?? 0;
@@ -6567,7 +6638,7 @@ app.get('/api/student/reports', async (req, res) => {
               aiRecommendations: r.aiRecommendations || raw.aiRecommendations || ['Practice articulating structured viewpoints with relevant examples.', 'Maintain steady vocal pacing throughout the discussion.'],
               generatedAt: r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString(),
               facultyEndorsement: raw.facultyEndorsement || { endorsed: false },
-              recordingUrl: r.recordingUrl || raw.recordingUrl || (() => {
+              recordingUrl: r.recordingUrl || raw.recordingUrl || persistentState.recordings?.[r.sessionId]?.recordingUrl || (() => {
                 for (const list of Object.values(persistentState.slots)) {
                   const s = list.find((slot) => slot.id === r.sessionId);
                   if (s?.recordingUrl) return s.recordingUrl;
@@ -6576,7 +6647,11 @@ app.get('/api/student/reports', async (req, res) => {
               })(),
             };
             return ensureHealthyReport(rep);
-          }),
+        });
+        const nonZeroReports = mappedReports.filter((r) => Number(r.overallScore || 0) > 0);
+        return res.json({
+          success: true,
+          reports: nonZeroReports.length > 0 ? nonZeroReports : mappedReports,
         });
       }
     } catch (e: any) {
@@ -6589,7 +6664,7 @@ app.get('/api/student/reports', async (req, res) => {
       const where: any = {};
       if (studentId) where.studentId = studentId;
       if (sessionId) where.sessionId = sessionId;
-      const reports = await prisma.assessmentReport.findMany({ where, orderBy: { createdAt: 'desc' } });
+      const reports = await prisma.assessmentReport.findMany({ where, orderBy: [{ overallScore: 'desc' }, { createdAt: 'desc' }] });
       return res.json({
         success: true,
         reports: reports.map((r) => {
@@ -6603,7 +6678,7 @@ app.get('/api/student/reports', async (req, res) => {
             aiRecommendations: ['Practice articulating structured viewpoints with relevant examples.', 'Maintain steady vocal pacing throughout the discussion.'],
             fillerWordsBreakdown: [],
             generatedAt: r.createdAt.toISOString(), facultyEndorsement: { endorsed: false },
-            recordingUrl: (() => {
+            recordingUrl: persistentState.recordings?.[r.sessionId]?.recordingUrl || (() => {
               for (const list of Object.values(persistentState.slots)) {
                 const s = list.find((slot) => slot.id === r.sessionId);
                 if (s?.recordingUrl) return s.recordingUrl;
@@ -6619,15 +6694,18 @@ app.get('/api/student/reports', async (req, res) => {
   // In-memory fallback
   if ((persistentState as any).reports) {
     const memoryReports: any[] = Object.values((persistentState as any).reports);
-    const matched = memoryReports.filter((r) => {
-      const matchStudent = (!studentId || r.studentId === studentId) ||
-        (!studentName || (r.studentName && String(r.studentName).toLowerCase() === studentName.toLowerCase()));
-      const matchSession = !sessionId || r.sessionId === sessionId;
-      const matchTopic = !topic || (r.topic && String(r.topic).toLowerCase() === topic.toLowerCase());
-      return matchStudent && matchSession && matchTopic;
-    });
+    const matched = memoryReports
+      .filter((r) => {
+        const matchStudent = (!studentId || r.studentId === studentId) ||
+          (!studentName || (r.studentName && String(r.studentName).toLowerCase() === studentName.toLowerCase()));
+        const matchSession = !sessionId || r.sessionId === sessionId;
+        const matchTopic = !topic || (r.topic && String(r.topic).toLowerCase() === topic.toLowerCase());
+        return matchStudent && matchSession && matchTopic;
+      })
+      .sort((a, b) => Number(b.overallScore || 0) - Number(a.overallScore || 0));
     if (matched.length > 0) {
-      return res.json({ success: true, reports: matched });
+      const nonZeroMatched = matched.filter((r) => Number(r.overallScore || 0) > 0);
+      return res.json({ success: true, reports: nonZeroMatched.length > 0 ? nonZeroMatched : matched });
     }
   }
 
@@ -6647,7 +6725,7 @@ app.get('/api/faculty/sessions/:id/reports', async (req, res) => {
   }
   if (!slot && isMongoConnected()) {
     try {
-      const dbSlot = await SlotModel.findOne({ id: sessionId }).lean();
+      const dbSlot = await GDSessionModel.findOne({ id: sessionId }).lean();
       if (dbSlot) slot = dbSlot;
     } catch {}
   }
@@ -6661,11 +6739,12 @@ app.get('/api/faculty/sessions/:id/reports', async (req, res) => {
     if (sFacId === queryLower || sFacEmail === queryLower || sFacName === queryLower) {
       isAssigned = true;
     } else {
-      let facUser: any = persistentState.faculty.find((f) => f.id === facultyId || f.facultyId === facultyId || f.email?.toLowerCase() === queryLower);
+      const allFaculty: any[] = Object.values(persistentState.faculty || {}).flat();
+      let facUser: any = allFaculty.find((f) => f.id === facultyId || f.facultyId === facultyId || f.email?.toLowerCase() === queryLower);
       if (!facUser && isMongoConnected()) {
         try {
           facUser = await UserModel.findOne({
-            $or: [{ id: facultyId }, { facultyId: facultyId }, { email: queryLower }]
+            $or: [{ id: facultyId }, { 'facultyProfile.facultyId': facultyId }, { email: queryLower }]
           }).lean();
         } catch {}
       }
