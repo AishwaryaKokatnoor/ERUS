@@ -6949,20 +6949,7 @@ app.get(['/api/college/slots/:id/reports', '/api/admin/sessions/:id/reports'], a
   }
 
   if (!targetSlot) {
-    targetSlot = {
-      id: sessionId,
-      topic: 'Group Discussion',
-      slotName: 'Scheduled GD Slot',
-      collegeCode: 'COL',
-      status: 'completed',
-      durationMinutes: 15,
-      slotTiming: '10:00 AM - 10:15 AM',
-      slotDate: 'Today',
-      maxCapacity: 15,
-      enrolledCount: 0,
-      assignedFacultyName: 'Faculty Evaluator',
-      students: [],
-    };
+    return res.status(404).json({ success: false, error: 'GD slot not found. No report was generated for a missing session.' });
   }
 
   // Authoritatively populate recordingUrl from persistentState.recordings or disk if missing
