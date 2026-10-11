@@ -3,6 +3,7 @@ export interface Student {
   name: string;
   seatNumber: number;
   college: string;
+  collegeCode?: string;
   course: string;
   batch: string;
   avatar: string;
@@ -77,6 +78,7 @@ export interface GDSession {
   recordingDurationSeconds?: number;
   recordedAt?: string;
   recordingFileSize?: number;
+  collegeCode?: string;
 }
 
 export interface FacultyLiveNote {

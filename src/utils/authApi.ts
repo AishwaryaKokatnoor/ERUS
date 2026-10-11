@@ -212,21 +212,39 @@ export function markSlotDeletedLocally(slotId: string) {
   } catch {}
 }
 
+export function normalizeClientCollegeCode(rawCode?: string): string {
+  if (!rawCode) return '';
+  const c = String(rawCode).trim().toUpperCase();
+  if (c === 'BMSIT2002' || c === 'BMSI' || c === 'BMS' || c.includes('BMSIT')) {
+    return 'BMSIT';
+  }
+  if (c === 'VIT2002') {
+    return 'VIT-2002';
+  }
+  return c;
+}
+
 export function getLocalSlots(collegeCode: string): any[] {
   try {
+    const targetCode = normalizeClientCollegeCode(collegeCode);
+    if (!targetCode) return [];
     const deleted = getDeletedSlotIds();
-    const raw = localStorage.getItem(`erus_college_slots_${collegeCode.toUpperCase()}`);
+    const raw = localStorage.getItem(`erus_college_slots_${targetCode}`);
     const list = raw ? JSON.parse(raw) : [];
     return (list || [])
-      .filter((s: any) => s && s.id && !deleted.has(s.id))
+      .filter((s: any) => {
+        if (!s || !s.id || deleted.has(s.id)) return false;
+        const sCode = normalizeClientCollegeCode(s.collegeCode || targetCode);
+        return sCode === targetCode;
+      })
       .map((s: any) => {
         const topic = s.topic ? String(s.topic).trim() : '';
         const numMatch = (s.slotName || '').match(/^(Slot\s+\d+)/i) || (s.id || '').match(/slot-.*?-(\d+)/i);
         const prefix = numMatch ? (numMatch[1].startsWith('Slot') ? numMatch[1] : `Slot ${numMatch[1]}`) : '';
         if (prefix && topic && !topic.toLowerCase().includes('pending') && !s.description?.includes('Waiting for College Admin to allot')) {
-          return { ...s, slotName: `${prefix}: ${topic}` };
+          return { ...s, collegeCode: targetCode, slotName: `${prefix}: ${topic}` };
         }
-        return s;
+        return { ...s, collegeCode: targetCode };
       });
   } catch {
     return [];
@@ -235,9 +253,17 @@ export function getLocalSlots(collegeCode: string): any[] {
 
 export function saveLocalSlots(collegeCode: string, slots: any[]) {
   try {
+    const targetCode = normalizeClientCollegeCode(collegeCode);
+    if (!targetCode) return;
     const deleted = getDeletedSlotIds();
-    const filtered = (slots || []).filter((s: any) => s && s.id && !deleted.has(s.id));
-    localStorage.setItem(`erus_college_slots_${collegeCode.toUpperCase()}`, JSON.stringify(filtered));
+    const filtered = (slots || [])
+      .filter((s: any) => {
+        if (!s || !s.id || deleted.has(s.id)) return false;
+        const sCode = normalizeClientCollegeCode(s.collegeCode || targetCode);
+        return sCode === targetCode;
+      })
+      .map((s: any) => ({ ...s, collegeCode: targetCode }));
+    localStorage.setItem(`erus_college_slots_${targetCode}`, JSON.stringify(filtered));
   } catch (e) {
     console.warn('Error saving local slots:', e);
   }
@@ -570,6 +596,12 @@ export function isFacultyAssignedToSlot(slot: any, user: any): boolean {
   if (user.role !== 'faculty') return true;
   if (!slot) return false;
 
+  const userCode = normalizeClientCollegeCode((user as any).collegeCode);
+  const slotCode = normalizeClientCollegeCode(slot.collegeCode);
+  if (userCode && slotCode && userCode !== slotCode) {
+    return false;
+  }
+
   const uId = String(user.id || '').trim().toLowerCase();
   const uFacultyId = String((user as any).facultyId || '').trim().toLowerCase();
   const uEmail = String(user.email || '').trim().toLowerCase();
@@ -579,6 +611,11 @@ export function isFacultyAssignedToSlot(slot: any, user: any): boolean {
   const slotFacultyEmail = String(slot.assignedFacultyEmail || slot.facultyEmail || '').trim().toLowerCase();
   const slotFacultyName = String(slot.assignedFacultyName || slot.facultyName || slot.faculty || '').trim().toLowerCase();
   const allottedFaculty = String(slot.allottedFaculty || '').trim().toLowerCase();
+
+  // If both slot and user have emails and they differ, do not match by generic facultyId/name
+  if (slotFacultyEmail && uEmail && slotFacultyEmail !== uEmail) {
+    return false;
+  }
 
   // 1. Direct identifier match
   if (slotFacultyId) {
@@ -636,6 +673,13 @@ export function isSlotAssignedToFaculty(slot: any): boolean {
 export function isStudentAssignedToSlot(slot: any, user: any): boolean {
   if (!user) return false;
   if (user.role !== 'student') return true;
+  if (!slot) return false;
+
+  const userCode = normalizeClientCollegeCode((user as any).collegeCode);
+  const slotCode = normalizeClientCollegeCode(slot.collegeCode);
+  if (userCode && slotCode && userCode !== slotCode) {
+    return false;
+  }
 
   const uId = String(user.id || '').trim().toLowerCase();
   const uStudentId = String((user as any).studentId || '').trim().toLowerCase();
@@ -647,18 +691,23 @@ export function isStudentAssignedToSlot(slot: any, user: any): boolean {
   if (Array.isArray(slot.students)) {
     const isEnrolled = slot.students.some((s: any) => {
       if (!s) return false;
+      const sCode = normalizeClientCollegeCode(s.collegeCode);
+      if (userCode && sCode && userCode !== sCode) return false;
+
       const sId = String(s.id || '').trim().toLowerCase();
       const sStudentId = String(s.studentId || '').trim().toLowerCase();
       const sEmail = String(s.email || '').trim().toLowerCase();
       const sName = String(s.name || '').trim().toLowerCase();
       const sRoll = String(s.rollNumber || '').trim().toLowerCase();
 
+      if (sEmail && uEmail && sEmail !== uEmail) return false;
+
       return (
         (uId && (sId === uId || sStudentId === uId)) ||
         (uStudentId && (sStudentId === uStudentId || sId === uStudentId)) ||
         (uEmail && sEmail === uEmail) ||
         (uRoll && sRoll === uRoll) ||
-        (uName && sName === uName)
+        (uName && sName === uName && (!sEmail || !uEmail || sEmail === uEmail))
       );
     });
     if (isEnrolled) return true;
@@ -694,6 +743,12 @@ export function hasStudentParticipatedInSlot(slot: any, user: any, reportHistory
   if (user.role !== 'student') return true;
   if (!slot) return false;
 
+  const userCode = normalizeClientCollegeCode((user as any).collegeCode);
+  const slotCode = normalizeClientCollegeCode(slot.collegeCode);
+  if (userCode && slotCode && userCode !== slotCode) {
+    return false;
+  }
+
   const uId = String(user.id || '').trim().toLowerCase();
   const uStudentId = String((user as any).studentId || '').trim().toLowerCase();
   const uEmail = String(user.email || '').trim().toLowerCase();
@@ -703,14 +758,10 @@ export function hasStudentParticipatedInSlot(slot: any, user: any, reportHistory
   const studentKey = user.id || (user as any).studentId || user.email || user.name || 'student';
   const effectiveHistory = reportHistory || getStudentReportHistory(studentKey);
 
-  // 1. Check if student has a recorded evaluation report for this slot or topic
+  // 1. Check if student has a recorded evaluation report for this exact slot
   if (Array.isArray(effectiveHistory)) {
     const hasReport = effectiveHistory.some((r) => {
-      const matchId = r.sessionId === slot.id || r.id === slot.id || (r as any).slotId === slot.id;
-      const sTopic = typeof slot.topic === 'string' ? slot.topic.trim().toLowerCase() : '';
-      const rTopic = typeof r?.topic === 'string' ? r.topic.trim().toLowerCase() : '';
-      const matchTopic = Boolean(sTopic && rTopic && sTopic === rTopic);
-      return matchId || matchTopic;
+      return r.sessionId === slot.id || r.id === slot.id || (r as any).slotId === slot.id;
     });
     if (hasReport) return true;
   }
@@ -722,18 +773,21 @@ export function hasStudentParticipatedInSlot(slot: any, user: any, reportHistory
   if (Array.isArray(slot.students)) {
     const stMatch = slot.students.find((s: any) => {
       if (!s) return false;
+      const sCode = normalizeClientCollegeCode(s.collegeCode);
+      if (userCode && sCode && userCode !== sCode) return false;
       if (s.isUser) return true;
       const sId = String(s.id || '').trim().toLowerCase();
       const sStudentId = String(s.studentId || '').trim().toLowerCase();
       const sEmail = String(s.email || '').trim().toLowerCase();
       const sName = String(s.name || '').trim().toLowerCase();
       const sRoll = String(s.rollNumber || '').trim().toLowerCase();
+      if (sEmail && uEmail && sEmail !== uEmail) return false;
       return (
         (uId && (sId === uId || sStudentId === uId)) ||
         (uStudentId && (sStudentId === uStudentId || sId === uStudentId)) ||
         (uEmail && sEmail === uEmail) ||
         (uRoll && sRoll === uRoll) ||
-        (uName && sName === uName)
+        (uName && sName === uName && (!sEmail || !uEmail || sEmail === uEmail))
       );
     });
     if (stMatch && isCompleted) return true;
@@ -768,8 +822,8 @@ export async function fetchStudentAssignedSlots(
   collegeCode: string = 'DIT',
   studentEmail?: string
 ): Promise<any[]> {
-  const raw = collegeCode.toUpperCase();
-  const code = raw === 'BMSIT2002' || raw === 'BMSI' || raw === 'BMS' || raw.includes('BMS') ? 'BMSIT' : raw;
+  const code = normalizeClientCollegeCode(collegeCode);
+  if (!code) return [];
   const deleted = getDeletedSlotIds();
   try {
     const url = `/api/college/slots?collegeCode=${encodeURIComponent(code)}&studentId=${encodeURIComponent(studentId)}&email=${encodeURIComponent(studentEmail || '')}&role=student`;
@@ -777,19 +831,26 @@ export async function fetchStudentAssignedSlots(
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.slots)) {
-        return data.slots.filter((s: any) => s && s.id && !deleted.has(s.id));
+        return data.slots
+          .filter((s: any) => s && s.id && !deleted.has(s.id) && normalizeClientCollegeCode(s.collegeCode || code) === code)
+          .map((s: any) => ({ ...s, collegeCode: code }));
       }
     }
   } catch (e) {
     console.warn('Error fetching student assigned slots:', e);
   }
   const allSlots = await fetchCollegeSlots(code);
-  return allSlots.filter((s) => !deleted.has(s.id) && (isSlotAssignedToFaculty(s) || isStudentAssignedToSlot(s, { id: studentId, email: studentEmail, role: 'student' })));
+  return allSlots.filter(
+    (s) =>
+      !deleted.has(s.id) &&
+      normalizeClientCollegeCode(s.collegeCode || code) === code &&
+      (isSlotAssignedToFaculty(s) || isStudentAssignedToSlot(s, { id: studentId, email: studentEmail, collegeCode: code, role: 'student' }))
+  );
 }
 
 export async function fetchCollegeSlots(collegeCode: string = 'DIT'): Promise<any[]> {
-  const raw = collegeCode.toUpperCase();
-  const code = raw === 'BMSIT2002' || raw === 'BMSI' || raw === 'BMS' || raw.includes('BMS') ? 'BMSIT' : raw;
+  const code = normalizeClientCollegeCode(collegeCode);
+  if (!code) return [];
   const deleted = getDeletedSlotIds();
   let backendSlots: any[] | null = null;
   try {
@@ -802,7 +863,9 @@ export async function fetchCollegeSlots(collegeCode: string = 'DIT'): Promise<an
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.slots)) {
-        backendSlots = data.slots.filter((s: any) => s && s.id && !deleted.has(s.id));
+        backendSlots = data.slots
+          .filter((s: any) => s && s.id && !deleted.has(s.id) && normalizeClientCollegeCode(s.collegeCode || code) === code)
+          .map((s: any) => ({ ...s, collegeCode: code }));
       }
     }
   } catch (e) {
@@ -1363,8 +1426,9 @@ export async function fetchFacultyAssignedSlots(
   facultyEmail?: string,
   facultyName?: string
 ): Promise<any[]> {
-  const raw = collegeCode.toUpperCase();
-  const code = raw === 'BMSIT2002' || raw === 'BMSI' || raw === 'BMS' || raw.includes('BMS') ? 'BMSIT' : raw;
+  const code = normalizeClientCollegeCode(collegeCode);
+  if (!code) return [];
+  const deleted = getDeletedSlotIds();
   try {
     const params = new URLSearchParams({
       facultyId,
@@ -1379,10 +1443,17 @@ export async function fetchFacultyAssignedSlots(
     if (timeoutId) clearTimeout(timeoutId);
     if (res.ok) {
       const data = await res.json();
-      if (data.success && Array.isArray(data.sessions) && data.sessions.length > 0) {
-        return data.sessions.filter((s: any) =>
-          isFacultyAssignedToSlot(s, { id: facultyId, facultyId, email: facultyEmail, name: facultyName, role: 'faculty' })
-        );
+      if (data.success && Array.isArray(data.sessions)) {
+        return data.sessions
+          .filter(
+            (s: any) =>
+              s &&
+              s.id &&
+              !deleted.has(s.id) &&
+              normalizeClientCollegeCode(s.collegeCode || code) === code &&
+              isFacultyAssignedToSlot(s, { id: facultyId, facultyId, email: facultyEmail, name: facultyName, collegeCode: code, role: 'faculty' })
+          )
+          .map((s: any) => ({ ...s, collegeCode: code }));
       }
     }
   } catch (e) {
@@ -1392,8 +1463,13 @@ export async function fetchFacultyAssignedSlots(
   // Fallback: load all college slots and filter for this faculty
   try {
     const allSlots = await fetchCollegeSlots(code);
-    return allSlots.filter((s: any) =>
-      isFacultyAssignedToSlot(s, { id: facultyId, facultyId, email: facultyEmail, name: facultyName, role: 'faculty' })
+    return allSlots.filter(
+      (s: any) =>
+        s &&
+        s.id &&
+        !deleted.has(s.id) &&
+        normalizeClientCollegeCode(s.collegeCode || code) === code &&
+        isFacultyAssignedToSlot(s, { id: facultyId, facultyId, email: facultyEmail, name: facultyName, collegeCode: code, role: 'faculty' })
     );
   } catch {
     return [];

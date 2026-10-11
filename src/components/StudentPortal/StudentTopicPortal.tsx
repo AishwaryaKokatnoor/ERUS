@@ -27,7 +27,7 @@ import {
 import { GDSession, Student } from '../../types/gd';
 import { AuthUser } from '../../types/auth';
 import { checkCanReviveSlot, formatSlotDate } from '../../utils/studentBooking';
-import { isStudentAssignedToSlot, isSlotAssignedToFaculty, hasStudentParticipatedInSlot } from '../../utils/authApi';
+import { isStudentAssignedToSlot, isSlotAssignedToFaculty, hasStudentParticipatedInSlot, normalizeClientCollegeCode } from '../../utils/authApi';
 
 interface StudentTopicPortalProps {
   availableSlots: GDSession[];
@@ -56,10 +56,17 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [reviveModalSlot, setReviveModalSlot] = useState<GDSession | null>(null);
 
-  // Institutional Policy: Students can view all slots that have an assigned faculty evaluator, or where they are specifically enrolled
+  // Institutional Policy: Students can view all slots of THEIR OWN COLLEGE that have an assigned faculty evaluator, or where they are specifically enrolled
   const assignedSlots = useMemo(() => {
     if (!currentUser || currentUser.role !== 'student') return availableSlots || [];
-    return (availableSlots || []).filter((s) => isSlotAssignedToFaculty(s) || isStudentAssignedToSlot(s, currentUser));
+    const userCollege = normalizeClientCollegeCode((currentUser as any).collegeCode || (currentUser as any).college || '');
+    return (availableSlots || []).filter((s) => {
+      const slotCollege = normalizeClientCollegeCode((s as any).collegeCode || '');
+      if (userCollege && slotCollege && slotCollege !== userCollege) {
+        return false;
+      }
+      return isSlotAssignedToFaculty(s) || isStudentAssignedToSlot(s, currentUser);
+    });
   }, [availableSlots, currentUser]);
 
   // Normalize map of { [topic]: slotId } for the student

@@ -187,7 +187,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
       ? slots
       : (availableSlots || []).filter((s) => {
           const sCode = (s.collegeCode || '').toUpperCase();
-          return sCode === collegeCode || !s.collegeCode;
+          return sCode === collegeCode;
         });
   const seenSlotIds = new Set<string>();
   const displaySlots = allRawSlots
