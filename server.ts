@@ -8480,7 +8480,7 @@ CRITICAL RULES:
 
         // Reserve an estimated spoken duration plus a small buffer so the
         // facilitator does not overlap the AI participant's voice.
-        const speechDurationMs = Math.max(12000, statement.split(/\\s+/).length * 450 + 2000);
+        const speechDurationMs = Math.max(18000, statement.split(/\\s+/).length * 800 + 4000);
         room.turnTimer = setTimeout(() => {
           room.turnTimer = undefined;
           if (room.status !== 'active' || room.currentSpeakerId !== aiParticipant.id) return;
