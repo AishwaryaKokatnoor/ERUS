@@ -7472,7 +7472,7 @@ const LIVE_ROOMS = new Map<string, LiveGDRoomState>();
 function getSlotCapacity(slotId: string) {
   for (const slots of Object.values(persistentState.slots)) {
     const slot = slots.find((s) => s.id === slotId);
-    if (slot) return Math.max(1, Number(slot.maxCapacity || 1));
+    if (slot) return Math.max(1, Number(slot.maxCapacity || 6));
   }
   return Math.max(1, Number((currentLiveSession as any)?.maxCapacity || 6));
 }
