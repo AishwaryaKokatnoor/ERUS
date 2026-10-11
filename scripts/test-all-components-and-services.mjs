@@ -1,7 +1,16 @@
 // Comprehensive End-to-End Component & Service Verification for ERUS
 import { io } from 'socket.io-client';
 
-const targetUrl = 'https://erus-production.up.railway.app';
+const targetUrl = process.env.ERUS_TEST_BASE_URL;
+if (!targetUrl) {
+  console.error('Set ERUS_TEST_BASE_URL to an explicit disposable test/staging server URL before running this write-capable suite.');
+  process.exit(1);
+}
+const target = new URL(targetUrl);
+if (target.hostname === 'erus-production.up.railway.app' && process.env.ERUS_ALLOW_PRODUCTION_TESTS !== 'true') {
+  console.error('Refusing to run write-capable integration tests against production. Set ERUS_ALLOW_PRODUCTION_TESTS=true only for an intentional production test.');
+  process.exit(1);
+}
 
 async function runComprehensiveVerification() {
   console.log('='.repeat(80));
