@@ -401,18 +401,16 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
           )}
 
           {(safeSession.status === 'completed' || safeSession.recordingUrl) && (
-            <div className="flex items-center gap-2 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800 p-1.5 rounded-xl shadow-2xs flex-wrap">
+            <div className="flex items-center gap-2">
               <button
                 onClick={async () => {
-                  const cachedUrl = null;
-                  let recUrl = safeSession.recordingUrl || cachedUrl;
+                  let recUrl = safeSession.recordingUrl;
                   if (!recUrl || recUrl.startsWith('blob:')) {
                     try {
                       const res = await fetch(`/api/sessions/${encodeURIComponent(safeSession.id)}/recording`);
                       const d = await res.json();
                       if (d.success && d.recordingUrl) {
                         recUrl = d.recordingUrl;
-                        /* persisted in MongoDB */
                       }
                     } catch {}
                   }
@@ -420,32 +418,24 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
                   setVideoError(false);
                   setShowVideoModal(true);
                 }}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-all shadow-xs cursor-pointer"
-                title="Watch full recorded video of this GD session"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition-all shadow-xs cursor-pointer"
+                title="Watch recorded video of this GD session"
               >
                 <Video className="w-3.5 h-3.5" />
-                <span>Watch Video</span>
+                <span>Watch Recording</span>
               </button>
               {safeSession.recordingUrl && !safeSession.recordingUrl.startsWith('blob:') && (
-                <>
-                  <audio
-                    controls
-                    preload="none"
-                    src={safeSession.recordingUrl}
-                    className="h-7 w-36 sm:w-44"
-                  />
-                  <a
-                    href={safeSession.recordingUrl}
-                    download={`GD-${safeSession.id}-Recording.webm`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold bg-purple-600 hover:bg-purple-700 text-white transition-all shadow-xs"
-                    title="Download recording of this GD (.webm)"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Download</span>
-                  </a>
-                </>
+                <a
+                  href={safeSession.recordingUrl}
+                  download={`GD-${safeSession.id}-Recording.webm`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-700 transition-all shadow-xs"
+                  title="Download recording (.webm)"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Download Media</span>
+                </a>
               )}
             </div>
           )}
@@ -586,40 +576,13 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
                                 setActiveVideoSlot(targetSlot);
                                 setShowVideoModal(true);
                               }}
-                              className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
-                              title="Watch full recorded video of this GD session"
+                              className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+                              title="Watch full recorded video and audio of this GD session"
                             >
                               <Video className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                              <span className="hidden sm:inline">Watch Video</span>
+                              <span>Recording</span>
                             </button>
                           )}
-
-                          {sl.recordingUrl && (
-                            <a
-                              href={sl.recordingUrl}
-                              download={`GD-${sl.id}-Recording.webm`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-teal-50 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800 hover:bg-teal-100 flex items-center gap-1 transition-all"
-                              title="Listen to or download full audio recording of this GD session"
-                            >
-                              <Volume2 className="w-3.5 h-3.5" />
-                              <span className="hidden sm:inline">Audio</span>
-                            </a>
-                          )}
-
-                          <button
-                            onClick={() => handleSelectSlotForDashboard(sl.id)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
-                              isSelected
-                                ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-400/40'
-                                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700'
-                            }`}
-                            title="View this slot overview and participants on dashboard"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                            <span>{isSelected ? 'Viewing' : 'View'}</span>
-                          </button>
 
                           {isCompleted && (
                             <button

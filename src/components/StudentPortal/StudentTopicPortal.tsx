@@ -467,7 +467,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {topicItem.completedSlotIdForTopic && (
+                      {topicItem.completedSlotIdForTopic ? (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -478,16 +478,18 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                               onEnterRoom(topicItem.completedSlotIdForTopic);
                             }
                           }}
-                          className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-[11px] flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                          className="px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
                         >
                           <FileText className="w-3.5 h-3.5" />
                           <span>View Assessment Report</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
                         </button>
+                      ) : (
+                        <div className="flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 group-hover:translate-x-1 transition-transform text-xs">
+                          <span>Explore Slots</span>
+                          <ChevronRight className="w-4 h-4" />
+                        </div>
                       )}
-                      <div className="flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 group-hover:translate-x-1 transition-transform text-xs">
-                        <span>Explore Slots</span>
-                        <ChevronRight className="w-4 h-4" />
-                      </div>
                     </div>
                   </div>
                 </div>

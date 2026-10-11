@@ -3866,62 +3866,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                     <FastForward className="w-5 h-5 text-indigo-300" />
                   </button>
 
-                  {/* Faculty Action: Prompt Facilitator Question */}
-                  {isFaculty && (
-                    <button
-                      id="faculty-probe-btn"
-                      onClick={() => requestAiIntervention('probing')}
-                      className="px-3.5 py-2.5 rounded-full font-semibold text-xs bg-indigo-600/90 hover:bg-indigo-600 text-white shadow-lg flex items-center gap-1.5 cursor-pointer transition-all border border-indigo-400/40"
-                      title="Direct AI Facilitator to Ask Probing Question to Room"
-                    >
-                      <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
-                      <span className="hidden sm:inline">Prompt Question</span>
-                    </button>
-                  )}
-
-                  {/* Faculty Start / Restart Action in Dock */}
-                  {canStartSession && (
-                    !isSessionActive ? (
-                      <button
-                        id="dock-start-gd-btn"
-                        onClick={() => {
-                          setSession((prev) => ({
-                            ...prev,
-                            status: 'active',
-                            startedAt: prev.startedAt || Date.now(),
-                          }));
-                          if (onStartSession) {
-                            onStartSession(session.id);
-                          }
-                          // Session start is handled by the authorized onStartSession callback.
-                          setTimeout(() => {
-                            handleInitiateOpeningSpeaker(true);
-                          }, 400);
-                        }}
-                        className="px-4 py-2.5 rounded-full font-bold text-xs bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/40 flex items-center gap-1.5 cursor-pointer transition-all animate-pulse"
-                        title="Start Group Discussion round"
-                      >
-                        <Play className="w-3.5 h-3.5 fill-white" />
-                        <span>Start Session</span>
-                      </button>
-                    ) : (
-                      <button
-                        id="dock-restart-gd-btn"
-                        onClick={() => {
-                          if (onStartSession) {
-                            onStartSession(session.id);
-                          }
-                          // Session start is handled by the authorized onStartSession callback.
-                        }}
-                        className="px-3.5 py-2.5 rounded-full font-semibold text-xs bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-600/50 shadow-lg flex items-center gap-1.5 cursor-pointer transition-all"
-                        title="Restart Group Discussion"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">Restart</span>
-                      </button>
-                    )
-                  )}
-
                   {/* 6. Leave / Finish GD Call (Red Pill Button) */}
                   <button
                     id="leave-call-btn"

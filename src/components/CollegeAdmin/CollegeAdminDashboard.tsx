@@ -1511,7 +1511,8 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                 </p>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+              {displaySlots.length > 0 && (
+                <div className="flex items-center gap-2 shrink-0 flex-wrap">
                 <button
                   type="button"
                   onClick={() => setIsScheduleSlotOpen(true)}
@@ -1542,6 +1543,7 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                   <span>Refresh Slots</span>
                 </button>
               </div>
+              )}
             </div>
           </div>
 
