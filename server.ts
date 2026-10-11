@@ -269,12 +269,11 @@ function recordUserActivity(user: { id: string; name?: string; email?: string; r
 }
 
 function loadPersistentState() {
-  // Local file storage (.erus_backend_state.json) is disabled; all state is persisted in MongoDB.
-  try {
-    if (fs.existsSync(PERSIST_FILE)) {
-      fs.unlinkSync(PERSIST_FILE);
-    }
-  } catch {}
+  // MongoDB is the primary store, but preserve legacy local state files for manual recovery.
+  // Never delete user data automatically during server startup.
+  if (fs.existsSync(PERSIST_FILE)) {
+    console.warn('[Persistence] Legacy local state file found and preserved for recovery:', PERSIST_FILE);
+  }
 }
 
 function savePersistentState() {
@@ -354,10 +353,7 @@ async function syncMongoDBWithPersistentState() {
     const dbColleges = await CollegeModel.find();
     if (dbColleges.length > 0) {
       for (const c of dbColleges) {
-        if (c.code === 'VIT2002' || ['DIT', 'IITB'].includes(c.code)) {
-          await CollegeModel.deleteOne({ _id: c._id }).catch(() => null);
-          continue;
-        }
+        // Do not delete records based on hard-coded legacy codes during routine sync.
         const normCode = normalizeCollegeCode(c.code);
         const mappedCol: BackendCollege = {
           id: c.id,
@@ -396,8 +392,7 @@ async function syncMongoDBWithPersistentState() {
       for (const u of dbUsers) {
         const uColCode = normalizeCollegeCode(u.collegeCode);
         if (u.role !== 'super_admin' && (!uColCode || !activeCollegeSet.has(uColCode))) {
-          await UserModel.deleteOne({ _id: u._id }).catch(() => null);
-          continue;
+          console.warn(`[MongoDB] User ${u.email} references missing college ${uColCode || '(empty)'}; preserving the user record.`);
         }
         const mappedUser: StoredAuthUser = {
           id: u.id,
@@ -2767,15 +2762,11 @@ app.get('/api/college/slots', async (req, res) => {
       const dbSlots = await GDSessionModel.find({ collegeCode: code }).maxTimeMS(2000);
       for (const s of dbSlots) {
         if (!s?.id || deletedSet.has(s.id)) {
-          if (s?.id && deletedSet.has(s.id)) {
-            deleteSlotFromMongoDB(s.id).catch(() => null);
-          }
+          // A tombstoned slot is hidden from the UI, but reads must never physically
+          // delete database records. This preserves history and enables recovery.
           continue;
         }
-        if (hadInitializedSlots && !slotMap.has(s.id)) {
-          deleteSlotFromMongoDB(s.id).catch(() => null);
-          continue;
-        }
+        // MongoDB slots missing from process memory are hydrated, not deleted.
         const existing = slotMap.get(s.id) || {};
         slotMap.set(s.id, {
           ...existing,
@@ -6457,7 +6448,9 @@ async function persistAssessmentReport(rawReport: any) {
   const wpmVal = report.wpm;
   const wpmLabel = report.wpmStatus;
 
-  // Persist to MongoDB (Sub-Table: assessment_reports)
+  // Persist to MongoDB (Sub-Table: assessment_reports). Do not silently claim
+  // success if both durable stores are unavailable.
+  let persistedDurably = false;
   if (isMongoConnected()) {
     try {
       const repId = report.id || `rep-${report.studentId}-${report.sessionId}`;
@@ -6492,6 +6485,7 @@ async function persistAssessmentReport(rawReport: any) {
         { upsert: true, new: true }
       );
       report.id = repId;
+      persistedDurably = true;
     } catch (e: any) {
       console.warn('[MongoDB] Failed to persist assessment report:', e.message);
     }
@@ -6512,10 +6506,15 @@ async function persistAssessmentReport(rawReport: any) {
       } else {
         await prisma.assessmentReport.create({ data: { id: report.id, ...data } });
       }
+      persistedDurably = true;
     } catch (e: any) { console.warn('[Database] Failed to persist assessment report:', e.message); }
   }
 
-  // In-memory persistence fallback
+  if (!persistedDurably) {
+    throw new Error('Assessment report was generated but could not be saved to a durable database. Please retry after database connectivity is restored.');
+  }
+
+  // In-memory cache of a report that has already been durably saved
   (persistentState as any).reports[memKeyById] = report;
   if (memKeyByName) {
     (persistentState as any).reports[memKeyByName] = report;
@@ -7962,7 +7961,8 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
   }
   if (room.status !== 'active') return;
   if (room.currentSpeakerId || room.currentSpeakerSocketId) return;
-  const isAnyPeerSpeaking = Array.from(room.peers.values()).some((p) => p.role === 'student' && (p.isSpeaking || p.micActive));
+  // micActive means the microphone is enabled, not that speech is occurring.
+  const isAnyPeerSpeaking = Array.from(room.peers.values()).some((p) => p.role === 'student' && p.isSpeaking);
   if (isAnyPeerSpeaking) return;
 
   const realStudents = Array.from(room.peers.values()).filter((p) => p.role === 'student');
@@ -7991,17 +7991,16 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
     .slice(lastFacilitatorIndex + 1)
     .filter((t) => !t.isFacilitator && (t.speakerId === completedUserId || t.speakerId === speakerPeer?.userId));
 
-  if (!isOpening && currentTurnTranscripts.length === 0) {
-    // Participant did not provide new speech transcript in this turn;
-    // do not re-analyze old statements or repeat prompts. Let discussion flow.
-    return;
-  }
-
+  const missingTurnTranscript = !isOpening && currentTurnTranscripts.length === 0;
   const spokenThought = currentTurnTranscripts.map((t) => t.text.trim()).join(' ');
 
+  // If transcription failed for this turn, advance to another participant with a neutral
+  // invitation. Never feed an older participant statement back into AI analysis.
   const utteranceClassification = isOpening
     ? { category: 'substantive' as const, cleanedThought: '' }
-    : classifyParticipantUtterance(spokenThought);
+    : missingTurnTranscript
+      ? { category: 'substantive' as const, cleanedThought: '' }
+      : classifyParticipantUtterance(spokenThought);
 
   if (isOpening) {
     room.openingStarted = true;
