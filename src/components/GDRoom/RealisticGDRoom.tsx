@@ -756,7 +756,45 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       });
     });
 
-    // 4. Also keep any persistent students from session.students who aren't already placed
+    // 4. Place server-authoritative AI participants into their assigned seats.
+    (rtcAiParticipants || []).forEach((participant: any) => {
+      if (!participant?.id) return;
+      const alreadyPlaced = Array.from(seatMap.values()).some((p) => p.id === participant.id);
+      if (alreadyPlaced) return;
+
+      let targetSeat = Number(participant.seatNumber);
+      if (!targetSeat || isNaN(targetSeat) || targetSeat < 1 || targetSeat > capacity || usedSeats.has(targetSeat)) {
+        targetSeat = 1;
+        while (targetSeat <= capacity && usedSeats.has(targetSeat)) targetSeat++;
+      }
+      if (targetSeat > capacity) return;
+      usedSeats.add(targetSeat);
+      seatMap.set(targetSeat, {
+        id: String(participant.id),
+        name: String(participant.name || `AI Participant ${targetSeat}`),
+        seatNumber: targetSeat,
+        college: String(participant.college || 'ERUS AI Participant'),
+        course: 'Group Discussion',
+        batch: 'AI Simulation',
+        avatar: String(participant.avatar || ''),
+        isUser: false,
+        isRealPeer: false,
+        isDemoAI: true,
+        isEmptySeat: false,
+        isSpeaking: session.currentSpeakerId === participant.id,
+        micActive: false,
+        cameraActive: false,
+        speakingTurns: Number(participant.speakingTurns || 0),
+        speakingDurationSeconds: Number(participant.speakingDurationSeconds || 0),
+        hasRaisedHand: false,
+        interruptionCount: 0,
+        questionsAnswered: 0,
+        questionsInitiated: 0,
+        sentiment: 'neutral',
+      });
+    });
+
+    // 5. Also keep any persistent students from session.students who aren't already placed
     const existingEnrolled = Array.isArray(session.students) ? session.students : [];
     existingEnrolled.forEach((st) => {
       if (
@@ -794,7 +832,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       }
     });
 
-    // 5. Fill remaining seats up to capacity as open/available desks
+    // 6. Fill remaining seats up to capacity as open/available desks
     for (let sn = 1; sn <= capacity; sn++) {
       if (!seatMap.has(sn)) {
         seatMap.set(sn, {
@@ -827,6 +865,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   }, [
     session.students,
     session.maxCapacity,
+    session.currentSpeakerId,
+    rtcAiParticipants,
     rtcPeers,
     rtcPeerStreams,
     rtcAssignedSeat,
