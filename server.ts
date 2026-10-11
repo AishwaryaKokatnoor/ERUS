@@ -6491,13 +6491,14 @@ async function persistAssessmentReport(rawReport: any) {
   const turns = report.speakingTurns;
   const wpmVal = report.wpm;
   const wpmLabel = report.wpmStatus;
+  const repId = report.id || `rep-${report.studentId}-${report.sessionId}`;
+  report.id = repId;
 
   // Persist to MongoDB (Sub-Table: assessment_reports). Do not silently claim
   // success if both durable stores are unavailable.
   let persistedDurably = false;
   if (isMongoConnected()) {
     try {
-      const repId = report.id || `rep-${report.studentId}-${report.sessionId}`;
       await AssessmentReportModel.findOneAndUpdate(
         { sessionId: report.sessionId, studentId: report.studentId },
         {
