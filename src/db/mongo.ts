@@ -521,53 +521,59 @@ export async function initMongoDBTablesAndSubTables(): Promise<void> {
   console.log('[MongoDB] ==========================================\n');
 
   try {
-    // 1. Purge legacy dummy mock records from database if present
-    const legacyDummyUserIds = ['ca-1', 'fac-1', 'fac-2', 's1', 's2', 's3'];
-    const legacyDummyEmails = [
-      'admin@dit.edu.in',
-      'sunita.rao@dit.edu.in',
-      'rajesh.verma@dit.edu.in',
-      'rahul.kumar@dit.edu.in',
-      'neha.gupta@dit.edu.in',
-      'aditya.singh@dit.edu.in',
-    ];
-    await UserModel.deleteMany({
-      $or: [{ id: { $in: legacyDummyUserIds } }, { email: { $in: legacyDummyEmails } }],
-    });
-
-    const legacyDummyCollegeCodes = ['DIT', 'IITB'];
-    await CollegeModel.deleteMany({
-      $or: [{ code: { $in: legacyDummyCollegeCodes } }, { id: { $in: ['col-1', 'col-2'] } }],
-    });
-
-    const legacyDummySessionIds = ['slot-dit-001', 'session-101', 'slot-teachers-1', 'slot-dit-0700'];
-    await GDSessionModel.deleteMany({
-      $or: [
-        { id: { $in: legacyDummySessionIds } },
-        { collegeCode: { $in: legacyDummyCollegeCodes } },
-        { assignedFacultyEmail: { $in: legacyDummyEmails } },
-      ],
-    });
-    await TranscriptEntryModel.deleteMany({
-      $or: [
-        { id: { $in: ['t-init-1', 't-init-2', 't-live-test-001'] } },
-        { speakerName: 'Rahul Kumar' },
-        { speakerId: { $in: legacyDummyUserIds } },
-      ],
-    });
-    await GDBookingModel.deleteMany({
-      $or: [
-        { id: { $in: ['b-s1-slot-dit-001', 'bk-s3-slot-teachers-1', 'bk-s1-slot-dit-0700'] } },
-        { studentId: { $in: legacyDummyUserIds } },
-      ],
-    });
-    await AssessmentReportModel.deleteMany({
-      $or: [
-        { id: { $in: ['rep-s1-session-101', 'rep-live-test-001'] } },
-        { studentName: 'Rahul Kumar' },
-        { studentId: { $in: legacyDummyUserIds } },
-      ],
-    });
+    // Destructive legacy cleanup is opt-in. Never delete user, college, slot, transcript,
+    // booking, or assessment records automatically during application startup.
+    if (process.env.ERUS_PURGE_LEGACY_DUMMY_DATA === 'true') {
+      // 1. Purge legacy dummy mock records from database if present
+      const legacyDummyUserIds = ['ca-1', 'fac-1', 'fac-2', 's1', 's2', 's3'];
+      const legacyDummyEmails = [
+        'admin@dit.edu.in',
+        'sunita.rao@dit.edu.in',
+        'rajesh.verma@dit.edu.in',
+        'rahul.kumar@dit.edu.in',
+        'neha.gupta@dit.edu.in',
+        'aditya.singh@dit.edu.in',
+      ];
+      await UserModel.deleteMany({
+        $or: [{ id: { $in: legacyDummyUserIds } }, { email: { $in: legacyDummyEmails } }],
+      });
+  
+      const legacyDummyCollegeCodes = ['DIT', 'IITB'];
+      await CollegeModel.deleteMany({
+        $or: [{ code: { $in: legacyDummyCollegeCodes } }, { id: { $in: ['col-1', 'col-2'] } }],
+      });
+  
+      const legacyDummySessionIds = ['slot-dit-001', 'session-101', 'slot-teachers-1', 'slot-dit-0700'];
+      await GDSessionModel.deleteMany({
+        $or: [
+          { id: { $in: legacyDummySessionIds } },
+          { collegeCode: { $in: legacyDummyCollegeCodes } },
+          { assignedFacultyEmail: { $in: legacyDummyEmails } },
+        ],
+      });
+      await TranscriptEntryModel.deleteMany({
+        $or: [
+          { id: { $in: ['t-init-1', 't-init-2', 't-live-test-001'] } },
+          { speakerName: 'Rahul Kumar' },
+          { speakerId: { $in: legacyDummyUserIds } },
+        ],
+      });
+      await GDBookingModel.deleteMany({
+        $or: [
+          { id: { $in: ['b-s1-slot-dit-001', 'bk-s3-slot-teachers-1', 'bk-s1-slot-dit-0700'] } },
+          { studentId: { $in: legacyDummyUserIds } },
+        ],
+      });
+      await AssessmentReportModel.deleteMany({
+        $or: [
+          { id: { $in: ['rep-s1-session-101', 'rep-live-test-001'] } },
+          { studentName: 'Rahul Kumar' },
+          { studentId: { $in: legacyDummyUserIds } },
+        ],
+      });
+    } else {
+      console.log('[MongoDB] Legacy data purge skipped (set ERUS_PURGE_LEGACY_DUMMY_DATA=true only for an intentional cleanup).');
+    }
 
     // 2. Ensure Super Admin account exists in users collection
     const superAdminExists = await UserModel.findOne({
