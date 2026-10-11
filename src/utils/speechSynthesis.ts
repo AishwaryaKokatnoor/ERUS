@@ -10,6 +10,7 @@ export interface VoicePersonaStudent {
 
 class RoomVoiceEngine {
   private isMuted: boolean = false;
+  private voiceUnlocked: boolean = false;
   private currentUtterance: SpeechSynthesisUtterance | null = null;
   private cachedVoices: SpeechSynthesisVoice[] = [];
   private activeUtterances: Set<SpeechSynthesisUtterance> = new Set();
@@ -51,6 +52,17 @@ class RoomVoiceEngine {
     if (typeof window === 'undefined') return;
     const unlock = () => {
       this.unlock();
+      if (this.voiceUnlocked || typeof window === 'undefined' || !window.speechSynthesis) return;
+
+      // Prime browser speech output during a user gesture so later socket-driven
+      // facilitator speech is not blocked by autoplay restrictions.
+      try {
+        const primer = new SpeechSynthesisUtterance(' ');
+        primer.volume = 0;
+        primer.rate = 10;
+        window.speechSynthesis.speak(primer);
+        this.voiceUnlocked = true;
+      } catch {}
     };
     window.addEventListener('click', unlock, { passive: true });
     window.addEventListener('touchstart', unlock, { passive: true });
