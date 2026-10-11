@@ -1058,7 +1058,61 @@ function GDAppContent() {
         return Boolean(sTopic && rTopic && sTopic === rTopic);
       });
 
-      // Fetch from /api/college/slots/:id/reports
+      const userStudent = updatedTargetStudents.find((s) => s.isUser) || updatedTargetStudents[0];
+
+      const applyReportAndState = (repObj: any) => {
+        if (repObj) {
+          userStudent.speakingDurationSeconds = repObj.speakingTimeSeconds ?? repObj.speakingDurationSeconds ?? userStudent.speakingDurationSeconds ?? 0;
+          userStudent.speakingTurns = repObj.speakingTurns ?? userStudent.speakingTurns ?? 0;
+          userStudent.interruptionCount = repObj.interruptions ?? repObj.interruptionCount ?? 0;
+          userStudent.questionsAnswered = repObj.questionsAnswered ?? 0;
+          userStudent.questionsInitiated = repObj.questionsInitiated ?? 0;
+        }
+
+        const slotForState: GDSession = { ...targetSlot, status: 'completed', students: updatedTargetStudents };
+        setSession(slotForState);
+        setAvailableSlots((prev) =>
+          prev.map((s) => (s.id === cleanSlotId ? { ...s, status: 'completed', students: updatedTargetStudents } : s))
+        );
+
+        const studentReport = repObj
+          ? { ...repObj }
+          : generateStudentReport(userStudent, targetSlot.topic, targetSlot.durationMinutes, undefined, cleanSlotId);
+        studentReport.sessionId = cleanSlotId;
+        studentReport.topic = targetSlot.topic || studentReport.topic;
+
+        // Auto-heal 0 marks if student spoke, has duration, or completed session
+        if (!studentReport.overallScore || studentReport.overallScore === 0) {
+          const rawDur = studentReport.speakingTimeSeconds ?? studentReport.speakingDurationSeconds ?? userStudent.speakingDurationSeconds ?? 0;
+          const dur = rawDur > 0 ? rawDur : 160;
+          const rawTurns = studentReport.speakingTurns || userStudent.speakingTurns || 0;
+          const trns = rawTurns > 0 ? rawTurns : Math.max(2, Math.round(dur / 45));
+          const { overallScore: calculated } = calculateStudentOverallScore({
+            seconds: dur,
+            turns: trns,
+            wpm: studentReport.wpm || 130,
+            hasCollab: trns >= 2,
+            hasLead: trns >= 3,
+          });
+          studentReport.overallScore = calculated;
+          studentReport.grade = calculated >= 90 ? 'Excellent' : calculated >= 75 ? 'Very Good' : calculated >= 60 ? 'Good' : calculated >= 40 ? 'Average' : 'Needs Improvement';
+          studentReport.skills = distributeRubricScores(calculated);
+          studentReport.speakingTimeSeconds = dur;
+          studentReport.speakingDurationSeconds = dur;
+          studentReport.speakingTurns = trns;
+          studentReport.speakingTimeFormatted = `${Math.floor(dur / 60)} min ${dur % 60} sec`;
+        }
+
+        setActiveReport(studentReport);
+        addReportToStudentHistory(studentReport);
+        setViewingStudentId(userStudent.id);
+      };
+
+      // 1. Immediately transition to report view so button feels 0ms instantaneous
+      applyReportAndState(foundReport);
+      setCurrentTab('report');
+
+      // 2. Asynchronously enrich from backend if available
       try {
         const res = await fetch(`/api/college/slots/${encodeURIComponent(cleanSlotId)}/reports`);
         const data = await res.json();
@@ -1067,18 +1121,18 @@ function GDAppContent() {
             (r: any) =>
               (r.studentId === currentUser.id ||
               r.studentId === (currentUser as any).studentId ||
-              (r.studentName && currentUser.name && r.studentName.toLowerCase() === currentUser.name.toLowerCase())) &&
-              (!targetSlot.topic || !r.topic || r.topic.toLowerCase() === targetSlot.topic.toLowerCase())
+              (r.studentName && currentUser.name && String(r.studentName || '').toLowerCase() === String(currentUser.name || '').toLowerCase())) &&
+              (!targetSlot.topic || !r.topic || String(r.topic || '').toLowerCase() === String(targetSlot.topic || '').toLowerCase())
           );
           if (matched) {
             foundReport = matched;
+            applyReportAndState(foundReport);
           }
         }
       } catch (err) {
         console.warn('Failed to fetch slot reports for student:', err);
       }
 
-      // If still not found, fetch from /api/student/reports
       if (!foundReport) {
         try {
           const sRes = await fetch(
@@ -1089,58 +1143,13 @@ function GDAppContent() {
             const matched = sData.reports.find((r: any) => !targetSlot.topic || r.topic === targetSlot.topic);
             if (matched) {
               foundReport = matched;
+              applyReportAndState(foundReport);
             }
           }
         } catch (err) {
           console.warn('Failed to fetch student reports directly:', err);
         }
       }
-
-      const userStudent = updatedTargetStudents.find((s) => s.isUser) || updatedTargetStudents[0];
-      if (foundReport) {
-        userStudent.speakingDurationSeconds = foundReport.speakingTimeSeconds ?? foundReport.speakingDurationSeconds ?? userStudent.speakingDurationSeconds ?? 0;
-        userStudent.speakingTurns = foundReport.speakingTurns ?? userStudent.speakingTurns ?? 0;
-        userStudent.interruptionCount = foundReport.interruptions ?? foundReport.interruptionCount ?? 0;
-        userStudent.questionsAnswered = foundReport.questionsAnswered ?? 0;
-        userStudent.questionsInitiated = foundReport.questionsInitiated ?? 0;
-      }
-
-      const slotForState: GDSession = { ...targetSlot, status: 'completed', students: updatedTargetStudents };
-      setSession(slotForState);
-      setAvailableSlots((prev) =>
-        prev.map((s) => (s.id === cleanSlotId ? { ...s, status: 'completed', students: updatedTargetStudents } : s))
-      );
-
-      const studentReport = foundReport || generateStudentReport(userStudent, targetSlot.topic, targetSlot.durationMinutes, undefined, cleanSlotId);
-      studentReport.sessionId = cleanSlotId;
-      studentReport.topic = targetSlot.topic || studentReport.topic;
-
-      // Auto-heal 0 marks if student spoke, has duration, or completed session
-      if (!studentReport.overallScore || studentReport.overallScore === 0) {
-        const rawDur = studentReport.speakingTimeSeconds ?? studentReport.speakingDurationSeconds ?? userStudent.speakingDurationSeconds ?? 0;
-        const dur = rawDur > 0 ? rawDur : 160;
-        const rawTurns = studentReport.speakingTurns || userStudent.speakingTurns || 0;
-        const trns = rawTurns > 0 ? rawTurns : Math.max(2, Math.round(dur / 45));
-        const { overallScore: calculated } = calculateStudentOverallScore({
-          seconds: dur,
-          turns: trns,
-          wpm: studentReport.wpm || 130,
-          hasCollab: trns >= 2,
-          hasLead: trns >= 3,
-        });
-        studentReport.overallScore = calculated;
-        studentReport.grade = calculated >= 90 ? 'Excellent' : calculated >= 75 ? 'Very Good' : calculated >= 60 ? 'Good' : calculated >= 40 ? 'Average' : 'Needs Improvement';
-        studentReport.skills = distributeRubricScores(calculated);
-        studentReport.speakingTimeSeconds = dur;
-        studentReport.speakingDurationSeconds = dur;
-        studentReport.speakingTurns = trns;
-        studentReport.speakingTimeFormatted = `${Math.floor(dur / 60)} min ${dur % 60} sec`;
-      }
-
-      setActiveReport(studentReport);
-      addReportToStudentHistory(studentReport);
-      setViewingStudentId(userStudent.id);
-      setCurrentTab('report');
     } else {
       const facultyStudents = (targetSlot.students || []).map((s) => ({ ...s, isUser: false }));
       const slotForState: GDSession = {
@@ -1636,7 +1645,20 @@ function GDAppContent() {
       {/* Top Main Navigation Header */}
       <Header
         currentTab={currentTab}
-        setCurrentTab={setCurrentTab}
+        setCurrentTab={(tab) => {
+          if (tab === 'report' && currentUser?.role === 'student') {
+            const target =
+              studentParticipatedSlots.find((s) => s.status === 'completed') ||
+              studentParticipatedSlots[0] ||
+              availableSlots.find((s) => s.status === 'completed' && (isSlotAssignedToFaculty(s) || isStudentAssignedToSlot(s, currentUser))) ||
+              (studentBookedSlotId ? availableSlots.find((s) => s.id === studentBookedSlotId) : null);
+            if (target) {
+              handleOpenAssessmentReport(target.id);
+              return;
+            }
+          }
+          setCurrentTab(tab);
+        }}
         session={session}
         voiceMuted={voiceMuted}
         setVoiceMuted={setVoiceMuted}
@@ -1673,7 +1695,18 @@ function GDAppContent() {
             onViewReport={(slotId) => {
               handleOpenAssessmentReport(slotId);
             }}
-            onViewJourneyProfile={() => setCurrentTab('report')}
+            onViewJourneyProfile={() => {
+              const target =
+                studentParticipatedSlots.find((s) => s.status === 'completed') ||
+                studentParticipatedSlots[0] ||
+                availableSlots.find((s) => s.status === 'completed' && (isSlotAssignedToFaculty(s) || isStudentAssignedToSlot(s, currentUser))) ||
+                (studentBookedSlotId ? availableSlots.find((s) => s.id === studentBookedSlotId) : null);
+              if (target) {
+                handleOpenAssessmentReport(target.id);
+              } else {
+                setCurrentTab('report');
+              }
+            }}
           />
         )}
 

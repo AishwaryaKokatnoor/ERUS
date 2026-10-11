@@ -930,10 +930,11 @@ export function useWebRTCRoom({
 
   // Broadcast spoken transcript to all room members
   const broadcastTranscript = useCallback((text: string, elapsedSeconds: number, transcriptId?: string) => {
-    if (socketRef.current && text.trim()) {
+    const cleanText = String(text || '').trim();
+    if (socketRef.current && cleanText) {
       socketRef.current.emit('peer-transcript', {
         slotId,
-        text: text.trim(),
+        text: cleanText,
         elapsedSeconds,
         transcriptId,
       });
@@ -956,8 +957,9 @@ export function useWebRTCRoom({
 
   // Broadcast Facilitator Speech (e.g. explain rules)
   const broadcastFacilitatorSpeech = useCallback((text: string, actionType?: string) => {
-    if (socketRef.current && text.trim()) {
-      socketRef.current.emit('broadcast-facilitator-speech', { slotId, text: text.trim(), actionType });
+    const cleanText = String(text || '').trim();
+    if (socketRef.current && cleanText) {
+      socketRef.current.emit('broadcast-facilitator-speech', { slotId, text: cleanText, actionType });
     }
   }, [slotId]);
 

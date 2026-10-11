@@ -243,8 +243,8 @@ export function isSlotSelectableForStudent(
  */
 export function formatSlotDate(dateStr?: string): string {
   if (!dateStr) return 'Today';
-  const trimmed = dateStr.trim();
-  if (trimmed.toLowerCase() === 'today') return 'Today';
+  const trimmed = String(dateStr || '').trim();
+  if (!trimmed || trimmed.toLowerCase() === 'today') return 'Today';
   try {
     const parts = trimmed.split('-');
     if (parts.length === 3) {

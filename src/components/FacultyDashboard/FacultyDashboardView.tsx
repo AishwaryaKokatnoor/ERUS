@@ -170,8 +170,9 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
 
     // 3. Add any real students from persistedReports that weren't in safeSession.students
     persistedReports.forEach((r) => {
-      if (!r.studentName || /^Seat\s+\d+$/i.test(r.studentName.trim()) || r.studentName === 'Available Desk' || r.college === 'Available Desk') return;
-      if (!result.some((s) => s.id === r.studentId || String(s.name).toLowerCase() === String(r.studentName).toLowerCase())) {
+      const rNameTrimmed = String(r?.studentName || '').trim();
+      if (!rNameTrimmed || /^Seat\s+\d+$/i.test(rNameTrimmed) || rNameTrimmed === 'Available Desk' || r.college === 'Available Desk') return;
+      if (!result.some((s) => s.id === r.studentId || String(s.name).toLowerCase() === rNameTrimmed.toLowerCase())) {
         result.push({
           id: r.studentId || `stu-${r.seatNumber || 1}`,
           name: r.studentName,

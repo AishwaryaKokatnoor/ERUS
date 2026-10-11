@@ -37,7 +37,7 @@ export class ErrorBoundary extends (React.Component as any) {
   private handleReset = () => {
     try {
       // Clear potentially corrupted session/slots storage
-      ['erus_available_slots', 'erus_available_slots_v9'].forEach((k) => {
+      ['erus_available_slots', 'erus_available_slots_v9', 'erus_current_tab', 'erus_active_slot_id'].forEach((k) => {
         try { localStorage.removeItem(k); } catch {}
       });
     } catch {}

@@ -38,7 +38,7 @@ export class FacilitatorQuestionTracker {
   }
 
   private normalize(text: string): string {
-    return text.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+    return String(text || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
   }
 
   private calculateOverlap(a: string, b: string): number {

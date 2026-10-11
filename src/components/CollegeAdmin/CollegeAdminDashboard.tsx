@@ -65,7 +65,7 @@ import { downloadCollegeAdminReport } from '../../utils/managementReports';
 
 export function cleanSlotName(name: string | undefined): string {
   if (!name) return '';
-  return name.replace(/\s*\(\d{1,2}:\d{2}\s*(?:AM|PM)\s*-\s*\d{1,2}:\d{2}\s*(?:AM|PM)\)/gi, '').trim();
+  return String(name || '').replace(/\s*\(\d{1,2}:\d{2}\s*(?:AM|PM)\s*-\s*\d{1,2}:\d{2}\s*(?:AM|PM)\)/gi, '').trim();
 }
 
 interface CollegeAdminDashboardProps {
@@ -341,7 +341,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
   // Slot Allotment & Regeneration Actions
   const handleOpenAllotModal = (slot: any) => {
     setAllottingSlot(slot);
-    const existingTopic = slot.topic || '';
+    const existingTopic = String(slot.topic || '');
     const cleanCurrentName = cleanSlotName(slot.slotName);
     const isTopicPending =
       !existingTopic ||
@@ -382,7 +382,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     e.preventDefault();
     if (!allottingSlot) return;
 
-    const chosenTopic = allotForm.topic.trim();
+    const chosenTopic = String(allotForm.topic || '').trim();
 
     if (!chosenTopic) {
       alert('Please enter a discussion topic.');
@@ -395,7 +395,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     }
 
     setIsSavingAllotment(true);
-    const chosenDescription = allotForm.description.trim() || `Autonomous AI evaluated discussion on "${chosenTopic}".`;
+    const chosenDescription = String(allotForm.description || '').trim() || `Autonomous AI evaluated discussion on "${chosenTopic}".`;
     const cleanBaseSlotName = cleanSlotName(allottingSlot.slotName) || `Slot`;
 
     // Extract base slot label (e.g. "Slot 1") so any previously stale topic in slotName is replaced
@@ -403,7 +403,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
                          (allottingSlot.id || '').match(/slot-.*?-(\d+)/i);
     const slotPrefix = slotNumMatch 
       ? (slotNumMatch[1].startsWith('Slot') ? slotNumMatch[1] : `Slot ${slotNumMatch[1]}`)
-      : (cleanBaseSlotName.split(':')[0].trim() || 'Slot');
+      : (String(cleanBaseSlotName.split(':')[0] || '').trim() || 'Slot');
 
     const newSlotName = `${slotPrefix}: ${chosenTopic}`;
 
@@ -521,9 +521,9 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
 
     const studentToAdd = {
       id: `s-${Date.now().toString().slice(-5)}`,
-      name: newStudent.name.trim(),
-      email: newStudent.email.trim(),
-      studentId: newStudent.studentId.trim() || `STU-${Date.now().toString().slice(-4)}`,
+      name: String(newStudent.name || '').trim(),
+      email: String(newStudent.email || '').trim(),
+      studentId: String(newStudent.studentId || '').trim() || `STU-${Date.now().toString().slice(-4)}`,
       course: newStudent.course,
       batch: newStudent.batch,
       seatNumber: assignedSeat,
@@ -615,14 +615,14 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
 
     const reader = new FileReader();
     reader.onload = (event) => {
-      const text = event.target?.result as string;
-      const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+      const text = String(event.target?.result || '');
+      const lines = text.split(/\r?\n/).filter((l) => String(l || '').trim().length > 0);
       if (lines.length <= 1) return;
 
       const parsed: any[] = [];
       const usedSeats = new Set(students.map((s) => Number(s.seatNumber)).filter(Boolean));
       for (let i = 1; i < lines.length; i++) {
-        const parts = lines[i].split(',').map((p) => p.trim());
+        const parts = lines[i].split(',').map((p) => String(p || '').trim());
         if (parts.length >= 2 && parts[0] && parts[1]) {
           let csvSeat = parseInt(parts[5], 10);
           if (!csvSeat || csvSeat < 1 || usedSeats.has(csvSeat)) {
@@ -1555,13 +1555,14 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {displaySlots.map((sl, idx) => {
               const cleanTitle = cleanSlotName(sl.slotName) || `Slot ${idx + 1}`;
+              const slTopicStr = String(sl.topic || '');
               const isTopicPending =
-                !sl.topic ||
-                sl.topic.trim() === '' ||
-                sl.topic.toLowerCase().includes('pending') ||
-                sl.topic === sl.slotName ||
-                sl.topic === cleanTitle ||
-                /^slot\s+\d+/i.test(sl.topic) ||
+                !slTopicStr ||
+                slTopicStr.trim() === '' ||
+                slTopicStr.toLowerCase().includes('pending') ||
+                slTopicStr === sl.slotName ||
+                slTopicStr === cleanTitle ||
+                /^slot\s+\d+/i.test(slTopicStr) ||
                 sl.description?.includes('Waiting for College Admin to allot');
 
               const isFacultyPending =

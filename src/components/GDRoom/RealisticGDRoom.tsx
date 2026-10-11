@@ -107,8 +107,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   const [activeTab, setActiveTab] = useState<'transcript' | 'rules' | 'analytics' | 'breakout'>('transcript');
   const deduplicatedTranscripts = useMemo(() => {
     return transcripts.filter((entry, idx, arr) => {
-      if (entry.isFacilitator) {
-        const firstIdx = arr.findIndex((t) => t.isFacilitator && t.text.trim() === entry.text.trim());
+      if (entry?.isFacilitator) {
+        const entryText = String(entry?.text || '').trim();
+        const firstIdx = arr.findIndex((t) => t?.isFacilitator && String(t?.text || '').trim() === entryText);
         return firstIdx === idx;
       }
       return true;
@@ -192,7 +193,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   };
 
   const handleSaveObservationNote = () => {
-    if (!noteContent.trim()) return;
+    const cleanNote = String(noteContent || '').trim();
+    if (!cleanNote) return;
     const targetStudent = activeDisplayStudents.find((s) => s.id === noteTargetStudentId) || (session?.students || []).find((s) => s.id === noteTargetStudentId) || activeDisplayStudents.find((s) => !s.isEmptySeat) || session?.students?.[0];
     if (!targetStudent) return;
     const newNote: FacultyLiveNote = {
@@ -203,7 +205,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       seatNumber: targetStudent.seatNumber,
       timestamp: noteTimestamp || formatElapsedClock(elapsedSeconds),
       timestampSeconds: elapsedSeconds,
-      note: noteContent.trim(),
+      note: cleanNote,
       tag: noteTag,
       facultyName: currentUser?.name || session.assignedFacultyName || 'Faculty Evaluator',
       createdAt: Date.now(),
@@ -361,9 +363,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
     onFacilitatorIntervention: (intervention) => {
       hasInitiatedOpeningRef.current = true;
+      const intText = String(intervention?.text || '').trim();
       setTranscripts((prev) => {
-        if (prev.some((t) => t.id === intervention.transcript.id || (t.isFacilitator && t.text.trim() === intervention.text.trim()))) return prev;
-        return [...prev, intervention.transcript];
+        if (prev.some((t) => t.id === intervention?.transcript?.id || (t.isFacilitator && String(t.text || '').trim() === intText))) return prev;
+        return intervention?.transcript ? [...prev, intervention.transcript] : prev;
       });
 
       // Suppress AI facilitator ONLY if a human participant is actively speaking live right now (and not a deadlock intervention)
@@ -975,7 +978,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       speechPauseTimerRef.current = null;
     }
 
-    const textToCommit = (forcedText || liveTranscriptRef.current || liveSpeechTranscript).trim();
+    const textToCommit = String(forcedText || liveTranscriptRef.current || liveSpeechTranscript || '').trim();
     if (!textToCommit) return;
 
     // Reset live buffers
@@ -1037,8 +1040,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                     body: JSON.stringify({ audioBase64: base64Audio, mimeType: mime }),
                   });
                   const d = await res.json();
-                  if (d.success && d.text && d.text.trim()) {
-                    commitLiveSpeechToRoom(d.text.trim());
+                  const cleanText = String(d?.text || '').trim();
+                  if (d.success && cleanText) {
+                    commitLiveSpeechToRoom(cleanText);
                   }
                 } catch (err) {
                   console.warn('Fallback transcription fetch notice:', err);
@@ -1147,9 +1151,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           }
 
           if (finalTranscript) {
-            liveTranscriptRef.current = (liveTranscriptRef.current + ' ' + finalTranscript).trim();
+            liveTranscriptRef.current = String((liveTranscriptRef.current || '') + ' ' + finalTranscript).trim();
           }
-          const currentSpoken = (liveTranscriptRef.current + ' ' + interimTranscript).trim();
+          const currentSpoken = String((liveTranscriptRef.current || '') + ' ' + interimTranscript).trim();
           setLiveSpeechTranscript(currentSpoken);
 
           // Mark speaker active on floor
@@ -1281,7 +1285,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         clearTimeout(speechPauseTimerRef.current);
         speechPauseTimerRef.current = null;
       }
-      const pendingSpeech = (liveTranscriptRef.current || liveSpeechTranscript).trim();
+      const pendingSpeech = String(liveTranscriptRef.current || liveSpeechTranscript || '').trim();
       if (pendingSpeech) {
         commitLiveSpeechToRoom(pendingSpeech);
       }
@@ -1375,7 +1379,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       clearTimeout(speechPauseTimerRef.current);
       speechPauseTimerRef.current = null;
     }
-    const pendingSpeech = (liveTranscriptRef.current || liveSpeechTranscript).trim();
+    const pendingSpeech = String(liveTranscriptRef.current || liveSpeechTranscript || '').trim();
     if (pendingSpeech) {
       commitLiveSpeechToRoom(pendingSpeech);
     }
@@ -1406,10 +1410,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       return;
     }
 
+    const safeSpeechText = String(text || '');
     setIsAiProcessing(true);
     setSession((prev) => ({
       ...prev,
-      facilitatorSpeech: text,
+      facilitatorSpeech: safeSpeechText,
       facilitatorAction: actionType,
       isFacilitatorSpeaking: true,
       currentPhase: phase || prev.currentPhase,
@@ -1429,19 +1434,20 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       isFacilitator: true,
       timestamp: `${mins}:${secs}`,
       timestampSeconds: elapsedSeconds,
-      text,
+      text: safeSpeechText,
       type: phase === 'intro' ? 'intro' : phase === 'conclusion' ? 'conclusion' : 'moderation',
       sentiment: 'positive',
     };
 
+    const trimmedSpeechText = safeSpeechText.trim();
     setTranscripts((prev) => {
-      if (prev.some((t) => t.isFacilitator && t.text.trim() === text.trim())) {
+      if (prev.some((t) => t.isFacilitator && String(t.text || '').trim() === trimmedSpeechText)) {
         return prev;
       }
       return [...prev, entry];
     });
 
-    facilitatorVoice.speak(text, () => {
+    facilitatorVoice.speak(safeSpeechText, () => {
       setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
       setIsAiProcessing(false);
       if (onSpeechEnd) {
@@ -1505,7 +1511,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         startedAt: prev.startedAt || Date.now(),
       }));
     }
-    const text = (textToSend || liveSpeechTranscript).trim();
+    const text = String(textToSend || liveSpeechTranscript || '').trim();
     if (!text) return;
 
     // Reset live buffers
@@ -4039,8 +4045,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
-                    if (!typedStatement.trim()) return;
-                    handleSendUserStatement(typedStatement.trim());
+                    const cleanTyped = String(typedStatement || '').trim();
+                    if (!cleanTyped) return;
+                    handleSendUserStatement(cleanTyped);
                     setTypedStatement('');
                   }}
                   className="pt-2 mt-1 border-t border-slate-200 dark:border-slate-800 flex items-center gap-1.5"
@@ -4054,7 +4061,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   />
                   <button
                     type="submit"
-                    disabled={!typedStatement.trim()}
+                    disabled={!String(typedStatement || '').trim()}
                     className="py-1.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs disabled:opacity-40 cursor-pointer transition-all flex items-center gap-1 shadow-xs"
                     title="Send statement"
                   >
@@ -4381,7 +4388,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   <button
                     type="button"
                     onClick={handleSaveObservationNote}
-                    disabled={!noteContent.trim()}
+                    disabled={!String(noteContent || '').trim()}
                     className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-violet-600 hover:bg-violet-500 text-white shadow-md shadow-violet-600/20 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />

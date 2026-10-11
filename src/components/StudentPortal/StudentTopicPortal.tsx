@@ -75,12 +75,16 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
     return {};
   }, [bookedSlotsByTopic, bookedSlotId, assignedSlots]);
 
-  // Find all slots booked by this student across topics
+  // Find all slots booked or participated in by this student across topics
   const allBookedSlots = useMemo(() => {
     const bookedIds = new Set(Object.values(bookedSlotsMap));
-    if (bookedIds.size === 0) return [];
-    return assignedSlots.filter((s) => bookedIds.has(s.id));
-  }, [assignedSlots, bookedSlotsMap]);
+    return assignedSlots.filter(
+      (s) =>
+        bookedIds.has(s.id) ||
+        hasStudentParticipatedInSlot(s, currentUser) ||
+        (s.status === 'completed' && isStudentAssignedToSlot(s, currentUser))
+    );
+  }, [assignedSlots, bookedSlotsMap, currentUser]);
 
   // Backward-compatible single booked slot reference
   const bookedSlot = allBookedSlots[0] || null;
@@ -98,6 +102,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
       enrolledSeats: number;
       hasBookedSlot: boolean;
       bookedSlotIdForTopic?: string;
+      completedSlotIdForTopic?: string;
     }>();
 
     (assignedSlots || []).forEach((slot) => {
@@ -106,7 +111,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
       const maxCap = slot.maxCapacity || 15;
       const enrolled = slot.enrolledCount ?? slot.students?.length ?? 0;
       const bookedSlotForThisTopic = bookedSlotsMap[topicTitle];
-      const isBooked = Boolean(bookedSlotForThisTopic && bookedSlotForThisTopic === slot.id);
+      const isCompletedForStudent = slot.status === 'completed' || hasStudentParticipatedInSlot(slot, currentUser);
 
       if (!existing) {
         topicMap.set(topicTitle, {
@@ -121,8 +126,9 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
           }] : [],
           totalSeats: maxCap,
           enrolledSeats: enrolled,
-          hasBookedSlot: Boolean(bookedSlotForThisTopic),
-          bookedSlotIdForTopic: bookedSlotForThisTopic,
+          hasBookedSlot: Boolean(bookedSlotForThisTopic || isCompletedForStudent),
+          bookedSlotIdForTopic: bookedSlotForThisTopic || (isCompletedForStudent ? slot.id : undefined),
+          completedSlotIdForTopic: isCompletedForStudent ? slot.id : undefined,
         });
       } else {
         existing.slots.push(slot);
@@ -131,6 +137,13 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
         if (bookedSlotForThisTopic) {
           existing.hasBookedSlot = true;
           existing.bookedSlotIdForTopic = bookedSlotForThisTopic;
+        }
+        if (isCompletedForStudent && !existing.completedSlotIdForTopic) {
+          existing.hasBookedSlot = true;
+          existing.completedSlotIdForTopic = slot.id;
+          if (!existing.bookedSlotIdForTopic) {
+            existing.bookedSlotIdForTopic = slot.id;
+          }
         }
         if (slot.assignedFacultyName && !existing.facultyList.some((f) => f.name === slot.assignedFacultyName)) {
           existing.facultyList.push({
@@ -142,7 +155,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
     });
 
     return Array.from(topicMap.values());
-  }, [assignedSlots, bookedSlotsMap]);
+  }, [assignedSlots, bookedSlotsMap, currentUser]);
 
   // Filter topics by search query
   const filteredTopics = useMemo(() => {
@@ -440,15 +453,34 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                   </div>
 
                   {/* Footer Row: Capacity Meter & Action Arrow */}
-                  <div className="mt-5 pt-3.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
+                  <div className="mt-5 pt-3.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 text-xs flex-wrap">
                     <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400 text-[11px] font-medium">
                       <Users className="w-3.5 h-3.5 text-teal-500" />
                       <span>{openSeats} seats open across {topicItem.slots.length} batches</span>
                     </div>
 
-                    <div className="flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 group-hover:translate-x-1 transition-transform text-xs">
-                      <span>Explore Slots</span>
-                      <ChevronRight className="w-4 h-4" />
+                    <div className="flex items-center gap-2">
+                      {topicItem.completedSlotIdForTopic && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (onViewReport && topicItem.completedSlotIdForTopic) {
+                              onViewReport(topicItem.completedSlotIdForTopic);
+                            } else if (topicItem.completedSlotIdForTopic) {
+                              onEnterRoom(topicItem.completedSlotIdForTopic);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-[11px] flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          <span>View Assessment Report</span>
+                        </button>
+                      )}
+                      <div className="flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 group-hover:translate-x-1 transition-transform text-xs">
+                        <span>Explore Slots</span>
+                        <ChevronRight className="w-4 h-4" />
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -17,9 +17,10 @@ class RoomVoiceEngine {
   private isCurrentlySpeaking: boolean = false;
 
   private splitIntoSentences(text: string): string[] {
-    const rawMatches = text.match(/[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g);
-    if (!rawMatches || rawMatches.length === 0) return [text.trim()];
-    return rawMatches.map((s) => s.trim()).filter((s) => s.length > 0);
+    const safeText = String(text || '');
+    const rawMatches = safeText.match(/[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g);
+    if (!rawMatches || rawMatches.length === 0) return [safeText.trim()];
+    return rawMatches.map((s) => String(s || '').trim()).filter((s) => s.length > 0);
   }
 
   constructor() {
@@ -244,7 +245,8 @@ class RoomVoiceEngine {
   }
 
   public speakAsFacilitator(text: string, onEnd?: () => void) {
-    if (this.isMuted || typeof window === 'undefined' || !window.speechSynthesis || !text?.trim()) {
+    const cleanText = String(text || '').trim();
+    if (this.isMuted || typeof window === 'undefined' || !window.speechSynthesis || !cleanText) {
       if (onEnd) onEnd();
       return;
     }
@@ -257,7 +259,7 @@ class RoomVoiceEngine {
         window.speechSynthesis.cancel();
       }
 
-      const sentences = this.splitIntoSentences(text.trim());
+      const sentences = this.splitIntoSentences(cleanText);
       if (sentences.length === 0) {
         if (onEnd) onEnd();
         return;
@@ -384,7 +386,8 @@ class RoomVoiceEngine {
 
   // Multi-Persona Peer Student Speech in Indian English Accent
   public speakAsStudent(student: VoicePersonaStudent, text: string, onEnd?: () => void) {
-    if (this.isMuted || typeof window === 'undefined' || !window.speechSynthesis || !text?.trim()) {
+    const cleanText = String(text || '').trim();
+    if (this.isMuted || typeof window === 'undefined' || !window.speechSynthesis || !cleanText) {
       if (onEnd) onEnd();
       return;
     }
@@ -404,7 +407,7 @@ class RoomVoiceEngine {
             window.speechSynthesis.resume();
           }
 
-          const utterance = new SpeechSynthesisUtterance(text.trim());
+          const utterance = new SpeechSynthesisUtterance(cleanText);
           utterance.volume = 1.0;
 
           const femaleNames = [
