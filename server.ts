@@ -6407,17 +6407,26 @@ function ensureHealthyReport(report: any): any {
     : `${Math.floor(durationSec / 60)} min ${durationSec % 60} sec`;
 
   const feedback = report.feedback || report.aiSummary || '';
+  const hasSpeechEvidence = durationSec > 0 || turns > 0;
   const isZeroSpeechFeedback = !feedback || feedback.toLowerCase().includes('no student speech was captured');
   const healthyFeedback = isZeroSpeechFeedback
-    ? (score >= 75 ? 'Candidate demonstrated active participation, structured arguments, and constructive group engagement.' : 'Candidate contributed to the discussion with foundational viewpoints. Continued practice will strengthen articulation.')
+    ? (hasSpeechEvidence
+        ? (score >= 75
+            ? 'Candidate demonstrated active participation and structured arguments based on the captured discussion evidence.'
+            : 'Candidate contributed to the discussion. Continued practice can strengthen articulation and reasoning.')
+        : 'No student speech was captured for this session, so speaking performance could not be assessed.')
     : feedback;
 
   const rawStrengths = Array.isArray(report.strengths) ? report.strengths : (report.strengths ? String(report.strengths).split('; ').filter(Boolean) : []);
   const rawImprovements = Array.isArray(report.areasForImprovement || report.improvements) ? (report.areasForImprovement || report.improvements) : (report.improvements ? String(report.improvements).split('; ').filter(Boolean) : []);
 
-  const strengths = rawStrengths.length > 0 ? rawStrengths : ['Clear vocabulary and articulation', 'Constructive participation in group discussion'];
-  const improvements = rawImprovements.length > 0 ? rawImprovements : ['Substantiate arguments with concrete case examples', 'Take initiative during transition points'];
-  const aiRecommendations = Array.isArray(report.aiRecommendations) && report.aiRecommendations.length > 0 ? report.aiRecommendations : ['Practice timed syntheses of multi-perspective debates.'];
+  const strengths = rawStrengths.length > 0 ? rawStrengths : (hasSpeechEvidence ? ['Clear vocabulary and articulation', 'Constructive participation in group discussion'] : []);
+  const improvements = rawImprovements.length > 0 ? rawImprovements : (hasSpeechEvidence
+    ? ['Substantiate arguments with concrete case examples', 'Take initiative during transition points']
+    : ['Check microphone and transcription permissions before the next GD.']);
+  const aiRecommendations = Array.isArray(report.aiRecommendations) && report.aiRecommendations.length > 0
+    ? report.aiRecommendations
+    : ['Practice timed syntheses of multi-perspective debates.'];
 
   return {
     ...report,
@@ -6440,7 +6449,9 @@ function ensureHealthyReport(report: any): any {
 }
 
 async function persistAssessmentReport(rawReport: any) {
-  if (!rawReport?.sessionId) return rawReport;
+  if (!rawReport?.sessionId || !rawReport?.studentId) {
+    throw new Error('Assessment report requires both sessionId and studentId.');
+  }
 
   const report = ensureHealthyReport(rawReport);
   if (!(persistentState as any).reports) (persistentState as any).reports = {};
