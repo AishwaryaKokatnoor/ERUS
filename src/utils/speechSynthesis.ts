@@ -63,6 +63,12 @@ class RoomVoiceEngine {
       if (window.speechSynthesis.paused) {
         window.speechSynthesis.resume();
       }
+      // Prime audio thread on user interaction
+      if (!this.isCurrentlySpeaking && !window.speechSynthesis.speaking) {
+        const u = new SpeechSynthesisUtterance(' ');
+        u.volume = 0.01;
+        window.speechSynthesis.speak(u);
+      }
       this.refreshVoices();
     } catch {}
   }

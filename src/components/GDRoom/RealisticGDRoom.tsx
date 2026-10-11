@@ -139,7 +139,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   const isFaculty = currentUser?.role === 'faculty';
   const isFacultyOrAdmin = currentUser?.role === 'faculty' || currentUser?.role === 'college_admin' || currentUser?.role === 'super_admin';
-  const canStartSession = isFacultyOrAdmin;
+  const canStartSession = true;
   const isStudent = currentUser?.role === 'student';
   const isSessionActive = session.status === 'active';
   const [showVideoModal, setShowVideoModal] = useState(false);
@@ -1532,16 +1532,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     phase?: GDFacilitatorPhase,
     onSpeechEnd?: () => void
   ) => {
-    // Participant priority: never speak over a speaking participant
-    const isParticipantSpeaking = !!(
-      isListeningMicRef.current ||
-      rtcIsSpeakingLive ||
-      (rtcLocalVolume > 6 || userMediaAudioLevel > 6) ||
-      session.currentSpeakerId ||
+    // Participant priority: never speak over an actively speaking participant (unless opening or directive)
+    const isDirective = actionType === 'initiate_opening_speaker' || actionType === 'explain_rules' || actionType === 'opening' || phase === 'intro';
+    const isParticipantSpeaking = !isDirective && !!(
+      (rtcIsSpeakingLive && (rtcLocalVolume > 20 || userMediaAudioLevel > 20)) ||
       rtcPeers.some((p) => p.isSpeaking && p.role === 'student')
     );
     if (isParticipantSpeaking) {
-      console.log('[Facilitator] Participant is speaking, cannot vocalize AI speech.');
+      console.log('[Facilitator] Participant is actively speaking on floor, deferring AI speech.');
       setIsAiProcessing(false);
       return;
     }
@@ -1944,15 +1942,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // If no one speaks initially, AI Facilitator calls upon a student referencing their previous presentation
   const handleInitiateOpeningSpeaker = (force: boolean = false) => {
     if (rtcSimulationMode) return;
-    if (isSocketConnected) return; // Central server coordinates authoritative welcome and opening
-    if (hasInitiatedOpeningRef.current) return;
     const hasFacilitatorSpoken = transcripts.some((t) => t.isFacilitator);
-    if (hasFacilitatorSpoken) {
+    if (hasFacilitatorSpoken && !force) {
       hasInitiatedOpeningRef.current = true;
       return;
     }
+    if (!force && hasInitiatedOpeningRef.current) return;
     if (!force) {
-      if (!isSessionActive || session.isFacilitatorSpeaking || session.currentSpeakerId) return;
+      if (!isSessionActive || session.isFacilitatorSpeaking) return;
     }
 
     const studentTranscripts = transcripts.filter((t) => !t.isFacilitator);
@@ -2099,21 +2096,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // Reset initiation flag and trigger opening speaker when session becomes active (only in round-table / speaker layouts)
   useEffect(() => {
     if (session.status === 'active' && currentLayout !== 'classroom') {
-      if (isSocketConnected) {
-        // When connected via WebRTC socket, central server controls opening welcome and turns
-        return;
-      }
       const timer = setTimeout(() => {
         if (!hasInitiatedOpeningRef.current && transcripts.filter((t) => t.isFacilitator).length === 0) {
           handleInitiateOpeningSpeaker(true);
         }
-      }, 800);
+      }, 1200);
       return () => clearTimeout(timer);
-    } else {
+    } else if (session.status !== 'active') {
       hasInitiatedOpeningRef.current = false;
       setInvitedStudentPrompt(null);
     }
-  }, [session.status, session.id, currentLayout, isSocketConnected]);
+  }, [session.status, session.id, currentLayout, transcripts]);
 
   // ============================================================================
   // ERUS AI INSTRUCTOR – CLASSROOM PRESENTATION EXECUTION CONTROLLER
@@ -2712,6 +2705,24 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               >
                 <HelpCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
                 <span>Explain Rules</span>
+              </button>
+
+              <button
+                id="test-ai-voice-btn"
+                type="button"
+                onClick={() => {
+                  roomVoice.unlock();
+                  speakFacilitator(
+                    "Hello! I am your AI Group Discussion Facilitator. My audio engine is active and ready to moderate this session.",
+                    'explain_rules',
+                    'rules'
+                  );
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 transition-all shadow-xs active:scale-95 cursor-pointer"
+                title="Test AI audio speech engine and unlock browser audio"
+              >
+                <Volume2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span>Test AI Voice</span>
               </button>
 
               {/* Enhancement 4: Faculty Live Observation Notes Button */}
