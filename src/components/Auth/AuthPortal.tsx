@@ -146,33 +146,37 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3 relative">
-          {/* Top Role Switcher Menu Button */}
+          {/* Top Role Switcher 3-line Hamburger Menu Button */}
           <div className="relative" ref={menuRef}>
             <button
               type="button"
               onClick={() => setIsMenuOpen((prev) => !prev)}
-              className="flex items-center gap-2 sm:gap-2.5 px-3 sm:px-3.5 py-2 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-all shadow-xs cursor-pointer group ring-1 ring-slate-900/5 dark:ring-white/5"
+              className="flex items-center gap-2 sm:gap-2.5 px-3 py-2 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-all shadow-xs cursor-pointer group ring-1 ring-slate-900/5 dark:ring-white/5"
               aria-expanded={isMenuOpen}
-              aria-label="Switch portal role"
+              aria-label="Toggle portal role menu"
+              title="Menu - Select Portal Role"
             >
-              <div className={`w-6 h-6 rounded-lg bg-gradient-to-br ${currentRole.gradient} flex items-center justify-center text-white shadow-xs shrink-0`}>
-                <CurrentIcon className="w-3.5 h-3.5" />
+              {/* 3 lines menu icon (hamburger) */}
+              <div className="w-5 h-5 flex flex-col justify-center items-center gap-1 shrink-0 text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                <span className={`h-0.5 w-4 bg-current rounded-full transition-transform duration-200 ${isMenuOpen ? 'rotate-45 translate-y-1.5' : ''}`} />
+                <span className={`h-0.5 w-4 bg-current rounded-full transition-opacity duration-200 ${isMenuOpen ? 'opacity-0' : ''}`} />
+                <span className={`h-0.5 w-4 bg-current rounded-full transition-transform duration-200 ${isMenuOpen ? '-rotate-45 -translate-y-1.5' : ''}`} />
               </div>
-              <div className="text-left hidden sm:block">
-                <div className="text-[9px] uppercase tracking-wider font-extrabold text-slate-400 dark:text-slate-500 leading-none">
-                  Portal Role
+
+              {/* Current Role Indicator */}
+              <div className="flex items-center gap-2 text-left">
+                <div className={`w-5 h-5 rounded-md bg-gradient-to-br ${currentRole.gradient} flex items-center justify-center text-white shadow-xs shrink-0`}>
+                  <CurrentIcon className="w-3 h-3" />
                 </div>
-                <div className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                  <span>{currentRole.label}</span>
+                <div className="hidden sm:flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                    {currentRole.label}
+                  </span>
                   <span className={`text-[9px] font-semibold px-1.5 py-0.2 rounded border ${currentRole.badgeColor}`}>
                     {currentRole.badge}
                   </span>
                 </div>
               </div>
-              <span className="sm:hidden text-xs font-bold text-slate-800 dark:text-slate-200">
-                {currentRole.label}
-              </span>
-              <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${isMenuOpen ? 'rotate-180 text-indigo-600 dark:text-indigo-400' : 'group-hover:text-slate-600 dark:group-hover:text-slate-300'}`} />
             </button>
 
             {/* Dropdown Menu Popup (Spacious, Untruncated, & Modern) */}
