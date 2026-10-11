@@ -8421,7 +8421,9 @@ CRITICAL RULES:
           transcript: aiTranscript,
         });
 
-        const speechDurationMs = Math.max(4500, statement.split(/\\s+/).length * 360);
+        // Match the browser speech engine's safety estimate so the next
+        // facilitator prompt cannot overlap a still-speaking AI participant.
+        const speechDurationMs = Math.max(18000, statement.split(/\\s+/).length * 800 + 4000);
         room.turnTimer = setTimeout(() => {
           room.turnTimer = undefined;
           if (room.status !== 'active' || room.currentSpeakerId !== aiParticipant.id) return;
