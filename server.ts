@@ -8217,6 +8217,10 @@ CRITICAL RULES:
       type: isOpening ? 'intro' : 'intervention',
       sentiment: 'neutral',
     };
+    // Track every facilitator invitation, not only deadlock questions, so subsequent probes can
+    // avoid reusing the same question themes within this room.
+    if (!room.askedQuestions) room.askedQuestions = new Set<string>();
+    room.askedQuestions.add(invitation);
     room.transcripts.push(transcript);
     persistTranscriptToMongoDB(transcript);
     const invWordCount = invitation.split(/\s+/).filter(Boolean).length;
