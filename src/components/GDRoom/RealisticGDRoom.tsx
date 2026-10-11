@@ -895,9 +895,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         console.warn('[GD Room] Recording upload on exit failed:', recErr);
       }
     }
-    if (isFaculty) {
-      rtcFinishSession();
-    }
+    // Session completion and report persistence are handled by the authorized onFinishSession callback.
     onFinishSession();
   }, [gdRecorder, session.slotId, session.id, isFaculty, rtcFinishSession, onFinishSession]);
 
@@ -2608,7 +2606,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                     if (onStartSession) {
                       onStartSession(session.id);
                     }
-                    rtcStartSession();
+                    // Session start is handled by the authorized onStartSession callback.
                     setTimeout(() => {
                       handleInitiateOpeningSpeaker(true);
                     }, 400);
@@ -2627,7 +2625,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                     if (onStartSession) {
                       onStartSession(session.id);
                     }
-                    rtcStartSession();
+                    // Session start is handled by the authorized onStartSession callback.
                   }}
                   className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-600 text-white shadow-md transition-all active:scale-95 cursor-pointer border border-emerald-500/50"
                   title="Restart discussion from beginning and deliver opening speech"
@@ -3772,7 +3770,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                           if (onStartSession) {
                             onStartSession(session.id);
                           }
-                          rtcStartSession();
+                          // Session start is handled by the authorized onStartSession callback.
                           setTimeout(() => {
                             handleInitiateOpeningSpeaker(true);
                           }, 400);
@@ -3790,7 +3788,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                           if (onStartSession) {
                             onStartSession(session.id);
                           }
-                          rtcStartSession();
+                          // Session start is handled by the authorized onStartSession callback.
                         }}
                         className="px-3.5 py-2.5 rounded-full font-semibold text-xs bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-600/50 shadow-lg flex items-center gap-1.5 cursor-pointer transition-all"
                         title="Restart Group Discussion"
