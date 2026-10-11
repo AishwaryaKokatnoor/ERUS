@@ -410,7 +410,7 @@ export function generateStudentReport(
     questionsAnswered: student.questionsAnswered || 0,
     questionsInitiated: student.questionsInitiated || 0,
     wpm,
-    wpmStatus: wpm === 0 ? 'No Speech' : wpm < 115 ? 'Too Slow' : wpm > 165 ? 'Too Fast' : 'Optimal',
+    wpmStatus: wpm === 0 ? 'Too Slow' : wpm < 115 ? 'Too Slow' : wpm > 165 ? 'Too Fast' : 'Optimal',
     fillerWordsCount: fillerCount,
     fillerWordsBreakdown: (isSameSession && baseReport?.fillerWordsBreakdown) || [
       { word: 'like', count: Math.min(1, fillerCount) },

@@ -19,13 +19,12 @@ import {
   INITIAL_SESSION, 
   INITIAL_SLOTS, 
   INITIAL_TRANSCRIPTS, 
-  SAMPLE_REPORT_RAHUL,
   generateStudentReport,
   generateSlotParticipants,
   distributeRubricScores,
   calculateStudentOverallScore
 } from './data/mockGDData';
-import { addReportToStudentHistory } from './utils/studentReportHistory';
+import { addReportToStudentHistory, getStudentReportHistory } from './utils/studentReportHistory';
 import { facilitatorVoice } from './utils/speechSynthesis';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { 
@@ -119,10 +118,7 @@ function GDAppContent() {
     return collegeFiltered;
   }, [availableSlots, currentUser, userCollegeCode]);
 
-  const [elapsedSeconds, setElapsedSeconds] = useState<number>(() => {
-    const slots = loadInitialSlots();
-    return slots[0]?.status === 'active' ? 315 : 0;
-  });
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
   const [initialReportTab, setInitialReportTab] = useState<'single' | 'comparison' | 'journey'>('single');
   const { theme } = useTheme();

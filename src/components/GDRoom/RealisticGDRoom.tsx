@@ -351,8 +351,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       const intText = String(intervention?.text || '').trim();
       if (!intText) return;
 
-      // Record question in usedProbeQuestionsRef so local fallback never repeats it
-      usedProbeQuestionsRef.current.add(intText);
+      // Record question in sessionQuestionTracker so local fallback never repeats it
+      sessionQuestionTracker.recordQuestion(intText);
 
       setTranscripts((prev) => {
         if (prev.some((t) => t.id === intervention?.transcript?.id || (t.isFacilitator && String(t.text || '').trim() === intText))) return prev;
@@ -643,6 +643,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         speakingTurns: sessionUserStudent?.speakingTurns || 0,
         speakingDurationSeconds: sessionUserStudent?.speakingDurationSeconds || 0,
         videoStream: videoStream,
+        hasRaisedHand: false,
+        interruptionCount: 0,
+        questionsAnswered: 0,
+        questionsInitiated: 0,
+        sentiment: 'neutral',
       });
     }
 
@@ -688,6 +693,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         speakingDurationSeconds: peer.speakingDurationSeconds || 0,
         volumeLevel: peer.volumeLevel || 0,
         videoStream: remoteStream,
+        hasRaisedHand: false,
+        interruptionCount: 0,
+        questionsAnswered: 0,
+        questionsInitiated: 0,
+        sentiment: 'neutral',
       });
     });
 
@@ -749,6 +759,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           speakingTurns: 0,
           speakingDurationSeconds: 0,
           videoStream: null,
+          hasRaisedHand: false,
+          interruptionCount: 0,
+          questionsAnswered: 0,
+          questionsInitiated: 0,
+          sentiment: 'neutral',
         });
       }
     }
@@ -777,7 +792,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // Runs on Faculty/Admin or active Student client so EVERY GD is recorded reliably
   const isRecordingClient = useMemo(() => {
     if (isFacultyOrAdmin) return true;
-    const hasFacultyInRoom = Array.from(rtcPeerStreams?.keys() || []).some((k) => k.toLowerCase().includes('faculty'));
+    const hasFacultyInRoom = Array.from(rtcPeerStreams?.keys() || []).some((k) => String(k).toLowerCase().includes('faculty'));
     if (hasFacultyInRoom) return false;
     return true;
   }, [isFacultyOrAdmin, rtcPeerStreams]);

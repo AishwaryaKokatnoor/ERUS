@@ -408,7 +408,7 @@ export function useWebRTCRoom({
           console.warn('[WebRTC audio analyser init warning]:', e);
         }
 
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const dataArray = new Uint8Array(analyserRef.current?.frequencyBinCount || 128);
 
         const checkVolume = () => {
           if (!analyserRef.current) return;

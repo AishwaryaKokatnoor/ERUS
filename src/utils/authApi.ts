@@ -998,14 +998,7 @@ export async function fetchAdminColleges(): Promise<any[]> {
     console.warn('Error fetching admin colleges from server:', e);
   }
 
-  // Fallback to local storage only if backend is unreachable
-  const localCustom = getLocalCustomColleges();
-  const map = new Map<string, any>();
-
-  DEFAULT_ADMIN_COLLEGES.forEach((c) => map.set(c.code.toUpperCase(), c));
-  localCustom.forEach((c) => map.set(c.code.toUpperCase(), { ...map.get(c.code.toUpperCase()), ...c }));
-
-  return Array.from(map.values());
+  return getLocalCustomColleges();
 }
 
 export async function registerNewCollege(payload: any) {

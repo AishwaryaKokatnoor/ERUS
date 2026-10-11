@@ -16,6 +16,7 @@ import {
   BookOpen,
   ChevronDown,
   ArrowRight,
+  ArrowLeft,
   Gauge,
   Activity,
   Edit3,
@@ -43,7 +44,7 @@ import { AuthUser } from '../../types/auth';
 import { generateStudentReport, distributeRubricScores, calculateStudentOverallScore } from '../../data/mockGDData';
 import { GDComparisonReport } from './GDComparisonReport';
 import { StudentGDJourneyProfile } from './StudentGDJourneyProfile';
-import { addReportToStudentHistory, getStudentReportHistory } from '../../utils/studentReportHistory';
+import { addReportToStudentHistory, getStudentReportHistory, getActiveReport } from '../../utils/studentReportHistory';
 import { getStudentBookedSlotsByTopic } from '../../utils/studentBooking';
 import { hasStudentParticipatedInSlot, isFacultyAssignedToSlot } from '../../utils/authApi';
 import confetti from 'canvas-confetti';
@@ -69,7 +70,7 @@ export function createEmptyReport(
     questionsAnswered: 0,
     questionsInitiated: 0,
     wpm: 0,
-    wpmStatus: 'No Speech',
+    wpmStatus: 'Too Slow',
     fillerWordsCount: 0,
     fillerWordsBreakdown: [],
     facultyEndorsement: {
@@ -353,27 +354,39 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
   // Check if student actually participated in the current session
   const hasParticipatedInCurrentSession = useMemo(() => {
     if (!isStudent) return true;
-    if (!session) return false;
-    if (session.status === 'completed') {
-      const studentKey = currentUser?.id || currentUser?.email || 'student';
-      const bookedTopics = getStudentBookedSlotsByTopic(studentKey);
-      if (
-        currentUser?.bookedSlotId === session.id ||
-        (bookedTopics && Object.values(bookedTopics).includes(session.id))
-      ) {
-        return true;
-      }
-      if (hasStudentParticipatedInSlot(session, currentUser, studentHistory)) {
-        return true;
-      }
-      if (studentParticipant) {
-        return true;
-      }
-      // If student is directly reviewing this completed session report
+    if (!session) return true;
+
+    // 1. If an active or initial report is provided for this student, always permit view
+    if (initialReport && (
+      initialReport.studentId === currentUser?.id ||
+      initialReport.studentId === (currentUser as any)?.studentId ||
+      (initialReport.studentName && currentUser?.name && String(initialReport.studentName).trim().toLowerCase() === String(currentUser.name).trim().toLowerCase()) ||
+      initialReport.sessionId === session.id
+    )) {
       return true;
     }
-    return hasStudentParticipatedInSlot(session, currentUser, studentHistory) || Boolean(studentParticipant && session.status === 'completed');
-  }, [isStudent, session, currentUser, studentHistory, studentParticipant]);
+
+    // 2. Check student bookings for this slot or topic
+    const studentKey = currentUser?.id || (currentUser as any)?.studentId || currentUser?.email || currentUser?.name || 'student';
+    const bookedTopics = getStudentBookedSlotsByTopic(studentKey);
+    if (
+      currentUser?.bookedSlotId === session.id ||
+      (bookedTopics && Object.values(bookedTopics).includes(session.id)) ||
+      (session.topic && bookedTopics && bookedTopics[session.topic.trim()] === session.id)
+    ) {
+      return true;
+    }
+
+    // 3. Check student participant list or history
+    if (studentParticipant) return true;
+    if (hasStudentParticipatedInSlot(session, currentUser, studentHistory)) return true;
+
+    // 4. If session is completed or student has any history for this session/topic
+    if (session.status === 'completed') return true;
+    if (studentHistory && studentHistory.some((r) => r.sessionId === session.id || (session.topic && r.topic === session.topic))) return true;
+
+    return false;
+  }, [isStudent, session, currentUser, studentHistory, studentParticipant, initialReport]);
 
   // Check if faculty is assigned to the current session
   const isFacultyAssignedToCurrentSession = useMemo(() => {
@@ -1067,8 +1080,8 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
               onClick={onBackToRoom}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md shadow-indigo-600/20 cursor-pointer"
             >
-              <span>{session.status === 'completed' ? 'Go to Active GD Room' : 'Back to GD Room'}</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back to Topics &amp; Slots</span>
             </button>
           ) : currentUser?.role === 'college_admin' ? (
             <button

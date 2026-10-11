@@ -1,4 +1,4 @@
-import nodemailer from 'nodemailer';
+import nodemailer, { type Transporter } from 'nodemailer';
 
 interface SendCredentialsParams {
   to: string;
@@ -20,11 +20,11 @@ interface SendResetOtpParams {
   expiresInMinutes?: number;
 }
 
-let cachedTransporter: nodemailer.Transporter | null = null;
+let cachedTransporter: Transporter | null = null;
 let cachedConfigKey = '';
 
 // Dynamically build transport based on latest environment variables
-export function getTransporter(): nodemailer.Transporter | null {
+export function getTransporter(): Transporter | null {
   const host = process.env.SMTP_HOST?.trim();
   const port = parseInt(process.env.SMTP_PORT || '587', 10);
   const user = (process.env.SMTP_USER || process.env.SMTP_EMAIL)?.trim();

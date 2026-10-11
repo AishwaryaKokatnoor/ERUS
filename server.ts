@@ -501,7 +501,7 @@ async function syncMongoDBWithPersistentState() {
         const rawStudents = (s as any).students || [];
         const resolvedRecordingUrl = (s as any).recordingUrl || savedRec?.recordingUrl || '';
         const resolvedRecordingDuration = (s as any).recordingDurationSeconds || savedRec?.durationSeconds || 0;
-        const resolvedRecordingSize = (s as any).recordingFileSize || savedRec?.fileSize || 0;
+        const resolvedRecordingSize = (s as any).recordingFileSize || (savedRec as any)?.fileSize || (savedRec as any)?.fileSizeBytes || 0;
         const resolvedRecordedAt = (s as any).recordedAt ? new Date((s as any).recordedAt).toISOString() : savedRec?.recordedAt || undefined;
         let slotItem: BackendCollegeSlotItem = {
           id: s.id,
@@ -533,7 +533,7 @@ async function syncMongoDBWithPersistentState() {
             recordingUrl: resolvedRecordingUrl,
             durationSeconds: resolvedRecordingDuration,
             fileSize: resolvedRecordingSize,
-            mimeType: savedRec?.mimeType || 'video/webm',
+            mimeType: (savedRec as any)?.mimeType || 'video/webm',
             recordedAt: resolvedRecordedAt || new Date().toISOString(),
           } as any;
         }
@@ -741,7 +741,7 @@ function ensureSlotParticipants(slot: BackendCollegeSlotItem, code: string): Bac
           batch: (stu as any).batch,
           college: stu.college,
           collegeCode: normCode,
-          avatar: stu.avatar || '',
+          avatar: (stu as any).avatar || '',
           isUser: false,
           micActive: false,
           isSpeaking: false,
@@ -1572,10 +1572,10 @@ app.post('/api/admin/colleges/:id/limit', async (req, res) => {
   savePersistentState();
 
   try {
-    io.emit('college-limit-updated', { collegeCode: col.code, studentLimit: limitNum, slots: newSlots });
+    io.emit('college-limit-updated', { collegeCode: col.code, studentLimit: limitNum, slots: newAdminSlots });
   } catch {}
 
-  res.json({ success: true, college: col, studentLimit: limitNum, slots: newSlots });
+  res.json({ success: true, college: col, studentLimit: limitNum, slots: newAdminSlots });
 });
 
 app.post('/api/admin/colleges/:id/send-credentials', async (req, res) => {
@@ -2591,12 +2591,15 @@ app.put(['/api/college/faculty/:id', '/api/college/faculty/:id/edit'], async (re
     if (
       slot.assignedFacultyId === oldFacultyId ||
       slot.assignedFacultyId === oldId ||
-      slot.facultyEmail?.toLowerCase() === oldEmail
+      (slot.assignedFacultyEmail && slot.assignedFacultyEmail.toLowerCase() === oldEmail) ||
+      ((slot as any).facultyEmail && String((slot as any).facultyEmail).toLowerCase() === oldEmail)
     ) {
-      if (faculty.name) slot.faculty = faculty.name;
-      if (faculty.name) slot.facultyName = faculty.name;
-      if (faculty.email) slot.facultyEmail = faculty.email;
+      if (faculty.name) slot.assignedFacultyName = faculty.name;
+      if (faculty.email) slot.assignedFacultyEmail = faculty.email;
       if (faculty.facultyId) slot.assignedFacultyId = faculty.facultyId;
+      (slot as any).faculty = faculty.name;
+      (slot as any).facultyName = faculty.name;
+      (slot as any).facultyEmail = faculty.email;
     }
   }
 

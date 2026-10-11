@@ -240,7 +240,14 @@ export function downloadFacultyReport(facultyName: string, reportType: 'class' |
 }
 
 // 4. STUDENT REPORTS
-export type StudentReportType = 'placement_readiness_cert' | 'comprehensive_audit' | 'competency_breakdown';
+export type StudentReportType = 
+  | 'placement_readiness_cert' 
+  | 'comprehensive_audit' 
+  | 'competency_breakdown'
+  | 'student_performance_profile'
+  | 'student_history_log'
+  | 'skill_radar_report'
+  | 'month_over_month_report';
 
 export function downloadStudentReport(reportType: StudentReportType, studentId?: string, studentName?: string) {
   const name = studentName || 'Candidate';
@@ -248,6 +255,7 @@ export function downloadStudentReport(reportType: StudentReportType, studentId?:
 
   switch (reportType) {
     case 'placement_readiness_cert':
+    case 'student_performance_profile':
       downloadCSVReport(`${name}_Placement_Readiness_Certificate`,
         ['Candidate Name', 'Student ID', 'Evaluation Status', 'Placement Qualification', 'Issued By'],
         [
@@ -257,6 +265,7 @@ export function downloadStudentReport(reportType: StudentReportType, studentId?:
       break;
 
     case 'comprehensive_audit':
+    case 'skill_radar_report':
       downloadCSVReport(`${name}_Comprehensive_GD_Audit`,
         ['Assessment Parameter', 'Standard Benchmark', 'Status'],
         [
@@ -270,6 +279,7 @@ export function downloadStudentReport(reportType: StudentReportType, studentId?:
       break;
 
     case 'competency_breakdown':
+    case 'month_over_month_report':
       downloadCSVReport(`${name}_Competency_Breakdown`,
         ['Competency Area', 'Weightage', 'Performance Level'],
         [
@@ -280,6 +290,15 @@ export function downloadStudentReport(reportType: StudentReportType, studentId?:
           ['Content Quality', '15%', 'Proficient'],
           ['Collaboration & Listening', '10%', 'Proficient'],
           ['Leadership & Moderation', '5%', 'Proficient'],
+        ]
+      );
+      break;
+
+    case 'student_history_log':
+      downloadCSVReport(`${name}_GD_History_Log`,
+        ['Candidate Name', 'Student ID', 'Session', 'Status', 'Date'],
+        [
+          [name, id, 'Group Discussion Session', 'Completed', new Date().toISOString().split('T')[0]],
         ]
       );
       break;

@@ -143,6 +143,7 @@ export interface StudentAssessmentReport {
   durationMinutes: number;
   speakingTimeFormatted: string;
   speakingTimeSeconds: number;
+  speakingDurationSeconds?: number;
   speakingTurns: number;
   interruptions: number;
   questionsAnswered: number;
@@ -176,6 +177,7 @@ export interface StudentAssessmentReport {
 
   overallScore: number; // 0-100 calculated by exact formula
   grade: GradeLevel;
+  percentile?: number;
   strengths: string[];
   areasForImprovement: string[];
   aiRecommendations: string[];

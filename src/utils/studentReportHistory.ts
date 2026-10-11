@@ -125,6 +125,14 @@ export function createBaselinePreviousReport(currentReport: StudentAssessmentRep
 const inMemoryReportHistory = new Map<string, StudentAssessmentReport[]>();
 let inMemoryActiveReport: StudentAssessmentReport | null = null;
 
+export function getActiveReport(): StudentAssessmentReport | null {
+  return inMemoryActiveReport;
+}
+
+export function setActiveReport(report: StudentAssessmentReport | null): void {
+  inMemoryActiveReport = report;
+}
+
 export function getStudentReportHistory(studentIdentifier: string, currentReport?: StudentAssessmentReport): StudentAssessmentReport[] {
   const key = getStorageKey(studentIdentifier);
   const existing = inMemoryReportHistory.get(key);
