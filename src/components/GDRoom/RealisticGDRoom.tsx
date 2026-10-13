@@ -3211,78 +3211,96 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             {/* Middle Stage: The 3 Layout Visibility Types */}
 
             {/* 1. ROUND TABLE LAYOUT (Dynamic Circular Table Sizing, Zero Empty Seats & Speaker-Centric Zoom) */}
-            {currentLayout === 'round_table' && (
-              <div className="relative z-10 my-4 flex-1 flex items-center justify-center overflow-x-auto py-12 sm:py-16 px-4 sm:px-8 scrollbar-thin scroll-smooth">
-                <div className={`relative flex items-center justify-center transition-all duration-500 mx-auto aspect-square ${
-                  filledStudents.length <= 4
-                    ? 'w-[440px] sm:w-[500px] max-w-full'
-                    : filledStudents.length <= 8
-                    ? 'w-[540px] sm:w-[620px] max-w-full'
-                    : 'w-[640px] sm:w-[740px] max-w-full'
-                }`}>
-                  
-                  {/* Central True Circular Conference Table */}
-                  <div className="absolute inset-16 sm:inset-20 rounded-full bg-gradient-to-b from-slate-100 via-slate-200 to-slate-300 dark:from-slate-800/90 dark:via-slate-850 dark:to-slate-900 border-4 border-slate-300 dark:border-slate-700/80 shadow-2xl flex flex-col items-center justify-center p-4">
-                    <div className="w-full h-full rounded-full bg-white/85 dark:bg-slate-950/70 border border-slate-300/80 dark:border-slate-700/50 flex flex-col items-center justify-center p-4 relative overflow-hidden shadow-inner text-center">
-                      <span className="text-[10px] uppercase font-mono tracking-widest text-slate-500 dark:text-slate-400 font-semibold">
-                        Round Table Conference ({filledStudents.length} {filledStudents.length === 1 ? 'Participant' : 'Participants'})
-                      </span>
-                      <p className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200 mt-1 line-clamp-2 max-w-[240px] sm:max-w-xs">
-                        {session.topic}
-                      </p>
-                      
-                      {/* Live Turn & Flow Indicator */}
-                      <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-900/80 border border-slate-300 dark:border-slate-700 text-[11px] text-slate-700 dark:text-slate-300">
-                        <Radio className="w-3 h-3 text-emerald-500 dark:text-emerald-400 animate-pulse" />
-                        <span>
-                          {session.currentSpeakerId 
-                            ? `Floor: ${filledStudents.find(s => s.id === session.currentSpeakerId)?.name || 'Participant'}` 
-                            : 'Floor: Open Discussion'}
+            {currentLayout === 'round_table' && (() => {
+              const count = filledStudents.length;
+              // Dynamic container diameter: scales smoothly with student count (4, 8, 12, or more)
+              // ensuring pods never overlap and the circle remains spacious and elegant.
+              const containerClass = 
+                count <= 4 
+                  ? 'w-[520px] sm:w-[580px] md:w-[620px]' 
+                  : count <= 6
+                  ? 'w-[620px] sm:w-[680px] md:w-[740px]'
+                  : count <= 8 
+                  ? 'w-[720px] sm:w-[800px] md:w-[860px]' 
+                  : count <= 12 
+                  ? 'w-[840px] sm:w-[920px] md:w-[980px]' 
+                  : 'w-[960px] sm:w-[1040px] md:w-[1100px]';
+
+              // Inner table inset: leaves enough perimeter clearance for pods
+              const innerTableInset = 
+                count <= 4 
+                  ? 'inset-20 sm:inset-24' 
+                  : count <= 8 
+                  ? 'inset-24 sm:inset-28' 
+                  : 'inset-28 sm:inset-32';
+
+              return (
+                <div className="relative z-10 my-4 flex-1 flex items-center justify-center overflow-x-auto py-12 sm:py-16 px-4 sm:px-8 scrollbar-thin scroll-smooth">
+                  <div className={`relative flex items-center justify-center transition-all duration-500 mx-auto aspect-square ${containerClass} max-w-none`}>
+                    
+                    {/* Central True Circular Conference Table */}
+                    <div className={`absolute ${innerTableInset} rounded-full bg-gradient-to-b from-slate-100 via-slate-200 to-slate-300 dark:from-slate-800/90 dark:via-slate-850 dark:to-slate-900 border-4 border-slate-300 dark:border-slate-700/80 shadow-2xl flex flex-col items-center justify-center p-4 transition-all duration-500`}>
+                      <div className="w-full h-full rounded-full bg-white/85 dark:bg-slate-950/70 border border-slate-300/80 dark:border-slate-700/50 flex flex-col items-center justify-center p-4 relative overflow-hidden shadow-inner text-center">
+                        <span className="text-[10px] sm:text-xs uppercase font-mono tracking-widest text-slate-500 dark:text-slate-400 font-semibold">
+                          Round Table Conference ({filledStudents.length} {filledStudents.length === 1 ? 'Participant' : 'Participants'})
                         </span>
-                      </div>
+                        <p className="text-xs sm:text-base font-bold text-slate-800 dark:text-slate-200 mt-1 line-clamp-2 max-w-[240px] sm:max-w-md">
+                          {session.topic}
+                        </p>
+                        
+                        {/* Live Turn & Flow Indicator */}
+                        <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-900/80 border border-slate-300 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-300 shadow-xs">
+                          <Radio className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400 animate-pulse" />
+                          <span className="font-medium">
+                            {session.currentSpeakerId 
+                              ? `Floor: ${filledStudents.find(s => s.id === session.currentSpeakerId)?.name || 'Participant'}` 
+                              : 'Floor: Open Discussion'}
+                          </span>
+                        </div>
 
-                      {/* Clean decorative circular table ring */}
-                      <div className="absolute inset-4 rounded-full border border-dashed border-indigo-200/60 dark:border-indigo-900/40 pointer-events-none" />
+                        {/* Clean decorative circular table ring */}
+                        <div className="absolute inset-4 rounded-full border border-dashed border-indigo-200/60 dark:border-indigo-900/40 pointer-events-none" />
+                      </div>
                     </div>
+
+                    {/* Seating Perimeter: Dynamic Filled Seats on True Circular Perimeter with Speaker-Centric Zoom */}
+                    {roundTablePositionedStudents.map(({ student, angle, zoomLevel }) => {
+                      const R = 43; // Uniform circular radius %
+                      const leftPct = 50 + R * Math.cos(angle);
+                      const topPct = 50 + R * Math.sin(angle);
+
+                      return (
+                        <div
+                          key={student.id}
+                          className="absolute transition-all duration-500 ease-out"
+                          style={{
+                            left: `${leftPct}%`,
+                            top: `${topPct}%`,
+                            transform: 'translate(-50%, -50%)',
+                            zIndex: zoomLevel === 'zoomed' ? 40 : zoomLevel === 'neighbor' ? 25 : 10,
+                          }}
+                        >
+                          <StudentPodCard 
+                            student={student} 
+                            isCurrentSpeaker={session.currentSpeakerId === student.id || student.isSpeaking}
+                            position={topPct < 50 ? 'top' : 'bottom'}
+                            zoomLevel={zoomLevel}
+                            isUserCameraOn={isCameraOn}
+                            videoStream={videoStream}
+                            audioLevel={audioLevel}
+                            isListeningMic={isListeningMic}
+                            isFaculty={isFaculty}
+                            onAddNote={handleOpenNoteModal}
+                            onEnlarge={handleToggleEnlargeStudent}
+                          />
+                        </div>
+                      );
+                    })}
+
                   </div>
-
-                  {/* Seating Perimeter: Dynamic Filled Seats on True Circular Perimeter with Speaker-Centric Zoom */}
-                  {roundTablePositionedStudents.map(({ student, angle, zoomLevel }) => {
-                    const R = 43; // Uniform circular radius %
-                    const leftPct = 50 + R * Math.cos(angle);
-                    const topPct = 50 + R * Math.sin(angle);
-
-                    return (
-                      <div
-                        key={student.id}
-                        className="absolute transition-all duration-500 ease-out"
-                        style={{
-                          left: `${leftPct}%`,
-                          top: `${topPct}%`,
-                          transform: 'translate(-50%, -50%)',
-                          zIndex: zoomLevel === 'zoomed' ? 30 : zoomLevel === 'neighbor' ? 20 : 10,
-                        }}
-                      >
-                        <StudentPodCard 
-                          student={student} 
-                          isCurrentSpeaker={session.currentSpeakerId === student.id || student.isSpeaking}
-                          position={topPct < 50 ? 'top' : 'bottom'}
-                          zoomLevel={zoomLevel}
-                          isUserCameraOn={isCameraOn}
-                          videoStream={videoStream}
-                          audioLevel={audioLevel}
-                          isListeningMic={isListeningMic}
-                          isFaculty={isFaculty}
-                          onAddNote={handleOpenNoteModal}
-                          onEnlarge={handleToggleEnlargeStudent}
-                        />
-                      </div>
-                    );
-                  })}
-
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* 2. SPEAKER IN MIDDLE OF ROUND TABLE LAYOUT */}
             {currentLayout === 'speaker_center' && (
@@ -5400,19 +5418,19 @@ export const StudentPodCard: React.FC<{
         student.isEmptySeat ? '' : 'cursor-pointer'
       } ${
         zoomLevel === 'zoomed'
-          ? 'scale-125 sm:scale-135 z-30 opacity-100 drop-shadow-2xl'
+          ? 'scale-110 sm:scale-120 z-40 opacity-100 drop-shadow-2xl'
           : zoomLevel === 'neighbor'
-          ? 'scale-100 z-20 opacity-100 drop-shadow-md'
+          ? 'scale-100 sm:scale-105 z-25 opacity-100 drop-shadow-md'
           : zoomLevel === 'dimmed'
-          ? 'scale-70 sm:scale-75 z-10 opacity-35 blur-[0.2px] hover:opacity-85 hover:scale-85 hover:blur-none'
+          ? 'scale-75 sm:scale-80 z-10 opacity-40 blur-[0.2px] hover:opacity-90 hover:scale-90 hover:blur-none'
           : isCurrentSpeaker
-          ? 'scale-115 z-20 opacity-100'
-          : 'scale-100 z-10 opacity-100'
+          ? 'scale-110 z-30 opacity-100 drop-shadow-lg'
+          : 'scale-95 sm:scale-100 z-15 opacity-100'
       }`}
     >
       
       {/* 1. Realistic Numbered Seat Placard (Pinned cleanly at top, in natural flex flow) */}
-      <div className={`mb-1 whitespace-nowrap px-1.5 sm:px-2 py-0.5 rounded-md text-[9px] font-bold font-mono shadow-xs uppercase tracking-wider transition-colors flex items-center gap-1 ${
+      <div className={`mb-1 whitespace-nowrap px-2 py-0.5 rounded-md text-[10px] font-bold font-mono shadow-xs uppercase tracking-wider transition-colors flex items-center gap-1 ${
         isZoomedSpeaker
           ? 'bg-emerald-600 text-white border border-emerald-300 shadow-emerald-500/40 ring-2 ring-emerald-400'
           : isUser 
@@ -5426,7 +5444,7 @@ export const StudentPodCard: React.FC<{
           : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700'
       }`}>
         <span>Seat {student.seatNumber}</span>
-        {isZoomedSpeaker && <span className="text-[8px] bg-white/25 px-1 rounded font-black tracking-wide">SPEAKER</span>}
+        {isZoomedSpeaker && <span className="text-[9px] bg-white/25 px-1 rounded font-black tracking-wide">🎙️ SPEAKER</span>}
         {isUser && !isZoomedSpeaker && <span className="text-[8px] bg-white/20 px-1 rounded">YOU</span>}
         {student.isRealPeer && !isUser && !isZoomedSpeaker && <span className="text-[8px] bg-emerald-400 text-emerald-950 px-1 rounded font-bold">LIVE</span>}
         {student.isEmptySeat && <span className="text-[8px] opacity-70">OPEN</span>}
@@ -5449,30 +5467,32 @@ export const StudentPodCard: React.FC<{
       <div className="relative">
         {/* Speaking Voice Waves Aura */}
         {(isCurrentSpeaker || isZoomedSpeaker) && (
-          <div className="absolute -inset-2.5 rounded-2xl bg-emerald-500/40 animate-pulse pointer-events-none" />
+          <div className="absolute -inset-3 rounded-2xl bg-emerald-500/35 animate-ping pointer-events-none" />
         )}
 
-        <div className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl overflow-hidden border-2 transition-all shadow-md relative bg-slate-900 ${
+        <div className={`rounded-2xl overflow-hidden border-2 transition-all shadow-md relative bg-slate-900 ${
+          isZoomedSpeaker
+            ? 'w-24 h-24 sm:w-32 sm:h-32 border-emerald-500 dark:border-emerald-400 ring-4 ring-emerald-500/60 shadow-emerald-500/50 shadow-2xl'
+            : zoomLevel === 'neighbor'
+            ? 'w-18 h-18 sm:w-22 sm:h-22 border-slate-300 dark:border-slate-700 ring-2 ring-indigo-400/40'
+            : 'w-16 h-16 sm:w-20 sm:h-20 border-slate-300 dark:border-slate-700'
+        } ${
           student.isEmptySeat
             ? 'border-dashed border-slate-300 dark:border-slate-700 bg-slate-100/60 dark:bg-slate-900/60 shadow-none'
-            : isZoomedSpeaker
-            ? 'border-emerald-500 dark:border-emerald-400 ring-4 ring-emerald-500/60 shadow-emerald-500/40 shadow-xl'
-            : isCurrentSpeaker 
-            ? 'border-indigo-500 dark:border-indigo-400 ring-2 ring-indigo-500/50 shadow-indigo-500/30' 
             : isUser 
             ? 'border-blue-500 dark:border-blue-500/80 ring-2 ring-blue-500/30' 
             : student.isRealPeer
             ? 'border-emerald-500 dark:border-emerald-400 ring-2 ring-emerald-500/30'
-            : 'border-slate-300 dark:border-slate-700'
+            : ''
         }`}>
           <StudentVideoFrame
             student={student}
-            isCurrentSpeaker={isCurrentSpeaker}
+            isCurrentSpeaker={isCurrentSpeaker || isZoomedSpeaker}
             isUserCameraOn={isUserCameraOn}
             videoStream={videoStream}
             audioLevel={audioLevel}
             isListeningMic={isListeningMic}
-            size="normal"
+            size={isZoomedSpeaker ? 'large' : 'normal'}
             isFaculty={isFaculty}
           />
 
@@ -5493,8 +5513,12 @@ export const StudentPodCard: React.FC<{
       </div>
 
       {/* 3. Student Name & Turns (Positioned cleanly below avatar with zero overlap) */}
-      <div className="text-center mt-1.5 max-w-[68px] sm:max-w-[85px]">
-        <p className={`text-[11px] sm:text-xs font-semibold truncate leading-tight ${
+      <div className={`text-center mt-1.5 ${isZoomedSpeaker ? 'max-w-[120px] sm:max-w-[140px]' : 'max-w-[80px] sm:max-w-[96px]'}`}>
+        <p className={`font-semibold truncate leading-tight ${
+          isZoomedSpeaker
+            ? 'text-xs sm:text-sm text-emerald-800 dark:text-emerald-300 font-bold'
+            : 'text-[11px] sm:text-xs'
+        } ${
           student.isEmptySeat
             ? 'text-slate-400 dark:text-slate-500 font-normal italic'
             : isUser 
@@ -5505,7 +5529,7 @@ export const StudentPodCard: React.FC<{
         }`}>
           {student.isEmptySeat ? 'Available' : student.name.split(' ')[0]}
         </p>
-        <span className="text-[9px] text-slate-500 dark:text-slate-400 font-mono block mt-0.5">
+        <span className={`font-mono block mt-0.5 ${isZoomedSpeaker ? 'text-[10px] text-emerald-700 dark:text-emerald-400 font-bold' : 'text-[9px] text-slate-500 dark:text-slate-400'}`}>
           {student.isEmptySeat ? 'Waiting...' : `${student.speakingTurns} turns`}
         </span>
       </div>
