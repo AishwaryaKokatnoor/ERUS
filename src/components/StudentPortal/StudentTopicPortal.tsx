@@ -538,8 +538,11 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {activeTopicObj.slots.map((slot, index) => {
-                  const maxCap = slot.maxCapacity || 15;
-                  const enrolled = slot.enrolledCount ?? slot.students?.length ?? 15;
+                  const isPresentation = slot.activityType === 'presentation';
+                  const maxCap = isPresentation ? 6 : (slot.maxCapacity || 15);
+                  const enrolled = isPresentation 
+                    ? Math.min(slot.enrolledCount ?? slot.students?.length ?? 6, 6)
+                    : (slot.enrolledCount ?? slot.students?.length ?? 15);
                   const isFull = enrolled >= maxCap;
                   const bookedSlotForThisTopic = bookedSlotsMap[activeTopicObj.topic];
                   const isThisBooked = Boolean(bookedSlotForThisTopic) && slot.id === bookedSlotForThisTopic;
@@ -567,7 +570,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                       <div className="space-y-3.5">
                         {/* Top: Slot Title & Status Badge */}
                         <div className="flex items-center justify-between gap-2">
-                          <span className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                          <span className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5 flex-wrap">
                             <span className={`w-2 h-2 rounded-full ${
                               isThisBooked 
                                 ? 'bg-emerald-500' 
@@ -575,11 +578,18 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                                 ? 'bg-slate-400' 
                                 : isFull 
                                 ? 'bg-rose-500' 
+                                : isPresentation
+                                ? 'bg-purple-500'
                                 : 'bg-indigo-500'
                             }`} />
                             <span className={isOtherSlotLocked ? 'line-through decoration-slate-400/60' : ''}>
                               {slot.slotName || `Slot ${index + 1}`}
                             </span>
+                            {isPresentation && (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 uppercase tracking-wider">
+                                Presentation • 6 Seats
+                              </span>
+                            )}
                           </span>
 
                           {isSlotCompleted ? (

@@ -464,6 +464,25 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
     ? userStudent.id
     : (targetStudentId || initialReport?.studentId || session?.students?.[0]?.id || userStudent.id || 's1');
 
+  const [sessionParticipants, setSessionParticipants] = useState<any[]>(() => {
+    const raw = Array.isArray(session?.students) ? session.students : [];
+    return raw.filter((s) => s && !s.isEmptySeat && s.college !== 'Available Desk' && !/^Seat\s+\d+$/i.test(s.name || ''));
+  });
+
+  useEffect(() => {
+    if (Array.isArray(session?.students) && session.students.length > 0) {
+      const valid = session.students.filter((s) => s && !s.isEmptySeat && s.college !== 'Available Desk' && !/^Seat\s+\d+$/i.test(s.name || ''));
+      if (valid.length > 0) {
+        setSessionParticipants((prev) => {
+          const map = new Map<string, any>();
+          prev.forEach((p) => map.set(p.id, p));
+          valid.forEach((v) => map.set(v.id, { ...map.get(v.id), ...v }));
+          return Array.from(map.values());
+        });
+      }
+    }
+  }, [session?.students]);
+
   const [selectedStudentId, setSelectedStudentId] = useState<string>(effectiveInitialStudentId);
   const [showVideoModal, setShowVideoModal] = useState(false);
   const [videoError, setVideoError] = useState(false);
@@ -568,10 +587,88 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
 
   // Load the persisted report and recordingUrl from backend (runs on mount and refresh regardless of transient session.status)
   useEffect(() => {
-    if (!currentUser?.id && !userStudent?.id) return;
     let cancelled = false;
     (async () => {
       try {
+        if (!isStudent) {
+          // Faculty or Admin loading session reports
+          const facultyId = (currentUser as any)?.facultyId || currentUser?.id || '';
+          let loadedReports: any[] = [];
+          let loadedParticipants: any[] = [];
+          if (session?.id) {
+            try {
+              const fRes = await fetch('/api/faculty/sessions/' + encodeURIComponent(session.id) + '/reports?facultyId=' + encodeURIComponent(facultyId));
+              if (fRes.ok) {
+                const fData = await fRes.json();
+                if (Array.isArray(fData.reports) && fData.reports.length > 0) {
+                  loadedReports = fData.reports;
+                }
+                if (Array.isArray(fData.participants)) {
+                  loadedParticipants = fData.participants;
+                }
+              }
+            } catch {}
+
+            if (loadedReports.length === 0) {
+              try {
+                const sRes = await fetch('/api/college/slots/' + encodeURIComponent(session.id) + '/reports');
+                if (sRes.ok) {
+                  const sData = await sRes.json();
+                  if (Array.isArray(sData.reports) && sData.reports.length > 0) {
+                    loadedReports = sData.reports;
+                  }
+                  if (Array.isArray(sData.participants)) {
+                    loadedParticipants = sData.participants;
+                  }
+                }
+              } catch {}
+            }
+          }
+
+          if (cancelled) return;
+
+          // Merge participants
+          if (loadedParticipants.length > 0 || loadedReports.length > 0) {
+            setSessionParticipants((prev) => {
+              const map = new Map<string, any>();
+              prev.forEach((p) => map.set(p.id, p));
+              loadedParticipants.forEach((p) => {
+                if (p && !p.isEmptySeat && p.college !== 'Available Desk' && !/^Seat\s+\d+$/i.test(p.name || '')) {
+                  map.set(p.id, p);
+                }
+              });
+              loadedReports.forEach((r, idx) => {
+                if (r?.studentId && !map.has(r.studentId)) {
+                  map.set(r.studentId, {
+                    id: r.studentId,
+                    name: r.studentName || `Participant ${idx + 1}`,
+                    seatNumber: r.seatNumber || (map.size + 1),
+                    college: r.college || session?.collegeCode || 'Institution',
+                    course: r.course || 'Engineering',
+                    batch: r.batch || '2024-2028',
+                    isUser: false,
+                    speakingDurationSeconds: r.speakingDurationSeconds || r.speakingTimeSeconds || 0,
+                    speakingTurns: r.speakingTurns || 0,
+                  });
+                }
+              });
+              return Array.from(map.values());
+            });
+          }
+
+          if (loadedReports.length > 0) {
+            const targetId = targetStudentId || selectedStudentId;
+            const matched = loadedReports.find((r) => r.studentId === targetId || (r.studentName && targetId && r.studentName.toLowerCase() === targetId.toLowerCase())) || loadedReports[0];
+            if (matched) {
+              setSelectedStudentId(matched.studentId);
+              setCurrentReport((prev) => normalizeReport({ ...prev, ...matched }, prev));
+            }
+          }
+          return;
+        }
+
+        // Student loading their own report
+        if (!currentUser?.id && !userStudent?.id) return;
         const studentQuery = encodeURIComponent(currentUser?.id || userStudent?.id || '');
         const nameQuery = encodeURIComponent(currentUser?.name || userStudent?.name || '');
         const sessionQuery = encodeURIComponent(session?.id || '');
@@ -579,7 +676,6 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
         const res = await fetch(`/api/student/reports?studentId=${studentQuery}&studentName=${nameQuery}&sessionId=${sessionQuery}&topic=${topicQuery}`);
         const data = await res.json().catch(() => ({}));
         const allReports: any[] = Array.isArray(data.reports) ? data.reports : [];
-        // Prefer non-zero matching report first
         let persisted =
           allReports.find(
             (r: any) =>
@@ -597,7 +693,6 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
             if (slotData.success) {
               if (slotData.slot?.recordingUrl) {
                 if (session) session.recordingUrl = slotData.slot.recordingUrl;
-                /* persisted in MongoDB */
                 setCurrentReport((prev) => ({ ...prev, recordingUrl: slotData.slot.recordingUrl }));
               }
               if (Array.isArray(slotData.reports)) {
@@ -625,7 +720,6 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
           } catch {}
         }
 
-        // Also proactively check session recording endpoint if recordingUrl is still empty
         const targetSlotId = session?.id || currentReport?.sessionId;
         if (targetSlotId) {
           try {
@@ -633,7 +727,6 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
             const recData = await recRes.json().catch(() => ({}));
             if (recData.success && recData.recordingUrl) {
               if (session) session.recordingUrl = recData.recordingUrl;
-              /* persisted in MongoDB */
               setCurrentReport((prev) => ({ ...prev, recordingUrl: recData.recordingUrl }));
             }
           } catch {}
@@ -641,7 +734,6 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
 
         if (!cancelled && persisted) {
           setCurrentReport((prev) => {
-            // CRITICAL: Never overwrite a report that already has overallScore > 0 with a 0-score report!
             if ((prev?.overallScore || 0) > 0 && (persisted.overallScore || 0) <= 0) {
               return prev;
             }
@@ -657,7 +749,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [isStudent, currentUser?.id, currentUser?.name, userStudent?.id, session?.id, session?.topic, session?.status]);
+  }, [isStudent, currentUser?.id, currentUser?.name, userStudent?.id, session?.id, session?.topic, session?.status, targetStudentId]);
 
   // Ensure report stays synchronized with active session and student without overwriting non-zero reports on refresh
   useEffect(() => {
@@ -717,37 +809,76 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
 
     setSelectedStudentId(studentId);
     setIsEditingScores(false);
-    const targetStudent = (session?.students || []).find((s) => s.id === studentId) || userStudent;
+    const targetStudent = sessionParticipants.find((s) => s.id === studentId) || (session?.students || []).find((s) => s.id === studentId) || userStudent;
     if (!targetStudent) return;
 
     setIsLoading(true);
     try {
       if (isFaculty) {
         const facultyId = (currentUser as any)?.facultyId || currentUser?.id || '';
-        const res = await fetch('/api/faculty/sessions/' + encodeURIComponent(session?.id || '') + '/reports?facultyId=' + encodeURIComponent(facultyId));
-        const data = await res.json();
-        const persisted = Array.isArray(data.reports)
-          ? data.reports.find((r: any) => r.studentId === targetStudent.id || (r.studentName && String(r.studentName).toLowerCase() === String(targetStudent.name).toLowerCase()))
-          : null;
+        let persisted: any = null;
+        try {
+          const res = await fetch('/api/faculty/sessions/' + encodeURIComponent(session?.id || '') + '/reports?facultyId=' + encodeURIComponent(facultyId));
+          const data = await res.json();
+          if (Array.isArray(data.reports)) {
+            persisted = data.reports.find((r: any) => r.studentId === targetStudent.id || (r.studentName && String(r.studentName).toLowerCase() === String(targetStudent.name).toLowerCase()));
+          }
+        } catch {}
+
+        if (!persisted) {
+          try {
+            const sRes = await fetch('/api/college/slots/' + encodeURIComponent(session?.id || '') + '/reports');
+            const sData = await sRes.json();
+            if (Array.isArray(sData.reports)) {
+              persisted = sData.reports.find((r: any) => r.studentId === targetStudent.id || (r.studentName && String(r.studentName).toLowerCase() === String(targetStudent.name).toLowerCase()));
+            }
+          } catch {}
+        }
+
+        if (!persisted) {
+          try {
+            const stuRes = await fetch('/api/student/reports?studentId=' + encodeURIComponent(targetStudent.id) + '&sessionId=' + encodeURIComponent(session?.id || ''));
+            const stuData = await stuRes.json();
+            if (Array.isArray(stuData.reports) && stuData.reports.length > 0) {
+              persisted = stuData.reports[0];
+            }
+          } catch {}
+        }
+
         if (persisted) {
           let skills: any = {};
-          try { skills = typeof persisted.rubricJson === 'string' ? JSON.parse(persisted.rubricJson) : (persisted.rubricJson || {}); } catch {}
+          try { skills = typeof persisted.rubricJson === 'string' ? JSON.parse(persisted.rubricJson) : (persisted.skills || persisted.rubricJson || {}); } catch {}
           setCurrentReport(normalizeReport({
             ...currentReport,
             id: persisted.id,
             sessionId: persisted.sessionId,
             studentId: persisted.studentId,
-            studentName: targetStudent.name,
-            college: targetStudent.college,
-            topic: session?.topic || 'Group Discussion',
+            studentName: targetStudent.name || persisted.studentName,
+            college: targetStudent.college || persisted.college,
+            topic: session?.topic || persisted.topic || 'Group Discussion',
             overallScore: persisted.overallScore,
-            grade: persisted.overallScore >= 90 ? 'Excellent' : persisted.overallScore >= 75 ? 'Very Good' : persisted.overallScore >= 60 ? 'Good' : persisted.overallScore >= 40 ? 'Average' : 'Needs Improvement',
+            grade: persisted.grade || (persisted.overallScore >= 90 ? 'Excellent' : persisted.overallScore >= 75 ? 'Very Good' : persisted.overallScore >= 60 ? 'Good' : persisted.overallScore >= 40 ? 'Average' : 'Needs Improvement'),
             skills,
-            aiSummary: persisted.feedback,
-            strengths: persisted.strengths ? persisted.strengths.split('; ').filter(Boolean) : [],
-            areasForImprovement: persisted.improvements ? persisted.improvements.split('; ').filter(Boolean) : [],
-            facultyEndorsement: { endorsed: false },
+            speakingDurationSeconds: persisted.speakingDurationSeconds ?? persisted.speakingTimeSeconds ?? 0,
+            speakingTimeSeconds: persisted.speakingTimeSeconds ?? persisted.speakingDurationSeconds ?? 0,
+            speakingTimeFormatted: persisted.speakingTimeFormatted || `${Math.floor((persisted.speakingDurationSeconds || 0) / 60)} min ${(persisted.speakingDurationSeconds || 0) % 60} sec`,
+            speakingTurns: persisted.speakingTurns || 0,
+            wpm: persisted.wpm || (persisted.speakingDurationSeconds > 0 ? 130 : 0),
+            wpmStatus: persisted.wpmStatus || 'Optimal',
+            fillerWordsCount: persisted.fillerWordsCount || 0,
+            fillerWordsBreakdown: Array.isArray(persisted.fillerWordsBreakdown) ? persisted.fillerWordsBreakdown : [],
+            interruptions: persisted.interruptions || 0,
+            questionsAnswered: persisted.questionsAnswered || 0,
+            questionsInitiated: persisted.questionsInitiated || 0,
+            aiSummary: persisted.feedback || persisted.aiSummary,
+            feedback: persisted.feedback || persisted.aiSummary,
+            strengths: Array.isArray(persisted.strengths) ? persisted.strengths : (typeof persisted.strengths === 'string' ? persisted.strengths.split('; ').filter(Boolean) : []),
+            areasForImprovement: Array.isArray(persisted.areasForImprovement || persisted.improvements) ? (persisted.areasForImprovement || persisted.improvements) : (typeof (persisted.improvements || persisted.areasForImprovement) === 'string' ? (persisted.improvements || persisted.areasForImprovement).split('; ').filter(Boolean) : []),
+            aiRecommendations: Array.isArray(persisted.aiRecommendations) ? persisted.aiRecommendations : [],
+            facultyEndorsement: persisted.facultyEndorsement || { endorsed: false },
           }, currentReport));
+        } else {
+          setCurrentReport(normalizeReport(generateStudentReport(targetStudent, session?.topic || 'Group Discussion', session?.durationMinutes || 15)));
         }
       } else {
         const res = await fetch('/api/student/reports?studentId=' + encodeURIComponent(userStudent?.id || '') + '&sessionId=' + encodeURIComponent(session?.id || ''));
@@ -1028,7 +1159,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
                 onChange={(e) => handleSelectStudent(e.target.value)}
                 className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl px-3.5 py-2 text-xs font-bold focus:outline-none focus:border-indigo-500 pr-8 cursor-pointer shadow-xs"
               >
-                {(session?.students || []).map((st) => (
+                {(sessionParticipants.length > 0 ? sessionParticipants : (session?.students || [])).map((st) => (
                   <option key={st.id} value={st.id}>
                     Seat {st.seatNumber}: {st.name} 
                   </option>
@@ -1236,9 +1367,8 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
         </div>
       )}
 
-      {/* Discussion Audio & Video Archive & Playback Player (Visible exclusively to Faculty and Admins, hidden from students) */}
-      {!isStudent && (
-        <div className="no-print p-4 rounded-2xl bg-gradient-to-r from-teal-500/10 via-emerald-500/10 to-indigo-500/10 dark:from-teal-950/40 dark:via-emerald-950/40 dark:to-indigo-950/40 border border-teal-500/30 dark:border-teal-700/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+      {/* Discussion Audio & Video Archive & Playback Player */}
+      <div className="no-print p-4 rounded-2xl bg-gradient-to-r from-teal-500/10 via-emerald-500/10 to-indigo-500/10 dark:from-teal-950/40 dark:via-emerald-950/40 dark:to-indigo-950/40 border border-teal-500/30 dark:border-teal-700/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-teal-500/20 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0">
               <Video className="w-5 h-5" />
@@ -1307,7 +1437,6 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
             )}
           </div>
         </div>
-      )}
 
       {/* Main Printable Assessment Report Card */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-sm dark:shadow-2xl space-y-6 print-card transition-colors duration-200">

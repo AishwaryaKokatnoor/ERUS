@@ -331,7 +331,9 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
       const res = await updateCollegeStudentLimit(
         editingQuotaCollege.id || editingQuotaCollege.code,
         quotaInput,
-        addedSlots
+        addedSlots,
+        editingQuotaCollege.code,
+        editingQuotaCollege.name
       );
       if (res && res.success) {
         const existingSlotsCount =

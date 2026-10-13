@@ -26,6 +26,8 @@ export interface Student {
   volumeLevel?: number;
   bookedSlotId?: string;
   videoStream?: MediaStream | null;
+  socketId?: string;
+  userId?: string;
 }
 
 export interface BreakoutRoom {
@@ -79,6 +81,57 @@ export interface GDSession {
   recordedAt?: string;
   recordingFileSize?: number;
   collegeCode?: string;
+  activityType?: 'gd' | 'presentation';
+  presentationTopics?: string[]; // Custom presentation topics for Student 1 to 6
+}
+
+export type ActivityType = 'gd' | 'presentation';
+
+export type PresentationPhase =
+  | 'opening'
+  | 'presenting'
+  | 'peer_qa'
+  | 'ai_qa'
+  | 'transition'
+  | 'closing'
+  | 'completed';
+
+export interface PresentationSkillScore {
+  parameter: string;
+  weightagePercent: number;
+  score: number;
+  maxScore: number;
+  feedback: string;
+}
+
+export interface PresentationAssessmentReport {
+  id: string;
+  sessionId: string;
+  studentId: string;
+  studentName: string;
+  studentNumber: number; // 1 to 6
+  college: string;
+  presentationTopic: string;
+  durationMinutes: number;
+  presentationTimeSeconds: number;
+  presentationTimeFormatted: string;
+  questionsAnsweredCount: number;
+  peerQuestionsAskedCount: number;
+  skills: {
+    topicUnderstanding: PresentationSkillScore; // 25 Marks
+    organizationClarity: PresentationSkillScore; // 20 Marks
+    spokenEnglishFluency: PresentationSkillScore; // 20 Marks
+    confidenceDelivery: PresentationSkillScore;  // 15 Marks
+    abilityToAnswerQA: PresentationSkillScore;   // 10 Marks
+    qualityOfQuestionsAsked: PresentationSkillScore; // 10 Marks
+  };
+  overallScore: number; // 0-100
+  grade: GradeLevel;
+  strengths: string[];
+  areasForImprovement: string[];
+  aiRecommendations: string[];
+  aiSummary: string;
+  generatedAt: string;
 }
 
 export interface FacultyLiveNote {

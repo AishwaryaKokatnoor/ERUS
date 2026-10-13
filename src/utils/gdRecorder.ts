@@ -107,6 +107,8 @@ export function downloadRecordingLocally(blob: Blob, filename?: string) {
 
 export interface GDParticipantTile {
   id: string;
+  socketId?: string;
+  userId?: string;
   name: string;
   college?: string;
   seatNumber?: number;
@@ -250,13 +252,16 @@ export function useGDRecorder({
   const mimeTypeRef = useRef<string>('');
   const slotIdRef = useRef<string>(slotId);
   const isCheckpointUploadingRef = useRef<boolean>(false);
+  const inFlightUploadPromiseRef = useRef<Promise<UploadRecordingResponse | null> | null>(null);
 
   // Video compositing refs
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoRenderIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const videoPoolRef = useRef<Map<string, HTMLVideoElement>>(new Map());
+  const hiddenVideoContainerRef = useRef<HTMLDivElement | null>(null);
   const participantTilesRef = useRef<GDParticipantTile[]>(participantTiles);
   const topicTitleRef = useRef<string>(topicTitle);
+  const peerStreamsRef = useRef<Map<string, MediaStream> | undefined>(peerStreams);
 
   // Keep refs in sync with latest props
   useEffect(() => {
@@ -270,6 +275,10 @@ export function useGDRecorder({
   useEffect(() => {
     topicTitleRef.current = topicTitle;
   }, [topicTitle]);
+
+  useEffect(() => {
+    peerStreamsRef.current = peerStreams;
+  }, [peerStreams]);
 
   // Format seconds to mm:ss
   const formattedDuration = `${Math.floor(recordingDurationSeconds / 60)
@@ -416,28 +425,113 @@ export function useGDRecorder({
         // Tile base background
         drawRoundedRect(ctx, x, y, tileW, tileH, 12, '#1e293b');
 
+        // Resolve stream for this tile: first from tile.videoStream, or fallback to peerStreams matching tile.socketId / tile.id
+        let resolvedStream = tile.videoStream;
+        if (!resolvedStream || resolvedStream.getVideoTracks().length === 0) {
+          const peers = peerStreamsRef.current;
+          if (peers && peers.size > 0) {
+            if (tile.socketId && peers.has(tile.socketId)) {
+              resolvedStream = peers.get(tile.socketId);
+            } else if (tile.id && peers.has(tile.id)) {
+              resolvedStream = peers.get(tile.id);
+            } else if (tile.userId && peers.has(tile.userId)) {
+              resolvedStream = peers.get(tile.userId);
+            } else {
+              for (const [peerKey, stream] of peers.entries()) {
+                if (
+                  (tile.id && (peerKey.includes(tile.id) || tile.id.includes(peerKey))) ||
+                  (tile.socketId && (peerKey.includes(tile.socketId) || tile.socketId.includes(peerKey))) ||
+                  (tile.userId && (peerKey.includes(tile.userId) || tile.userId.includes(peerKey)))
+                ) {
+                  resolvedStream = stream;
+                  break;
+                }
+              }
+            }
+            // Fallback for real peer participants (not user themselves and not empty seat)
+            if (!resolvedStream && !tile.id.includes('empty') && !tile.id.includes('user')) {
+              const livePeerStreams = Array.from(peers.values()).filter(
+                (s) => s.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)
+              );
+              if (livePeerStreams.length > 0) {
+                resolvedStream = livePeerStreams[0];
+              }
+            }
+          }
+        }
+
         // Look up video element for this stream
         let videoEl = videoPoolRef.current.get(tile.id);
-        if (tile.videoStream && tile.videoStream.getVideoTracks().length > 0) {
+        const hasVideoTracks = Boolean(
+          resolvedStream && resolvedStream.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)
+        );
+
+        if (resolvedStream && hasVideoTracks) {
           if (!videoEl) {
             videoEl = document.createElement('video');
             videoEl.muted = true;
+            videoEl.defaultMuted = true;
             videoEl.autoplay = true;
             videoEl.playsInline = true;
-            videoEl.srcObject = tile.videoStream;
+            (videoEl as any).webkitPlaysInline = true;
+            videoEl.setAttribute('autoplay', 'true');
+            videoEl.setAttribute('playsinline', 'true');
+            videoEl.setAttribute('muted', 'true');
+            videoEl.style.position = 'fixed';
+            videoEl.style.top = '-9999px';
+            videoEl.style.left = '-9999px';
+            videoEl.style.width = '320px';
+            videoEl.style.height = '240px';
+            videoEl.style.opacity = '0';
+            videoEl.style.pointerEvents = 'none';
+
+            if (!hiddenVideoContainerRef.current && typeof document !== 'undefined') {
+              const container = document.createElement('div');
+              container.id = 'erus-gd-recorder-hidden-pool';
+              container.style.position = 'fixed';
+              container.style.top = '-9999px';
+              container.style.left = '-9999px';
+              container.style.width = '320px';
+              container.style.height = '240px';
+              container.style.opacity = '0';
+              container.style.pointerEvents = 'none';
+              container.style.zIndex = '-9999';
+              document.body.appendChild(container);
+              hiddenVideoContainerRef.current = container;
+            }
+            if (hiddenVideoContainerRef.current) {
+              hiddenVideoContainerRef.current.appendChild(videoEl);
+            }
+
+            videoEl.srcObject = resolvedStream;
+            videoEl.onloadedmetadata = () => {
+              videoEl?.play().catch(() => {});
+            };
+            videoEl.oncanplay = () => {
+              videoEl?.play().catch(() => {});
+            };
             videoEl.play().catch(() => {});
             videoPoolRef.current.set(tile.id, videoEl);
-          } else if (videoEl.srcObject !== tile.videoStream) {
-            videoEl.srcObject = tile.videoStream;
+          } else if (videoEl.srcObject !== resolvedStream) {
+            videoEl.srcObject = resolvedStream;
+            videoEl.onloadedmetadata = () => {
+              videoEl?.play().catch(() => {});
+            };
+            videoEl.oncanplay = () => {
+              videoEl?.play().catch(() => {});
+            };
+            videoEl.play().catch(() => {});
+          } else if (videoEl.paused) {
             videoEl.play().catch(() => {});
           }
         }
 
-        const hasWorkingCamera =
+        const hasWorkingCamera = Boolean(
           videoEl &&
-          videoEl.readyState >= 2 &&
-          !videoEl.paused &&
-          tile.cameraActive !== false;
+          hasVideoTracks &&
+          ((videoEl.videoWidth > 0 && videoEl.videoHeight > 0) || videoEl.readyState >= 1) &&
+          (tile.cameraActive !== false || (videoEl.videoWidth > 0 && videoEl.videoHeight > 0))
+        );
 
         if (hasWorkingCamera) {
           // Draw video element with aspect-cover inside rounded rect
@@ -644,9 +738,16 @@ export function useGDRecorder({
         videoPoolRef.current.forEach((el) => {
           try {
             el.srcObject = null;
+            el.remove();
           } catch {}
         });
         videoPoolRef.current.clear();
+        if (hiddenVideoContainerRef.current) {
+          try {
+            hiddenVideoContainerRef.current.remove();
+          } catch {}
+          hiddenVideoContainerRef.current = null;
+        }
 
         const mime = mimeTypeRef.current || (recordVideo ? 'video/webm' : 'audio/webm');
         const finalBlob = new Blob(chunksRef.current, { type: mime });
@@ -797,32 +898,43 @@ export function useGDRecorder({
       const targetSlot = overrideSlotId || slotId;
       if (!targetSlot) return null;
 
+      if (inFlightUploadPromiseRef.current) {
+        return inFlightUploadPromiseRef.current;
+      }
+
       setIsUploading(true);
       setUploadError(null);
 
-      try {
-        const finalBlob = await stopRecording();
-        if (!finalBlob || finalBlob.size === 0) {
-          console.warn('[GD Recorder] No audio/video chunks captured to upload');
+      const promise = (async () => {
+        try {
+          const finalBlob = await stopRecording();
+          if (!finalBlob || finalBlob.size === 0) {
+            console.warn('[GD Recorder] No audio/video chunks captured to upload');
+            setIsUploading(false);
+            return null;
+          }
+
+          const duration = durationCounterRef.current || recordingDurationSeconds;
+          const uploadResult = await uploadGDRecording(targetSlot, finalBlob, duration);
+
           setIsUploading(false);
+          setUploadSuccess(true);
+          if (uploadResult.recordingUrl) {
+            setRecordingUrl(uploadResult.recordingUrl);
+          }
+          return uploadResult;
+        } catch (err: any) {
+          console.error('[GD Recorder] Error uploading session recording:', err);
+          setIsUploading(false);
+          setUploadError(err.message || 'Upload failed');
           return null;
+        } finally {
+          inFlightUploadPromiseRef.current = null;
         }
+      })();
 
-        const duration = durationCounterRef.current || recordingDurationSeconds;
-        const uploadResult = await uploadGDRecording(targetSlot, finalBlob, duration);
-
-        setIsUploading(false);
-        setUploadSuccess(true);
-        if (uploadResult.recordingUrl) {
-          setRecordingUrl(uploadResult.recordingUrl);
-        }
-        return uploadResult;
-      } catch (err: any) {
-        console.error('[GD Recorder] Error uploading session recording:', err);
-        setIsUploading(false);
-        setUploadError(err.message || 'Upload failed');
-        return null;
-      }
+      inFlightUploadPromiseRef.current = promise;
+      return promise;
     },
     [enabled, slotId, stopRecording, recordingDurationSeconds]
   );
@@ -843,10 +955,10 @@ export function useGDRecorder({
 
   // Auto-start recording when session becomes active (ONLY when enabled)
   useEffect(() => {
-    if (enabled && autoStartOnActive && isSessionActive && !isRecording && !recordingUrl) {
+    if (enabled && autoStartOnActive && isSessionActive && !isRecording) {
       startRecording();
     }
-  }, [enabled, autoStartOnActive, isSessionActive, isRecording, recordingUrl, startRecording]);
+  }, [enabled, autoStartOnActive, isSessionActive, isRecording, startRecording]);
 
   // Clean up on unmount — also ensure any recorded chunks are uploaded to server before disposal
   useEffect(() => {
@@ -860,9 +972,16 @@ export function useGDRecorder({
       videoPoolRef.current.forEach((el) => {
         try {
           el.srcObject = null;
+          el.remove();
         } catch {}
       });
       videoPoolRef.current.clear();
+      if (hiddenVideoContainerRef.current) {
+        try {
+          hiddenVideoContainerRef.current.remove();
+        } catch {}
+        hiddenVideoContainerRef.current = null;
+      }
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         try {
           if (mediaRecorderRef.current.state === 'recording') {

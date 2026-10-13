@@ -115,9 +115,24 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
           const slotRes = await fetch('/api/college/slots/' + encodeURIComponent(safeSession.id) + '/reports');
           if (slotRes.ok) {
             const slotData = await slotRes.json();
-            if (Array.isArray(slotData.reports)) {
+            if (Array.isArray(slotData.reports) && slotData.reports.length > 0) {
               loadedReports = slotData.reports;
             }
+          }
+        }
+        if (loadedReports.length === 0 && safeAvailableSlots.length > 0) {
+          const completedSlots = safeAvailableSlots.filter((s) => s.status === 'completed' && s.id !== safeSession.id);
+          for (const cSlot of completedSlots) {
+            try {
+              const cRes = await fetch('/api/college/slots/' + encodeURIComponent(cSlot.id) + '/reports');
+              if (cRes.ok) {
+                const cData = await cRes.json();
+                if (Array.isArray(cData.reports) && cData.reports.length > 0) {
+                  loadedReports = cData.reports;
+                  break;
+                }
+              }
+            } catch {}
           }
         }
         if (!cancelled) setPersistedReports(loadedReports);
@@ -127,7 +142,7 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [facultyId, safeSession?.id, session?.status]);
+  }, [facultyId, safeSession?.id, session?.status, safeAvailableSlots]);
 
   const reportByStudent = useMemo(() => {
     const map = new Map<string, any>();
@@ -451,7 +466,7 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
 
           {safeSession.status === 'completed' || isSlotCompletedLocally(safeSession.id) ? (
             <button
-              onClick={() => onViewStudentReport(safeSession.students?.[0]?.id || '')}
+              onClick={() => onViewStudentReport(participatedStudents[0]?.id || persistedReports[0]?.studentId || safeSession.students?.find((s) => !s.isEmptySeat)?.id || safeSession.students?.[0]?.id || '')}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white transition-all shadow-md shadow-purple-600/20 cursor-pointer"
             >
               <FileText className="w-3.5 h-3.5" />
@@ -598,7 +613,7 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
                             <button
                               onClick={() => {
                                 if (onSelectSlot) onSelectSlot(sl.id);
-                                const firstStudentId = sl.students?.[0]?.id || '';
+                                const firstStudentId = sl.students?.find((s) => !s.isEmptySeat && s.college !== 'Available Desk')?.id || sl.students?.[0]?.id || '';
                                 if (onViewStudentReport) {
                                   onViewStudentReport(firstStudentId);
                                 }

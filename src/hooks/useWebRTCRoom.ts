@@ -79,7 +79,7 @@ export function useWebRTCRoom({
   const [aiParticipants, setAiParticipants] = useState<any[]>([]);
   const [simulationMode, setSimulationMode] = useState(false);
   const [silenceTimerSeconds, setSilenceTimerSeconds] = useState(0);
-  const [isMicMuted, setIsMicMuted] = useState(true);
+  const [isMicMuted, setIsMicMuted] = useState(false);
   const [isSpeakingLive, setIsSpeakingLive] = useState(false);
   const [localVolume, setLocalVolume] = useState(0);
   const [isFloorLocked, setIsFloorLocked] = useState(false);
@@ -396,11 +396,11 @@ export function useWebRTCRoom({
 
       localStreamRef.current = stream;
 
-      // Start with audio tracks muted by default until user explicitly activates mic
+      // Start with audio tracks enabled by default for continuous open mic
       stream.getAudioTracks().forEach((track) => {
-        track.enabled = false;
+        track.enabled = true;
       });
-      setIsMicMuted(true);
+      setIsMicMuted(false);
 
       // Attach tracks to any peer connections that were established before mic was ready
       peerConnectionsRef.current.forEach((pc, peerSocketId) => {
@@ -450,10 +450,12 @@ export function useWebRTCRoom({
           const avg = sum / dataArray.length;
           setLocalVolume(Math.min(100, Math.round((avg / 128) * 100)));
 
-          // Detect speaking when volume exceeds threshold
+          // Detect speaking when volume exceeds threshold (open mics enabled)
           const isAiSpeaking = roomVoice.isSpeaking();
-          const isFloorHeldByOther = !!floorSpeakerIdRef.current && floorSpeakerIdRef.current !== currentUserRef.current?.id;
-          const speakingNow = !isAiSpeaking && !isFloorHeldByOther && avg > 10 && !isMicMutedRef.current;
+          const speakingNow = avg > 4 && !isMicMutedRef.current;
+          if (speakingNow && isAiSpeaking) {
+            roomVoice.stop();
+          }
           setIsSpeakingLive(speakingNow);
 
           if (speakingNow) {
@@ -770,16 +772,11 @@ export function useWebRTCRoom({
       setIsFloorLocked(isOtherSpeaking);
       setFloorSpeakerName(speakerName || (isOtherSpeaking ? 'Another Participant' : null));
 
-      // Auto-mute audio transmission over WebRTC if another participant is speaking!
+      // Continuous open mic: do NOT forcefully mute audio tracks when someone else speaks
       if (localStreamRef.current) {
         const audioTracks = localStreamRef.current.getAudioTracks();
         audioTracks.forEach((track) => {
-          if (isOtherSpeaking) {
-            track.enabled = false; // MUTE local track so user cannot interrupt
-          } else {
-            // Restore microphone track to user's intended mute status
-            track.enabled = !isMicMutedRef.current;
-          }
+          track.enabled = !isMicMutedRef.current;
         });
       }
 

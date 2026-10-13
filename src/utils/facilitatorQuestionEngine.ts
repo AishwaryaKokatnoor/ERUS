@@ -10,18 +10,33 @@ export class FacilitatorQuestionTracker {
   }
 
   public recordQuestion(question: string) {
+    if (!question) return;
     const normalized = this.normalize(question);
     this.askedQuestions.add(normalized);
-    this.askedTopics.push(question);
+    // Also store key substantive stem (stripping student greeting prefixes)
+    const stem = this.extractStem(question);
+    if (stem && stem.length > 10) {
+      this.askedQuestions.add(stem);
+    }
+    if (!this.askedTopics.includes(question)) {
+      this.askedTopics.push(question);
+    }
   }
 
   public hasBeenAsked(question: string): boolean {
+    if (!question) return false;
     const normalized = this.normalize(question);
     if (this.askedQuestions.has(normalized)) return true;
     
+    const stem = this.extractStem(question);
+    if (stem && this.askedQuestions.has(stem)) return true;
+
     // Check similarity ratio with any previously asked question
     for (const asked of this.askedQuestions) {
-      if (this.calculateOverlap(normalized, asked) > 0.7) {
+      if (this.calculateOverlap(normalized, asked) > 0.48) {
+        return true;
+      }
+      if (stem && asked.length > 15 && this.calculateOverlap(stem, asked) > 0.48) {
         return true;
       }
     }
@@ -41,9 +56,15 @@ export class FacilitatorQuestionTracker {
     return String(text || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
   }
 
+  private extractStem(text: string): string {
+    // Remove participant greetings like "Chetan from Seat 1, ...", "Good morning, ..."
+    return this.normalize(text.replace(/^[^,]+,\s*/, '').replace(/^(seat \d+|dear participant|thank you|welcome)[^,.:]*[,.:]\s*/i, ''));
+  }
+
   private calculateOverlap(a: string, b: string): number {
-    const wordsA = new Set(a.split(/\s+/));
-    const wordsB = new Set(b.split(/\s+/));
+    const wordsA = new Set(a.split(/\s+/).filter((w) => w.length > 2));
+    const wordsB = new Set(b.split(/\s+/).filter((w) => w.length > 2));
+    if (wordsA.size === 0 || wordsB.size === 0) return 0;
     let intersection = 0;
     for (const w of wordsA) {
       if (wordsB.has(w)) intersection++;
@@ -596,9 +617,34 @@ export function getNextUniqueFacilitatorPrompt(
 
   // Dynamic context-spliced fallback if predefined bank is exhausted
   const recentSpeaker = transcripts.filter((t) => !t.isFacilitator).slice(-1)[0];
-  const dynamicProbe = recentSpeaker
-    ? `Building on what ${recentSpeaker.speakerName} shared regarding "${topic}", how might we weigh the short-term conveniences against the long-term societal accountability of this model?`
-    : `Let us broaden our scope regarding "${topic}": what unexpected regulatory or ethical challenges might emerge as this scales over the next five years?`;
+  const dynamicThemes = [
+    `how might we weigh the short-term conveniences against the long-term societal accountability of this model?`,
+    `what unexpected regulatory or ethical challenges might emerge as this scales across India over the next five years?`,
+    `how does this shift impact economic inclusivity for small enterprises and rural communities?`,
+    `what are the primary operational bottlenecks that could cause this implementation to fail in practice?`,
+    `if we examine the human psychological experience, what critical emotional and interpersonal costs are being overlooked?`,
+    `playing devil's advocate, what if our primary assumptions about this risk are fundamentally flawed?`,
+    `what concrete compliance metrics should independent governing bodies monitor to prevent abuse?`,
+    `how do we balance rapid innovation in this space against privacy and democratic rights?`,
+  ];
+
+  let dynamicProbe = '';
+  for (const theme of dynamicThemes) {
+    const candidateProbe = recentSpeaker
+      ? `Building on what ${recentSpeaker.speakerName} shared regarding "${topic}", ${theme}`
+      : `Let us broaden our perspective regarding "${topic}": ${theme}`;
+    if (!sessionQuestionTracker.hasBeenAsked(candidateProbe)) {
+      dynamicProbe = candidateProbe;
+      break;
+    }
+  }
+
+  if (!dynamicProbe) {
+    const timestampSeed = Date.now().toString().slice(-4);
+    dynamicProbe = recentSpeaker
+      ? `Examining an alternative dimension of ${recentSpeaker.speakerName}'s argument on "${topic}": what unaddressed socio-economic trade-offs should we critically analyze?`
+      : `Looking ahead at the evolution of "${topic}": what novel frameworks will be required to ensure equitable and responsible deployment?`;
+  }
 
   sessionQuestionTracker.recordQuestion(dynamicProbe);
   return {
@@ -731,18 +777,24 @@ export function generateTargetedQuestionForStudent(
   const firstName = student.name.split(' ')[0];
   const seatStr = student.seatNumber ? `Seat ${student.seatNumber}` : 'your seat';
   const domain = detectTopicDomain(sessionTopic);
-  const bank = TOPIC_QUESTION_BANKS[domain] || TOPIC_QUESTION_BANKS.general;
+  const primaryBank = TOPIC_QUESTION_BANKS[domain] || TOPIC_QUESTION_BANKS.general;
+  const generalBank = TOPIC_QUESTION_BANKS.general;
 
   const sampleQuestions = [
-    ...bank.ethical,
-    ...bank.economic,
-    ...bank.humanExperience,
-    ...bank.pedagogical,
-    ...bank.implementation,
-    ...bank.devilAdvocate,
+    ...primaryBank.ethical,
+    ...primaryBank.economic,
+    ...primaryBank.humanExperience,
+    ...primaryBank.pedagogical,
+    ...primaryBank.implementation,
+    ...primaryBank.devilAdvocate,
+    ...(primaryBank.futureOutlook || []),
+    ...generalBank.ethical,
+    ...generalBank.economic,
+    ...generalBank.humanExperience,
+    ...generalBank.devilAdvocate,
   ];
 
-  let q = sampleQuestions[Math.floor(Math.random() * sampleQuestions.length)];
+  let q = '';
   for (const candidate of sampleQuestions) {
     if (!sessionQuestionTracker.hasBeenAsked(candidate)) {
       q = candidate;
@@ -751,21 +803,60 @@ export function generateTargetedQuestionForStudent(
     }
   }
 
+  // If all catalog questions have been asked, construct a fresh conceptual probe
+  if (!q) {
+    const freshAngles = [
+      `how do we balance rapid adoption in "${sessionTopic}" against essential safety, equity, and accountability?`,
+      `what are the primary financial or operational barriers that could prevent "${sessionTopic}" from succeeding at scale?`,
+      `if you had to challenge the prevailing consensus on "${sessionTopic}", what major risk would you emphasize?`,
+      `how will advances in "${sessionTopic}" impact the next generation of professionals in your field?`,
+      `what specific regulatory safeguards should be enacted to ensure "${sessionTopic}" remains ethically grounded?`,
+      `from a ground-level implementation perspective, how should colleges and institutions adapt to "${sessionTopic}"?`,
+    ];
+    for (const angle of freshAngles) {
+      if (!sessionQuestionTracker.hasBeenAsked(angle)) {
+        q = angle;
+        sessionQuestionTracker.recordQuestion(q);
+        break;
+      }
+    }
+    if (!q) {
+      q = `what is your perspective on the most critical unaddressed challenge surrounding "${sessionTopic}"?`;
+    }
+  }
+
+  let finalPrompt = '';
   if (lastTranscript && !lastTranscript.isFacilitator) {
     const templates = [
       `${student.name} from ${seatStr}, building on what ${lastTranscript.speakerName} highlighted regarding "${sessionTopic}", how do you evaluate this? Specifically: ${q}`,
-      `${firstName}, we haven't heard your viewpoint on this angle yet. In light of ${lastTranscript.speakerName}'s remarks on "${sessionTopic}", ${q}`,
+      `${firstName}, we would like to hear your viewpoint on this angle. In light of ${lastTranscript.speakerName}'s remarks on "${sessionTopic}", ${q}`,
       `${student.name} (${seatStr}), considering ${lastTranscript.speakerName}'s stance, what is your assessment? ${q}`,
     ];
-    return templates[Math.floor(Math.random() * templates.length)];
+    for (const tmpl of templates) {
+      if (!sessionQuestionTracker.hasBeenAsked(tmpl)) {
+        finalPrompt = tmpl;
+        break;
+      }
+    }
+    if (!finalPrompt) finalPrompt = templates[0];
+  } else {
+    const templates = [
+      `${student.name} from ${seatStr}, we would like to hear your perspective on "${sessionTopic}". ${q}`,
+      `${firstName}, looking at "${sessionTopic}", how would you approach this challenge: ${q}`,
+      `${student.name} (${seatStr}), you haven't shared your perspective on this dimension yet—${q}`,
+      `${firstName} from ${seatStr}, to advance our discussion on "${sessionTopic}": ${q}`,
+    ];
+    for (const tmpl of templates) {
+      if (!sessionQuestionTracker.hasBeenAsked(tmpl)) {
+        finalPrompt = tmpl;
+        break;
+      }
+    }
+    if (!finalPrompt) finalPrompt = templates[0];
   }
 
-  const templates = [
-    `${student.name} from ${seatStr}, we would like to hear your perspective on "${sessionTopic}". ${q}`,
-    `${firstName}, looking at "${sessionTopic}", how would you approach this challenge: ${q}`,
-    `${student.name} (${seatStr}), you haven't shared your perspective on this dimension yet—${q}`,
-  ];
-  return templates[Math.floor(Math.random() * templates.length)];
+  sessionQuestionTracker.recordQuestion(finalPrompt);
+  return finalPrompt;
 }
 
 /**

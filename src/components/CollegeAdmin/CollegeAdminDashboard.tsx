@@ -63,7 +63,8 @@ import {
   markSlotDeletedLocally,
   isSlotCompletedLocally,
   markSlotCompletedLocally,
-  normalizeClientCollegeCode
+  normalizeClientCollegeCode,
+  areCollegeCodesEquivalent
 } from '../../utils/authApi';
 import { formatSlotDate } from '../../utils/studentBooking';
 import { SlotStudentReportsView } from '../AssessmentReport/SlotStudentReportsView';
@@ -91,7 +92,9 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
   onCreateSlot,
   onDeleteSlot,
 }) => {
-  const collegeCode = currentUser.collegeCode || 'DIT';
+  const collegeCode = normalizeClientCollegeCode(
+    currentUser.collegeCode || (currentUser as any).college || 'DIT'
+  );
   const [activeTab, setActiveTab] = useState<'students' | 'faculty' | 'slots' | 'analytics'>('students');
   const [selectedReportSlotId, setSelectedReportSlotId] = useState<string>('');
 
@@ -103,7 +106,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
   // Stats state
   const [stats, setStats] = useState({
     collegeName: currentUser.college || 'Academic Institution',
-    collegeCode: currentUser.collegeCode || 'COL',
+    collegeCode: collegeCode || 'COL',
     studentLimit: 60,
     totalStudents: 0,
     totalFaculty: 0,
@@ -131,6 +134,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
   const [selectedVideoTitle, setSelectedVideoTitle] = useState<string | null>(null);
 
   const [allotForm, setAllotForm] = useState({
+    activityType: 'gd' as 'gd' | 'presentation',
     topic: '',
     description: '',
     assignedFacultyId: '',
@@ -138,6 +142,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     assignedFacultyDept: '',
     slotTiming: '10:30 AM - 10:45 AM',
     slotDate: new Date().toISOString().split('T')[0],
+    durationMinutes: 15,
   });
 
   const [newStudent, setNewStudent] = useState({
@@ -185,7 +190,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     hasLoadedSlots || slots.length > 0
       ? slots
       : (availableSlots || []).filter((s) => {
-          const sCode = (s.collegeCode || '').toUpperCase();
+          const sCode = normalizeClientCollegeCode(s.collegeCode || collegeCode);
           return sCode === collegeCode;
         });
   const seenSlotIds = new Set<string>();
@@ -219,20 +224,28 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
       const cleanName = cleanTopic ? `${prefix}: ${cleanTopic}` : prefix;
       const resolvedStatus = s.status === 'completed' || isSlotCompletedLocally(s.id) ? 'completed' : (s.status || 'scheduled');
 
+      const actType = s.activityType || 'gd';
+      const isPresentation = actType === 'presentation';
+      const maxCap = isPresentation ? 6 : (s.maxCapacity || 15);
+      const enrolled = isPresentation 
+        ? Math.min(s.enrolledCount ?? s.students?.length ?? 6, 6)
+        : (s.enrolledCount ?? s.students?.length ?? (s.rawSession?.students?.length ?? 15));
+
       return {
         id: s.id,
+        activityType: actType,
         slotName: cleanName,
         topic: cleanTopic,
         description: s.description || '',
         slotTiming: s.slotTiming || '',
         slotDate: s.slotDate || (s as any).scheduledTime || (s as any).rawSession?.slotDate || 'Today',
         status: resolvedStatus,
-        durationMinutes: s.durationMinutes || 15,
-        enrolledCount: s.enrolledCount ?? s.students?.length ?? (s.rawSession?.students?.length ?? 15),
-        maxCapacity: s.maxCapacity || 15,
+        durationMinutes: s.durationMinutes || (isPresentation ? 60 : 15),
+        enrolledCount: enrolled,
+        maxCapacity: maxCap,
         assignedFacultyName: (s as any).assignedFacultyName || 'Unassigned',
         assignedFacultyId: (s as any).assignedFacultyId || '',
-        students: s.students || s.rawSession?.students || [],
+        students: isPresentation && (s.students?.length > 6) ? s.students.slice(0, 6) : (s.students || s.rawSession?.students || []),
         recordingUrl: s.recordingUrl || (s as any).rawSession?.recordingUrl || '',
         recordingDurationSeconds: s.recordingDurationSeconds || (s as any).rawSession?.recordingDurationSeconds || 0,
         recordingFileSize: s.recordingFileSize || (s as any).rawSession?.recordingFileSize || 0,
@@ -346,7 +359,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     const handleSlotsEvent = (e: any) => {
       const payload = e?.detail || e;
       const evtCode = normalizeClientCollegeCode(payload?.collegeCode || '');
-      if (!evtCode || evtCode === normTargetCode) {
+      if (!evtCode || areCollegeCodesEquivalent(evtCode, normTargetCode)) {
         if (Array.isArray(payload?.slots)) {
           const deletedIds = getDeletedSlotIds();
           const filtered = payload.slots.filter((s: any) => s && s.id && !deletedIds.has(s.id));
@@ -434,14 +447,17 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
       }
     }
 
+    const currentActivity = (slot.activityType as 'gd' | 'presentation') || 'gd';
     setAllotForm({
+      activityType: currentActivity,
       topic: isTopicPending ? '' : existingTopic,
       description: slot.description && !slot.description.toLowerCase().includes('pending') && !slot.description.includes('Waiting for College Admin to allot') ? slot.description : '',
       assignedFacultyId: defaultFacultyId,
       assignedFacultyName: defaultFacultyName,
       assignedFacultyDept: defaultFacultyDept,
-      slotTiming: slot.slotTiming || '10:30 AM - 10:45 AM',
+      slotTiming: slot.slotTiming || (currentActivity === 'presentation' ? '10:00 AM - 11:15 AM' : '10:30 AM - 10:45 AM'),
       slotDate: slot.slotDate || new Date().toISOString().split('T')[0],
+      durationMinutes: slot.durationMinutes || (currentActivity === 'presentation' ? 60 : 15),
     });
   };
 
@@ -452,7 +468,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     const chosenTopic = String(allotForm.topic || '').trim();
 
     if (!chosenTopic) {
-      alert('Please enter a discussion topic.');
+      alert('Please enter a topic.');
       return;
     }
 
@@ -462,7 +478,11 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     }
 
     setIsSavingAllotment(true);
-    const chosenDescription = String(allotForm.description || '').trim() || `Autonomous AI evaluated discussion on "${chosenTopic}".`;
+    const isPresentation = allotForm.activityType === 'presentation';
+    const chosenDescription = String(allotForm.description || '').trim() || 
+      (isPresentation 
+        ? `Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates.`
+        : `Autonomous AI evaluated discussion on "${chosenTopic}".`);
     const cleanBaseSlotName = cleanSlotName(allottingSlot.slotName) || `Slot`;
 
     // Extract base slot label (e.g. "Slot 1") so any previously stale topic in slotName is replaced
@@ -475,6 +495,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     const newSlotName = `${slotPrefix}: ${chosenTopic}`;
 
     const payload = {
+      activityType: allotForm.activityType,
       topic: chosenTopic,
       description: chosenDescription,
       slotName: newSlotName,
@@ -483,13 +504,16 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
       assignedFacultyDept: allotForm.assignedFacultyDept,
       slotTiming: allotForm.slotTiming,
       slotDate: allotForm.slotDate,
+      durationMinutes: isPresentation ? 60 : 15,
+      maxCapacity: isPresentation ? 6 : 15,
     };
 
     const res = await allotSlotTopicAndFaculty(allottingSlot.id, collegeCode, payload);
     setIsSavingAllotment(false);
 
     if (res && res.success) {
-      setBannerMsg(`Successfully allotted topic "${chosenTopic}" and faculty ${allotForm.assignedFacultyName} to ${newSlotName}.`);
+      const modeLabel = isPresentation ? 'Classroom Presentation (6 Seats)' : 'GD (15 Seats)';
+      setBannerMsg(`Successfully allotted ${modeLabel} topic "${chosenTopic}" and faculty ${allotForm.assignedFacultyName} to ${newSlotName}.`);
       setAllottingSlot(null);
       // Immediately reflect updates in local slot state
       setSlots((prev) =>
@@ -498,6 +522,10 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
             return {
               ...s,
               ...payload,
+              activityType: allotForm.activityType,
+              maxCapacity: isPresentation ? 6 : 15,
+              durationMinutes: isPresentation ? 60 : 15,
+              enrolledCount: isPresentation ? 6 : (s.enrolledCount || 15),
               slotName: newSlotName,
               topic: payload.topic,
               description: payload.description,
@@ -506,6 +534,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
               rawSession: {
                 ...(s.rawSession || {}),
                 ...payload,
+                activityType: allotForm.activityType,
                 slotName: newSlotName,
               },
             };
@@ -1679,6 +1708,17 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                   <div>
                     <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
                       <div className="flex items-center gap-1.5 flex-wrap">
+                        {sl.activityType === 'presentation' ? (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 flex items-center gap-1">
+                            <Sparkles className="w-3 h-3 text-purple-500" />
+                            <span>Presentation • 6 Seats</span>
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 flex items-center gap-1">
+                            <Users className="w-3 h-3 text-blue-500" />
+                            <span>GD • 15 Seats</span>
+                          </span>
+                        )}
                         <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 flex items-center gap-1">
                           <Calendar className="w-3 h-3" />
                           <span>{formatSlotDate(sl.slotDate)}</span>
@@ -1719,7 +1759,7 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
 
                     <div className="mb-3">
                       <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-0.5">
-                        Discussion Topic:
+                        {sl.activityType === 'presentation' ? 'Presentation Topic:' : 'Discussion Topic:'}
                       </div>
                       <p className={`text-xs font-semibold leading-relaxed ${isTopicPending ? 'text-amber-600 dark:text-amber-400 italic' : 'text-slate-800 dark:text-slate-100'}`}>
                         {isTopicPending ? '⚠️ No topic allotted yet — click "Allot Topic & Faculty" below.' : sl.topic}
@@ -1745,19 +1785,19 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-slate-400">Duration:</span>
-                        <span className="font-semibold">{sl.durationMinutes || 15} Minutes</span>
+                        <span className="font-semibold">{sl.durationMinutes || (sl.activityType === 'presentation' ? 60 : 15)} Minutes</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-slate-400">Enrolled Students:</span>
+                        <span className="text-slate-400">{sl.activityType === 'presentation' ? 'Enrolled Presenters:' : 'Enrolled Students:'}</span>
                         <div className="flex items-center gap-2">
                           <span className="font-bold font-mono text-indigo-600 dark:text-indigo-400">
-                            15 / 15 Students
+                            {sl.activityType === 'presentation' ? '6 / 6 Presenters' : '15 / 15 Students'}
                           </span>
                           <button
                             type="button"
                             onClick={() => setViewingRosterSlot(sl)}
                             className="text-[11px] font-bold text-amber-600 dark:text-amber-400 hover:underline cursor-pointer flex items-center gap-0.5"
-                            title="View all 15 enrolled students in this slot"
+                            title={sl.activityType === 'presentation' ? 'View all 6 enrolled presenters in this slot' : 'View all 15 enrolled students in this slot'}
                           >
                             <Eye className="w-3 h-3" />
                             <span>View</span>
@@ -3008,10 +3048,10 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                 </div>
                 <div>
                   <h3 className="font-heading font-extrabold text-base text-slate-900 dark:text-white">
-                    Allot Topic & Faculty In-Charge
+                    Allot Activity, Topic & Faculty
                   </h3>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {allottingSlot.slotName || 'Discussion Slot'} • 15 Pre-Enrolled Students
+                    {allottingSlot.slotName || 'Academic Slot'} • {allotForm.activityType === 'presentation' ? '6 Presenter Seats' : '15 GD Seats'}
                   </p>
                 </div>
               </div>
@@ -3023,14 +3063,88 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
               </button>
             </div>
 
+            {/* Activity Type Selection: GD vs Classroom Presentation */}
+            <div className="mb-4">
+              <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1.5 text-xs">
+                Select Activity Format
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {/* Option 1: Group Discussion */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAllotForm((prev) => ({
+                      ...prev,
+                      activityType: 'gd',
+                      durationMinutes: 15,
+                      slotTiming: prev.slotTiming || '10:30 AM - 10:45 AM',
+                    }));
+                  }}
+                  className={`p-3 rounded-2xl border text-left transition-all cursor-pointer relative ${
+                    allotForm.activityType === 'gd'
+                      ? 'border-indigo-600 bg-indigo-50/70 dark:bg-indigo-950/40 ring-2 ring-indigo-500/30'
+                      : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
+                      <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                      <span>Group Discussion (GD)</span>
+                    </div>
+                    {allotForm.activityType === 'gd' && (
+                      <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-tight">
+                    Multi-turn student debate & dialogue • 15 Students • 15–20 Mins
+                  </p>
+                </button>
+
+                {/* Option 2: Student Classroom Presentation */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAllotForm((prev) => ({
+                      ...prev,
+                      activityType: 'presentation',
+                      durationMinutes: 60,
+                      slotTiming: '10:00 AM - 11:15 AM',
+                    }));
+                  }}
+                  className={`p-3 rounded-2xl border text-left transition-all cursor-pointer relative ${
+                    allotForm.activityType === 'presentation'
+                      ? 'border-purple-600 bg-purple-50/70 dark:bg-purple-950/40 ring-2 ring-purple-500/30'
+                      : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900 dark:text-white">
+                      <Sparkles className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                      <span>Classroom Presentation</span>
+                    </div>
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-purple-600 text-white uppercase">
+                      New
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-tight">
+                    Individual podium presentations with AI Instructor • Exactly 6 Presenters • 60–75 Mins
+                  </p>
+                </button>
+              </div>
+            </div>
+
             {/* Slot Info Banner */}
             <div className="mb-4 p-3 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-3 flex-wrap">
               <div className="flex items-center gap-2">
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                  15 Students Allocated
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
+                  allotForm.activityType === 'presentation'
+                    ? 'bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800'
+                    : 'bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
+                }`}>
+                  {allotForm.activityType === 'presentation' ? '6 Presenters Allocated' : '15 Students Allocated'}
                 </span>
                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                  {allottingSlot.durationMinutes || 15} Mins
+                  {allotForm.durationMinutes || (allotForm.activityType === 'presentation' ? 60 : 15)} Mins
                 </span>
               </div>
               <button
@@ -3038,21 +3152,21 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                 onClick={() => setViewingRosterSlot(allottingSlot)}
                 className="text-xs font-bold text-amber-600 hover:text-amber-700 dark:text-amber-400 underline cursor-pointer"
               >
-                View 15 Enrolled Candidates →
+                View Enrolled Candidates →
               </button>
             </div>
 
             <form onSubmit={handleSaveAllotment} className="space-y-4 text-xs">
-              {/* Discussion Topic Input */}
+              {/* Topic Input */}
               <div>
                 <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                  Discussion Topic
+                  {allotForm.activityType === 'presentation' ? 'Presentation Topic / Theme' : 'Discussion Topic'}
                 </label>
                 <textarea
                   rows={2}
                   value={allotForm.topic}
                   onChange={(e) => setAllotForm({ ...allotForm, topic: e.target.value })}
-                  placeholder="Enter the discussion or debate topic..."
+                  placeholder={allotForm.activityType === 'presentation' ? "Enter the presentation topic or overarching theme (e.g. Artificial Intelligence in Modern Engineering)..." : "Enter the discussion or debate topic..."}
                   required
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
@@ -3142,7 +3256,9 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
               <div className="p-3 rounded-xl bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/70 dark:border-amber-800/50 text-[11px] text-amber-900 dark:text-amber-200 leading-relaxed flex items-start gap-2">
                 <Sparkles className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <span>
-                  Once saved, this slot will instantly appear in the assigned faculty member's portal and on the student portals of the 15 enrolled candidates.
+                  {allotForm.activityType === 'presentation'
+                    ? 'Once saved, this Classroom Presentation slot will enforce exactly 6 presenter podium turns (Student 1 to 6) following the ERUS AI Instructor execution protocol.'
+                    : "Once saved, this slot will instantly appear in the assigned faculty member's portal and on the student portals of the 15 enrolled candidates."}
                 </span>
               </div>
 

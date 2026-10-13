@@ -4,11 +4,40 @@ import dns from 'dns';
 
 dotenv.config();
 
-// Ensure Node uses reliable public DNS resolvers (Google & Cloudflare) for MongoDB SRV record resolution
+// Ensure Node uses reliable public DNS resolvers (Google & Cloudflare) for MongoDB SRV & shard host resolution
 try {
   dns.setServers(['8.8.8.8', '8.8.4.4', '1.1.1.1']);
+  const origLookup = dns.lookup.bind(dns);
+  (dns as any).lookup = function (hostname: string, options: any, callback?: any) {
+    let cb = callback;
+    let opts = options;
+    if (typeof options === 'function') {
+      cb = options;
+      opts = {};
+    } else if (typeof options === 'number') {
+      opts = { family: options };
+    }
+    return origLookup(hostname, opts, (err: any, address: any, family: any) => {
+      if (!err) {
+        return cb(null, address, family);
+      }
+      // Fallback to c-ares dns.resolve4 (which uses 8.8.8.8 / 1.1.1.1) if OS getaddrinfo fails
+      dns.resolve4(hostname, (resErr, addresses) => {
+        if (!resErr && addresses && addresses.length > 0) {
+          if (opts && opts.all) {
+            return cb(
+              null,
+              addresses.map((a) => ({ address: a, family: 4 }))
+            );
+          }
+          return cb(null, addresses[0], 4);
+        }
+        return cb(err, address, family);
+      });
+    });
+  };
 } catch (dnsErr: any) {
-  console.warn('[MongoDB] Could not set custom DNS servers:', dnsErr.message);
+  console.warn('[MongoDB] Could not configure custom DNS fallback:', dnsErr.message);
 }
 
 // Disable automatic index building globally to prevent WiredTiger disk space threshold errors (code 14031) on limited-volume deployments
@@ -258,6 +287,8 @@ export interface IGDSession extends Document {
   maxCapacity: number;
   enrolledCount: number;
   collegeCode: string;
+  activityType?: 'gd' | 'presentation';
+  presentationTopics?: string[];
   assignedFacultyId?: string;
   assignedFacultyName?: string;
   assignedFacultyEmail?: string;
@@ -283,6 +314,8 @@ const GDSessionSchema = new Schema<IGDSession>(
     slotName: { type: String, required: true },
     topic: { type: String, required: true, index: true },
     description: { type: String, default: '' },
+    activityType: { type: String, enum: ['gd', 'presentation'], default: 'gd' },
+    presentationTopics: { type: [String], default: [] },
     slotTiming: { type: String, default: '10:00 AM - 10:30 AM' },
     slotDate: { type: String, default: 'Today' },
     status: {
@@ -294,7 +327,6 @@ const GDSessionSchema = new Schema<IGDSession>(
     },
     currentPhase: {
       type: String,
-      enum: ['intro', 'rules', 'active_discussion', 'probing', 'conclusion'],
       default: 'intro',
     },
     durationMinutes: { type: Number, default: 25 },

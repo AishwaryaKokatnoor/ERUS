@@ -53,7 +53,23 @@ const RECORDINGS_DIR = path.join(process.cwd(), 'uploads', 'recordings');
 if (!fs.existsSync(RECORDINGS_DIR)) {
   fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
 }
-app.use('/uploads/recordings', express.static(RECORDINGS_DIR));
+app.use(
+  '/uploads/recordings',
+  (req, res, next) => {
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    next();
+  },
+  express.static(RECORDINGS_DIR, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.webm')) {
+        res.setHeader('Content-Type', 'video/webm');
+      } else if (filePath.endsWith('.mp4')) {
+        res.setHeader('Content-Type', 'video/mp4');
+      }
+    },
+  })
+);
 
 // ==========================================
 // PERSISTENT DATA STORE (Server-Side)
@@ -119,6 +135,8 @@ interface BackendCollegeSlotItem {
   assignedFacultyDept?: string;
   collegeCode: string;
   createdAt: string;
+  activityType?: 'gd' | 'presentation';
+  presentationTopics?: string[];
   students?: any[];
   recordingUrl?: string;
   recordingDurationSeconds?: number;
@@ -136,6 +154,16 @@ function normalizeCollegeCode(rawCode?: string): string {
     return 'VIT-2002';
   }
   return c;
+}
+
+function areCollegeCodesEquivalent(codeA?: string, codeB?: string): boolean {
+  const a = normalizeCollegeCode(codeA);
+  const b = normalizeCollegeCode(codeB);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const baseA = a.split('-')[0];
+  const baseB = b.split('-')[0];
+  return Boolean(baseA && baseB && baseA === baseB);
 }
 
 interface StoredAuthUser {
@@ -302,14 +330,14 @@ function loadPersistentState() {
 }
 
 function savePersistentState() {
+  // Always persist local snapshot on disk so server restarts or transient DB DNS issues never lose colleges or slots
+  try {
+    fs.writeFileSync(PERSIST_FILE, JSON.stringify(persistentState, null, 2), { encoding: 'utf8', mode: 0o600 });
+  } catch (err: any) {
+    console.warn('[Persistence] Local recovery snapshot could not be saved:', err.message);
+  }
+
   if (!isMongoConnected()) {
-    // Best-effort local durability during a database outage. Restrict permissions
-    // because the snapshot can contain account metadata and credentials.
-    try {
-      fs.writeFileSync(PERSIST_FILE, JSON.stringify(persistentState, null, 2), { encoding: 'utf8', mode: 0o600 });
-    } catch (err: any) {
-      console.warn('[Persistence] Local recovery snapshot could not be saved:', err.message);
-    }
     return;
   }
   SystemStateModel.findOneAndUpdate(
@@ -330,6 +358,103 @@ function savePersistentState() {
 }
 
 loadPersistentState();
+healEvaluatedSlots();
+
+function healEvaluatedSlots() {
+  try {
+    const rawReports = (persistentState as any).reports;
+    if (!rawReports || typeof rawReports !== 'object') return;
+    const allReports: any[] = Object.values(rawReports);
+    if (allReports.length === 0) return;
+
+    // 1. Never keep completed slots that have reports in deletedSlotIds
+    const evaluatedSessionIds = new Set(allReports.map((r) => r.sessionId).filter(Boolean));
+    if (Array.isArray(persistentState.deletedSlotIds) && persistentState.deletedSlotIds.length > 0) {
+      const origLen = persistentState.deletedSlotIds.length;
+      persistentState.deletedSlotIds = persistentState.deletedSlotIds.filter((id) => !evaluatedSessionIds.has(id));
+      if (persistentState.deletedSlotIds.length !== origLen) {
+        console.log(`[Persistence] Restored ${origLen - persistentState.deletedSlotIds.length} evaluated slots from deletedSlotIds`);
+      }
+    }
+
+    // 2. Ensure each evaluated slot exists in persistentState.slots
+    let changed = false;
+    for (const sessionId of evaluatedSessionIds) {
+      let found = false;
+      for (const list of Object.values(persistentState.slots || {})) {
+        if (list.some((s) => s.id === sessionId)) {
+          found = true;
+          break;
+        }
+      }
+
+      if (!found) {
+        const slotReports = allReports.filter((r) => r.sessionId === sessionId);
+        const firstRep = slotReports[0];
+        const sLower = sessionId.toLowerCase();
+        let colCode = 'DIT';
+        if (sLower.includes('bmsit')) colCode = 'BMSIT-2002';
+        else if (sLower.includes('vut')) colCode = 'VUT';
+
+        if (!persistentState.slots[colCode]) persistentState.slots[colCode] = [];
+        const rec = persistentState.recordings?.[sessionId];
+        const facName = colCode.startsWith('BMSIT') ? 'Harish' : colCode === 'VUT' ? 'River' : 'Assigned Faculty';
+        const facId = colCode.startsWith('BMSIT') ? 'fac-bmsit-1' : colCode === 'VUT' ? 'fac-vut-1' : 'fac-dit-1';
+
+        const synthSlot: BackendCollegeSlotItem = {
+          id: sessionId,
+          slotName: firstRep?.topic ? `Discussion: ${firstRep.topic}` : `Slot ${sessionId}`,
+          topic: firstRep?.topic || 'Ecommerce',
+          description: 'Completed group discussion evaluation session',
+          slotTiming: '10:00 AM - 10:30 AM',
+          slotDate: 'Today',
+          status: 'completed',
+          durationMinutes: 15,
+          enrolledCount: slotReports.length,
+          maxCapacity: 15,
+          assignedFacultyId: facId,
+          assignedFacultyName: facName,
+          assignedFacultyEmail: `${facName.toLowerCase()}@${colCode.toLowerCase()}.edu`,
+          assignedFacultyDept: 'Computer Science & Engineering',
+          collegeCode: colCode,
+          students: slotReports.map((r, idx) => ({
+            id: r.studentId,
+            name: r.studentName,
+            email: `${String(r.studentName || 'student').toLowerCase().replace(/\s+/g, '.')}@college.edu`,
+            studentId: r.studentId,
+            course: 'Engineering',
+            batch: '2024-2028',
+            college: colCode,
+            collegeCode: colCode,
+            seatNumber: r.seatNumber || (idx + 1),
+            avatar: '',
+            isUser: false,
+            speakingDurationSeconds: r.speakingDurationSeconds || r.speakingTimeSeconds || 0,
+            speakingTurns: r.speakingTurns || 0,
+            interruptionCount: r.interruptions || 0,
+            questionsAnswered: r.questionsAnswered || 0,
+            questionsInitiated: r.questionsInitiated || 0,
+            sentiment: 'neutral',
+            isEmptySeat: false,
+          })),
+          recordingUrl: rec?.recordingUrl || '',
+          recordingDurationSeconds: rec?.durationSeconds || 0,
+          recordingFileSize: rec?.fileSizeBytes || 0,
+          recordedAt: rec?.recordedAt || '',
+        };
+        persistentState.slots[colCode].unshift(synthSlot);
+        changed = true;
+        console.log(`[Persistence] Synthesized missing completed slot: ${sessionId} in college ${colCode} with ${slotReports.length} reports`);
+      }
+    }
+
+    if (changed) {
+      savePersistentState();
+    }
+  } catch (err: any) {
+    console.warn('[Persistence] healEvaluatedSlots error:', err.message);
+  }
+}
 
 // Helper to assign distinct sequential seats (Seat 1, Seat 2, ...) avoiding collisions
 function assignUniqueSeats<T extends { seatNumber?: number; email?: string }>(items: T[]): T[] {
@@ -355,19 +480,33 @@ async function syncMongoDBWithPersistentState() {
     const sysDoc = await SystemStateModel.findOne({ key: 'global' });
     if (sysDoc) {
       if (Array.isArray(sysDoc.deletedSlotIds)) {
-        persistentState.deletedSlotIds = Array.from(new Set(sysDoc.deletedSlotIds.filter(Boolean)));
+        persistentState.deletedSlotIds = Array.from(
+          new Set([...(persistentState.deletedSlotIds || []), ...sysDoc.deletedSlotIds.filter(Boolean)])
+        );
       }
       if (sysDoc.slotsInitializedColleges && typeof sysDoc.slotsInitializedColleges === 'object') {
-        persistentState.slotsInitializedColleges = { ...sysDoc.slotsInitializedColleges };
+        persistentState.slotsInitializedColleges = {
+          ...(persistentState.slotsInitializedColleges || {}),
+          ...sysDoc.slotsInitializedColleges,
+        };
       }
       if (sysDoc.studentBookings && typeof sysDoc.studentBookings === 'object') {
-        persistentState.studentBookings = { ...sysDoc.studentBookings };
+        persistentState.studentBookings = {
+          ...(persistentState.studentBookings || {}),
+          ...sysDoc.studentBookings,
+        };
       }
       if (sysDoc.studentTopicBookings && typeof sysDoc.studentTopicBookings === 'object') {
-        persistentState.studentTopicBookings = { ...sysDoc.studentTopicBookings };
+        persistentState.studentTopicBookings = {
+          ...(persistentState.studentTopicBookings || {}),
+          ...sysDoc.studentTopicBookings,
+        };
       }
       if (sysDoc.recordings && typeof sysDoc.recordings === 'object') {
-        persistentState.recordings = { ...sysDoc.recordings };
+        persistentState.recordings = {
+          ...(persistentState.recordings || {}),
+          ...sysDoc.recordings,
+        };
       }
       if (sysDoc.systemSettings && typeof sysDoc.systemSettings === 'object') {
         persistentState.systemSettings = {
@@ -382,31 +521,32 @@ async function syncMongoDBWithPersistentState() {
       }
     }
 
-    // 1. Colleges Sync: Read from MongoDB as sole authoritative store
-    persistentState.colleges = [];
+    // 1. Colleges Sync: Merge MongoDB colleges with in-memory colleges (never wipe local colleges)
     const dbColleges = await CollegeModel.find();
+    const dbCollegeCodes = new Set<string>();
     if (dbColleges.length > 0) {
       for (const c of dbColleges) {
-        // Do not delete records based on hard-coded legacy codes during routine sync.
         const normCode = normalizeCollegeCode(c.code);
-        const mappedCol: BackendCollege = {
-          id: c.id,
-          name: normCode === 'BMSIT' ? 'BMS Institute of Technology' : c.name,
-          code: normCode,
-          contactEmail: c.contactEmail,
-          phone: c.phone || '',
-          address: c.address || '',
-          status: c.status || 'active',
-          studentCount: c.studentCount || 0,
-          facultyCount: c.facultyCount || 0,
-          slotCount: c.slotCount || 0,
-          studentLimit: (c as any).studentLimit || 60,
-          adminEmail: c.adminEmail || c.contactEmail,
-          adminName: c.adminName || `${normCode} Administrator`,
-          adminPassword: c.adminPassword || '',
-          createdAt: c.createdAt ? new Date(c.createdAt).toISOString() : new Date().toISOString(),
-        };
+        dbCollegeCodes.add(normCode);
         const existingIdx = persistentState.colleges.findIndex((col) => normalizeCollegeCode(col.code) === normCode);
+        const existingLocal = existingIdx >= 0 ? persistentState.colleges[existingIdx] : null;
+        const mappedCol: BackendCollege = {
+          id: existingLocal?.id || c.id,
+          name: normCode === 'BMSIT' ? 'BMS Institute of Technology' : (existingLocal?.name || c.name),
+          code: normCode,
+          contactEmail: existingLocal?.contactEmail || c.contactEmail,
+          phone: existingLocal?.phone || c.phone || '',
+          address: existingLocal?.address || c.address || '',
+          status: existingLocal?.status || c.status || 'active',
+          studentCount: Math.max(existingLocal?.studentCount || 0, c.studentCount || 0),
+          facultyCount: Math.max(existingLocal?.facultyCount || 0, c.facultyCount || 0),
+          slotCount: Math.max(existingLocal?.slotCount || 0, c.slotCount || 0),
+          studentLimit: Math.max(existingLocal?.studentLimit || 0, (c as any).studentLimit || 60),
+          adminEmail: existingLocal?.adminEmail || c.adminEmail || c.contactEmail,
+          adminName: existingLocal?.adminName || c.adminName || `${normCode} Administrator`,
+          adminPassword: existingLocal?.adminPassword || c.adminPassword || '',
+          createdAt: existingLocal?.createdAt || (c.createdAt ? new Date(c.createdAt).toISOString() : new Date().toISOString()),
+        };
         if (existingIdx >= 0) {
           persistentState.colleges[existingIdx] = mappedCol;
         } else {
@@ -414,13 +554,22 @@ async function syncMongoDBWithPersistentState() {
         }
       }
     }
+    // Push any locally preserved colleges that aren't in MongoDB yet
+    for (const localCol of persistentState.colleges) {
+      const normCode = normalizeCollegeCode(localCol.code);
+      if (!dbCollegeCodes.has(normCode)) {
+        persistCollegeToMongoDB(localCol).catch(() => null);
+      }
+    }
 
     const activeCollegeSet = new Set(persistentState.colleges.map((c) => normalizeCollegeCode(c.code)));
 
-    // 2. Users Sync: Read all users from MongoDB as sole authoritative store
-    persistentState.users = [...DEFAULT_USERS];
-    persistentState.students = {};
-    persistentState.faculty = {};
+    // 2. Users Sync: Merge MongoDB users with in-memory users
+    for (const defUser of DEFAULT_USERS) {
+      if (!persistentState.users.some((u) => u.email.toLowerCase() === defUser.email.toLowerCase())) {
+        persistentState.users.push(defUser);
+      }
+    }
     const dbUsers = await UserModel.find();
     if (dbUsers.length > 0) {
       for (const u of dbUsers) {
@@ -457,7 +606,7 @@ async function syncMongoDBWithPersistentState() {
       }
     }
 
-    // Hydrate students and faculty lists per college from MongoDB users
+    // Hydrate students and faculty lists per college from merged users
     for (const col of persistentState.colleges) {
       const normCode = normalizeCollegeCode(col.code);
       const colStudents = persistentState.users
@@ -509,17 +658,14 @@ async function syncMongoDBWithPersistentState() {
       }
     }
 
-    // 4. Hydrate Slots (Parent Table: gd_sessions) from MongoDB
-    persistentState.slots = {};
+    // 4. Hydrate Slots (Parent Table: gd_sessions) from MongoDB, merging with in-memory slots
     const deletedSet = new Set(persistentState.deletedSlotIds || []);
-    // Tombstones hide intentionally deleted slots from normal views, but do not
-    // physically erase database history during routine startup synchronization.
+    const dbSessionIds = new Set<string>();
     const dbSessions = await GDSessionModel.find();
     if (dbSessions.length > 0) {
       for (const s of dbSessions) {
         if (!s?.id || deletedSet.has(s.id)) continue;
-        // Preserve sessions even when their college record is missing. A temporary
-        // college-sync mismatch must never cascade into irreversible session deletion.
+        dbSessionIds.add(s.id);
         const colCode = normalizeCollegeCode(s.collegeCode) || 'UNASSIGNED';
         if (!activeCollegeSet.has(colCode)) {
           console.warn(`[MongoDB] Session ${s.id} references missing college ${colCode}; preserving the session record.`);
@@ -532,28 +678,30 @@ async function syncMongoDBWithPersistentState() {
         const resolvedRecordingDuration = (s as any).recordingDurationSeconds || savedRec?.durationSeconds || 0;
         const resolvedRecordingSize = (s as any).recordingFileSize || (savedRec as any)?.fileSize || (savedRec as any)?.fileSizeBytes || 0;
         const resolvedRecordedAt = (s as any).recordedAt ? new Date((s as any).recordedAt).toISOString() : savedRec?.recordedAt || undefined;
+        const existingLocalIdx = persistentState.slots[colCode].findIndex((slot) => slot.id === s.id);
+        const existingLocal = existingLocalIdx >= 0 ? persistentState.slots[colCode][existingLocalIdx] : null;
         let slotItem: BackendCollegeSlotItem = {
           id: s.id,
-          slotName: s.slotName,
-          topic: s.topic,
-          description: s.description ?? '',
-          slotTiming: s.slotTiming || '10:00 AM - 10:30 AM',
-          slotDate: s.slotDate || 'Today',
-          status: s.status,
-          durationMinutes: s.durationMinutes,
+          slotName: existingLocal?.slotName || s.slotName,
+          topic: existingLocal?.topic || s.topic,
+          description: existingLocal?.description || s.description || '',
+          slotTiming: existingLocal?.slotTiming || s.slotTiming || '10:00 AM - 10:30 AM',
+          slotDate: existingLocal?.slotDate || s.slotDate || 'Today',
+          status: (existingLocal?.status === 'completed' || s.status === 'completed') ? 'completed' : (s.status || existingLocal?.status || 'scheduled'),
+          durationMinutes: existingLocal?.durationMinutes || s.durationMinutes,
           enrolledCount: rawStudents.length > 0 ? rawStudents.length : s.enrolledCount,
           maxCapacity: s.maxCapacity,
-          assignedFacultyId: s.assignedFacultyId,
-          assignedFacultyName: s.assignedFacultyName,
-          assignedFacultyEmail: s.assignedFacultyEmail,
-          assignedFacultyDept: s.assignedFacultyDept,
+          assignedFacultyId: existingLocal?.assignedFacultyId || s.assignedFacultyId,
+          assignedFacultyName: existingLocal?.assignedFacultyName || s.assignedFacultyName,
+          assignedFacultyEmail: existingLocal?.assignedFacultyEmail || s.assignedFacultyEmail,
+          assignedFacultyDept: existingLocal?.assignedFacultyDept || s.assignedFacultyDept,
           collegeCode: colCode,
-          createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString(),
-          students: rawStudents,
-          recordingUrl: resolvedRecordingUrl || undefined,
-          recordingDurationSeconds: resolvedRecordingDuration || undefined,
-          recordingFileSize: resolvedRecordingSize || undefined,
-          recordedAt: resolvedRecordedAt,
+          createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : (existingLocal?.createdAt || new Date().toISOString()),
+          students: rawStudents.length > 0 ? rawStudents : (existingLocal?.students || []),
+          recordingUrl: resolvedRecordingUrl || existingLocal?.recordingUrl || undefined,
+          recordingDurationSeconds: resolvedRecordingDuration || existingLocal?.recordingDurationSeconds || undefined,
+          recordingFileSize: resolvedRecordingSize || existingLocal?.recordingFileSize || undefined,
+          recordedAt: resolvedRecordedAt || existingLocal?.recordedAt,
         };
         if (resolvedRecordingUrl) {
           if (!persistentState.recordings) persistentState.recordings = {};
@@ -567,11 +715,20 @@ async function syncMongoDBWithPersistentState() {
           } as any;
         }
         slotItem = ensureSlotParticipants(slotItem, colCode);
-        const existingSlotIdx = persistentState.slots[colCode].findIndex((slot) => slot.id === s.id);
-        if (existingSlotIdx >= 0) {
-          persistentState.slots[colCode][existingSlotIdx] = slotItem;
+        if (existingLocalIdx >= 0) {
+          persistentState.slots[colCode][existingLocalIdx] = slotItem;
         } else {
           persistentState.slots[colCode].push(slotItem);
+        }
+      }
+    }
+    // Sync any local in-memory slots not yet present in MongoDB
+    for (const [colCode, slotList] of Object.entries(persistentState.slots)) {
+      const cleanList = (slotList || []).filter((s) => s && s.id && !deletedSet.has(s.id));
+      persistentState.slots[colCode] = cleanList;
+      for (const localSlot of cleanList) {
+        if (!dbSessionIds.has(localSlot.id)) {
+          persistSlotToMongoDB(localSlot).catch(() => null);
         }
       }
     }
@@ -788,7 +945,38 @@ function ensureSlotParticipants(slot: BackendCollegeSlotItem, code: string): Bac
     }
   }
 
-  slot.students = validStudents.map((s, idx) => ({ ...s, seatNumber: idx + 1 }));
+  // Also include any students with reports in persistentState.reports for this slot
+  if ((persistentState as any).reports) {
+    for (const r of Object.values((persistentState as any).reports || {})) {
+      const rep = r as any;
+      if (rep?.sessionId === slot.id && rep?.studentId) {
+        if (!validStudents.some((v) => v.id === rep.studentId || (v.name && String(v.name).toLowerCase() === String(rep.studentName).toLowerCase()))) {
+          validStudents.push({
+            id: rep.studentId,
+            name: rep.studentName || 'Participant',
+            email: rep.email || `${String(rep.studentName || 'student').toLowerCase().replace(/\s+/g, '.')}@college.edu`,
+            studentId: rep.studentId,
+            college: rep.college || normCode,
+            collegeCode: normCode,
+            course: rep.course || 'Engineering',
+            batch: rep.batch || '2024-2028',
+            seatNumber: rep.seatNumber || (validStudents.length + 1),
+            avatar: '',
+            isUser: false,
+            speakingDurationSeconds: rep.speakingDurationSeconds || rep.speakingTimeSeconds || 0,
+            speakingTurns: rep.speakingTurns || 0,
+            interruptionCount: rep.interruptions || 0,
+            questionsAnswered: rep.questionsAnswered || 0,
+            questionsInitiated: rep.questionsInitiated || 0,
+            sentiment: 'neutral',
+            isEmptySeat: false,
+          });
+        }
+      }
+    }
+  }
+
+  slot.students = validStudents.map((s, idx) => ({ ...s, seatNumber: s.seatNumber || (idx + 1) }));
   slot.enrolledCount = slot.students.length;
   return slot;
 }
@@ -807,6 +995,8 @@ async function persistSlotToMongoDB(slot: BackendCollegeSlotItem) {
         slotDate: slot.slotDate || 'Today',
         status: (slot.status as any) || 'scheduled',
         durationMinutes: slot.durationMinutes || 25,
+        activityType: slot.activityType || 'gd',
+        presentationTopics: slot.presentationTopics || [],
         enrolledCount: slot.enrolledCount || 0,
         maxCapacity: slot.maxCapacity || 15,
         collegeCode: slot.collegeCode || 'DIT',
@@ -1549,6 +1739,9 @@ app.post('/api/admin/colleges', async (req, res) => {
   res.json({
     success: true,
     college: newCol,
+    slots: freshSlots,
+    slotCount: freshSlots.length,
+    studentLimit: newCol.studentLimit,
     generatedCredentials: {
       email: adminUser.email,
       password: adminPass,
@@ -1566,22 +1759,21 @@ async function addSlotsToCollegeAndPersist(col: BackendCollege, body: any) {
 
   // 1. Collect all existing non-deleted slots for this college (in-memory + MongoDB hydration)
   const slotMap = new Map<string, BackendCollegeSlotItem>();
-  for (const s of (persistentState.slots[normCode] || [])) {
-    if (s && s.id && !deletedSet.has(s.id)) {
-      slotMap.set(s.id, { ...s, collegeCode: normCode });
-    }
-  }
-  if (col.code !== normCode) {
-    for (const s of (persistentState.slots[col.code] || [])) {
-      if (s && s.id && !deletedSet.has(s.id) && !slotMap.has(s.id)) {
-        slotMap.set(s.id, { ...s, collegeCode: normCode });
+  for (const [k, list] of Object.entries(persistentState.slots || {})) {
+    if (normalizeCollegeCode(k) === normCode || k.toUpperCase() === col.code.toUpperCase()) {
+      for (const s of (list || [])) {
+        if (s && s.id && !deletedSet.has(s.id) && !slotMap.has(s.id)) {
+          slotMap.set(s.id, { ...s, collegeCode: normCode });
+        }
       }
     }
   }
 
   if (isMongoConnected()) {
     try {
-      const dbSlots = await GDSessionModel.find({ collegeCode: normCode }).maxTimeMS(2000);
+      const dbSlots = await GDSessionModel.find({
+        collegeCode: { $in: Array.from(new Set([normCode, col.code, col.code.toUpperCase()])) },
+      }).maxTimeMS(1500);
       for (const s of dbSlots) {
         if (s && s.id && !deletedSet.has(s.id) && !slotMap.has(s.id)) {
           slotMap.set(s.id, {
@@ -1643,21 +1835,28 @@ async function addSlotsToCollegeAndPersist(col: BackendCollege, body: any) {
 
   col.studentLimit = updatedStudentLimit;
   col.slotCount = combinedSlots.length;
+  col.code = normCode;
 
   if (!persistentState.slotsInitializedColleges) {
     persistentState.slotsInitializedColleges = {};
   }
   persistentState.slotsInitializedColleges[normCode] = true;
   persistentState.slots[normCode] = combinedSlots;
-  if (col.code !== normCode) {
-    persistentState.slots[col.code] = combinedSlots;
+
+  // Ensure college is in persistentState.colleges
+  const existingColIdx = persistentState.colleges.findIndex(
+    (c) => c.id === col.id || normalizeCollegeCode(c.code) === normCode
+  );
+  if (existingColIdx >= 0) {
+    persistentState.colleges[existingColIdx] = col;
+  } else {
+    persistentState.colleges.push(col);
   }
 
+  // Save local snapshot immediately on disk and trigger MongoDB sync asynchronously so API returns fast
   savePersistentState();
-  await persistCollegeToMongoDB(col);
-  for (const sl of combinedSlots) {
-    await persistSlotToMongoDB(sl);
-  }
+  persistCollegeToMongoDB(col).catch(() => null);
+  Promise.allSettled(combinedSlots.map((sl) => persistSlotToMongoDB(sl))).catch(() => null);
 
   try {
     io.emit('college-limit-updated', {
@@ -1690,30 +1889,93 @@ async function addSlotsToCollegeAndPersist(col: BackendCollege, body: any) {
   };
 }
 
-app.put(['/api/admin/colleges/:id/limit', '/api/admin/colleges/:id/quota'], async (req, res) => {
-  const targetId = req.params.id;
-  const col = persistentState.colleges.find(
+async function resolveOrCreateCollegeForSlotGeneration(targetId: string, body: any): Promise<BackendCollege> {
+  const rawCode = String(body?.collegeCode || (!targetId.startsWith('col-') ? targetId : '') || '').trim();
+  const normTarget = normalizeCollegeCode(rawCode || targetId);
+
+  let col = persistentState.colleges.find(
     (c) =>
       c.id === targetId ||
       c.code.toUpperCase() === targetId.toUpperCase() ||
-      normalizeCollegeCode(c.code) === normalizeCollegeCode(targetId)
+      normalizeCollegeCode(c.code) === normTarget ||
+      areCollegeCodesEquivalent(c.code, normTarget) ||
+      (body?.collegeName && c.name.toLowerCase() === String(body.collegeName).trim().toLowerCase())
   );
-  if (!col) return res.status(404).json({ success: false, error: 'College not found' });
 
+  if (!col && isMongoConnected()) {
+    try {
+      const dbCol = await CollegeModel.findOne({
+        $or: [
+          { id: targetId },
+          { code: targetId.toUpperCase() },
+          { code: normTarget },
+        ],
+      }).maxTimeMS(1500);
+      if (dbCol) {
+        const mappedCode = normalizeCollegeCode(dbCol.code);
+        col = {
+          id: dbCol.id || targetId,
+          name: dbCol.name || body?.collegeName || `${mappedCode} Campus`,
+          code: mappedCode,
+          contactEmail: dbCol.contactEmail || `admin@${mappedCode.toLowerCase()}.edu.in`,
+          phone: dbCol.phone || '',
+          address: dbCol.address || '',
+          status: dbCol.status || 'active',
+          studentCount: dbCol.studentCount || 0,
+          facultyCount: dbCol.facultyCount || 0,
+          slotCount: dbCol.slotCount || 0,
+          studentLimit: (dbCol as any).studentLimit || 60,
+          adminEmail: dbCol.adminEmail || dbCol.contactEmail,
+          adminName: dbCol.adminName || `${mappedCode} Administrator`,
+          adminPassword: dbCol.adminPassword || `Erus@${mappedCode}2026`,
+          createdAt: dbCol.createdAt ? new Date(dbCol.createdAt).toISOString() : new Date().toISOString(),
+        };
+        persistentState.colleges.push(col);
+      }
+    } catch {}
+  }
+
+  // Fallback: if there is exactly 1 college in persistentState and targetId was a stale col-* ID, use that college
+  if (!col && targetId.startsWith('col-') && !rawCode && persistentState.colleges.length === 1) {
+    col = persistentState.colleges[0];
+  }
+
+  if (!col) {
+    const finalCode = normTarget && !normTarget.startsWith('COL-') ? normTarget : normalizeCollegeCode(rawCode || 'BMSIT');
+    const finalName = String(body?.collegeName || (finalCode === 'BMSIT' ? 'BMS Institute of Technology' : `${finalCode} Institution`)).trim();
+    col = {
+      id: targetId.startsWith('col-') ? targetId : `col-${Date.now()}`,
+      name: finalName,
+      code: finalCode,
+      contactEmail: `admin@${finalCode.toLowerCase()}.edu.in`,
+      phone: '',
+      address: '',
+      status: 'active',
+      studentCount: (persistentState.students[finalCode] || []).length,
+      facultyCount: (persistentState.faculty[finalCode] || []).length,
+      slotCount: (persistentState.slots[finalCode] || []).length,
+      studentLimit: Number(body?.studentLimit) || 60,
+      adminEmail: `admin@${finalCode.toLowerCase()}.edu.in`,
+      adminName: `${finalCode} Administrator`,
+      adminPassword: `Erus@${finalCode}2026`,
+      createdAt: new Date().toISOString(),
+    };
+    persistentState.colleges.push(col);
+  }
+
+  return col;
+}
+
+app.put(['/api/admin/colleges/:id/limit', '/api/admin/colleges/:id/quota'], async (req, res) => {
+  const targetId = req.params.id;
+  const col = await resolveOrCreateCollegeForSlotGeneration(targetId, req.body);
   const result = await addSlotsToCollegeAndPersist(col, req.body);
   res.json(result);
 });
 
 app.post('/api/admin/colleges/:id/limit', async (req, res) => {
   const targetId = req.params.id;
-  const col = persistentState.colleges.find(
-    (c) =>
-      c.id === targetId ||
-      c.code.toUpperCase() === targetId.toUpperCase() ||
-      normalizeCollegeCode(c.code) === normalizeCollegeCode(targetId)
-  );
-  if (!col) return res.status(404).json({ success: false, error: 'College not found' });
-
+  const col = await resolveOrCreateCollegeForSlotGeneration(targetId, req.body);
   const result = await addSlotsToCollegeAndPersist(col, req.body);
   res.json(result);
 });
@@ -2201,14 +2463,63 @@ app.post('/api/user/heartbeat', (req, res) => {
   });
 });
 
+// Helper to resolve requested collegeCode against active colleges & slot buckets
+function resolveEffectiveCollegeCode(rawQueryCode?: string): string {
+  const raw = String(rawQueryCode || 'DIT').trim();
+  const code = normalizeCollegeCode(raw);
+
+  // 1. Direct match in persistentState.colleges by code, id, or name
+  const exactCol = persistentState.colleges.find(
+    (c) =>
+      normalizeCollegeCode(c.code) === code ||
+      c.id === raw ||
+      c.name.toLowerCase() === raw.toLowerCase()
+  );
+  if (exactCol) {
+    return normalizeCollegeCode(exactCol.code);
+  }
+
+  // 2. Base-code / equivalent match in persistentState.colleges (e.g. 'BMSIT' <-> 'BMSIT-2002')
+  const equivCol = persistentState.colleges.find((c) => areCollegeCodesEquivalent(c.code, code));
+  if (equivCol) {
+    return normalizeCollegeCode(equivCol.code);
+  }
+
+  // 3. Match against existing non-empty slot buckets
+  for (const [k, list] of Object.entries(persistentState.slots || {})) {
+    if (Array.isArray(list) && list.length > 0 && areCollegeCodesEquivalent(k, code)) {
+      return normalizeCollegeCode(k);
+    }
+  }
+
+  // 4. If requested code is a default placeholder ('DIT' / 'CAMPUS' / 'COL') and there is an onboarded college, resolve to it
+  if ((code === 'DIT' || code === 'CAMPUS' || code === 'COL') && persistentState.colleges.length === 1) {
+    return normalizeCollegeCode(persistentState.colleges[0].code);
+  }
+
+  return code;
+}
+
 // --- COLLEGE ADMIN ENDPOINTS ---
 app.get('/api/college/stats', (req, res) => {
-  const code = normalizeCollegeCode((req.query.collegeCode as string) || 'DIT');
-  const college = persistentState.colleges.find((c) => normalizeCollegeCode(c.code) === code);
+  const code = resolveEffectiveCollegeCode(req.query.collegeCode as string);
+  const college = persistentState.colleges.find(
+    (c) => normalizeCollegeCode(c.code) === code || areCollegeCodesEquivalent(c.code, code)
+  );
   const stuList = persistentState.students[code] || [];
   const facList = persistentState.faculty[code] || [];
   const deletedSet = new Set(persistentState.deletedSlotIds || []);
-  const slotList = (persistentState.slots[code] || []).filter((s) => s?.id && !deletedSet.has(s.id));
+  const slotMap = new Map<string, BackendCollegeSlotItem>();
+  for (const [k, list] of Object.entries(persistentState.slots || {})) {
+    if (normalizeCollegeCode(k) === code || areCollegeCodesEquivalent(k, code)) {
+      for (const s of (list || [])) {
+        if (s?.id && !deletedSet.has(s.id) && !slotMap.has(s.id)) {
+          slotMap.set(s.id, s);
+        }
+      }
+    }
+  }
+  const slotList = Array.from(slotMap.values());
   const effectiveStudentLimit = slotList.length > 0
     ? Math.max(college?.studentLimit || 60, slotList.length * 15)
     : (college?.studentLimit || 60);
@@ -2216,7 +2527,7 @@ app.get('/api/college/stats', (req, res) => {
   res.json({
     success: true,
     stats: {
-      collegeName: college?.name || 'Delhi Institute of Technology',
+      collegeName: college?.name || (code === 'BMSIT' ? 'BMS Institute of Technology' : `${code} Institution`),
       collegeCode: code,
       studentLimit: effectiveStudentLimit,
       totalStudents: stuList.length,
@@ -2229,7 +2540,7 @@ app.get('/api/college/stats', (req, res) => {
 });
 
 app.get('/api/college/students', (req, res) => {
-  const code = normalizeCollegeCode((req.query.collegeCode as string) || 'DIT');
+  const code = resolveEffectiveCollegeCode((req.query.collegeCode as string) || 'DIT');
   let rawStudents = persistentState.students[code] || [];
   rawStudents = assignUniqueSeats(rawStudents);
   persistentState.students[code] = rawStudents;
@@ -2525,7 +2836,7 @@ app.post('/api/college/students', async (req, res) => {
 });
 
 app.get('/api/college/faculty', async (req, res) => {
-  const code = normalizeCollegeCode((req.query.collegeCode as string) || 'DIT');
+  const code = resolveEffectiveCollegeCode((req.query.collegeCode as string) || 'DIT');
   const facultyMap = new Map<string, any>();
 
   // Persistent roster remains the fast path / fallback.
@@ -2888,33 +3199,37 @@ app.post('/api/college/dispatch-credentials', async (req, res) => {
 
 
 app.get('/api/college/slots', async (req, res) => {
-  const code = normalizeCollegeCode((req.query.collegeCode as string) || 'DIT');
+  const code = resolveEffectiveCollegeCode(req.query.collegeCode as string);
   const facultyList = persistentState.faculty[code] || [];
   const slotMap = new Map<string, any>();
   const deletedSet = new Set(persistentState.deletedSlotIds || []);
+  const hasDeletedSlotsForCollege = Array.from(deletedSet).some((id) =>
+    String(id || '').toLowerCase().includes(`slot-${code.toLowerCase()}-`)
+  );
   const hadInitializedSlots =
     Boolean(persistentState.slotsInitializedColleges?.[code]) ||
-    Array.isArray(persistentState.slots[code]) ||
-    deletedSet.size > 0;
+    (Array.isArray(persistentState.slots[code]) && persistentState.slots[code].length > 0) ||
+    hasDeletedSlotsForCollege;
 
-  // Start with in-memory slots for this code (excluding any deleted slots)
-  for (const slot of (persistentState.slots[code] || [])) {
-    if (slot?.id && !deletedSet.has(slot.id)) {
-      slotMap.set(slot.id, slot);
+  // Start with in-memory slots across any key normalizing to or equivalent to this code (excluding any deleted slots)
+  for (const [k, list] of Object.entries(persistentState.slots || {})) {
+    if (normalizeCollegeCode(k) === code || areCollegeCodesEquivalent(k, code)) {
+      for (const slot of (list || [])) {
+        if (slot?.id && !deletedSet.has(slot.id)) {
+          slotMap.set(slot.id, { ...slot, collegeCode: code });
+        }
+      }
     }
   }
 
   // Authoritative MongoDB lookup (enrich existing initialized slots, or hydrate if never initialized)
   if (isMongoConnected()) {
     try {
-      const dbSlots = await GDSessionModel.find({ collegeCode: code }).maxTimeMS(2000);
+      const dbSlots = await GDSessionModel.find({ collegeCode: code }).maxTimeMS(1500);
       for (const s of dbSlots) {
         if (!s?.id || deletedSet.has(s.id)) {
-          // A tombstoned slot is hidden from the UI, but reads must never physically
-          // delete database records. This preserves history and enables recovery.
           continue;
         }
-        // MongoDB slots missing from process memory are hydrated, not deleted.
         const existing = slotMap.get(s.id) || {};
         slotMap.set(s.id, {
           ...existing,
@@ -2987,14 +3302,14 @@ app.get('/api/college/slots', async (req, res) => {
     }
   }
 
-  // Only auto-generate initial slots if this college has never initialized or deleted slots
-  if (slotMap.size === 0 && !hadInitializedSlots) {
-    const col = persistentState.colleges.find((c) => normalizeCollegeCode(c.code) === code);
+  // Auto-generate initial slots if this college has no slots and none were explicitly deleted for this college
+  const col = persistentState.colleges.find((c) => normalizeCollegeCode(c.code) === code);
+  if (slotMap.size === 0 && (!hadInitializedSlots || (col && !hasDeletedSlotsForCollege))) {
     const limit = col?.studentLimit || 60;
-    const generated = generateRandomSlotsForCollege(code, limit);
+    const generated = generateRandomSlotsForCollege(code, limit, 0);
     for (const g of generated) {
       slotMap.set(g.id, g);
-      persistSlotToMongoDB(g);
+      persistSlotToMongoDB(g).catch(() => null);
     }
     if (!persistentState.slotsInitializedColleges) persistentState.slotsInitializedColleges = {};
     persistentState.slotsInitializedColleges[code] = true;
@@ -3268,6 +3583,10 @@ app.put(['/api/college/slots/:id/allot', '/api/college/slots/:id'], async (req, 
     slotTiming,
     slotDate,
     status,
+    activityType,
+    durationMinutes,
+    maxCapacity,
+    presentationTopics,
   } = req.body;
 
   let targetSlot: BackendCollegeSlotItem | null = null;
@@ -3292,12 +3611,14 @@ app.put(['/api/college/slots/:id/allot', '/api/college/slots/:id'], async (req, 
           slotName: dbSlot.slotName,
           topic: dbSlot.topic,
           description: dbSlot.description || '',
+          activityType: (dbSlot as any).activityType || 'gd',
+          presentationTopics: (dbSlot as any).presentationTopics || [],
           slotTiming: dbSlot.slotTiming || '',
           slotDate: dbSlot.slotDate || 'Today',
           status: dbSlot.status,
           durationMinutes: dbSlot.durationMinutes,
           enrolledCount: (dbSlot as any).students?.length || 15,
-          maxCapacity: 15,
+          maxCapacity: (dbSlot as any).activityType === 'presentation' ? 6 : 15,
           assignedFacultyId: dbSlot.assignedFacultyId || '',
           assignedFacultyName: dbSlot.assignedFacultyName || '',
           assignedFacultyEmail: dbSlot.assignedFacultyEmail || '',
@@ -3314,6 +3635,39 @@ app.put(['/api/college/slots/:id/allot', '/api/college/slots/:id'], async (req, 
 
   if (!targetSlot) {
     return res.status(404).json({ success: false, error: 'GD slot not found' });
+  }
+
+  if (activityType !== undefined) {
+    targetSlot.activityType = activityType;
+  }
+  if (presentationTopics !== undefined) {
+    targetSlot.presentationTopics = presentationTopics;
+  }
+  if (durationMinutes !== undefined) {
+    targetSlot.durationMinutes = Number(durationMinutes);
+  }
+
+  if (targetSlot.activityType === 'presentation') {
+    targetSlot.maxCapacity = 6;
+    if (targetSlot.students && targetSlot.students.length > 0) {
+      if (targetSlot.students.length > 6) {
+        targetSlot.students = targetSlot.students.slice(0, 6);
+      }
+      targetSlot.students.forEach((st: any, idx: number) => {
+        st.seatNumber = idx + 1;
+      });
+    }
+    targetSlot.enrolledCount = Math.min(targetSlot.students?.length || 6, 6);
+    if (!durationMinutes) targetSlot.durationMinutes = 60;
+  } else {
+    if (maxCapacity !== undefined) {
+      targetSlot.maxCapacity = Number(maxCapacity);
+    } else if (!targetSlot.maxCapacity || targetSlot.maxCapacity < 15) {
+      targetSlot.maxCapacity = 15;
+    }
+    if (!durationMinutes && (!targetSlot.durationMinutes || targetSlot.durationMinutes >= 60)) {
+      targetSlot.durationMinutes = 15;
+    }
   }
 
   if (topic !== undefined) targetSlot.topic = String(topic).trim();
@@ -3385,6 +3739,10 @@ app.post('/api/college/slots/:id/allot', async (req, res) => {
     slotTiming,
     slotDate,
     status,
+    activityType,
+    durationMinutes,
+    maxCapacity,
+    presentationTopics,
   } = req.body;
 
   let targetSlot: BackendCollegeSlotItem | null = null;
@@ -3401,6 +3759,39 @@ app.post('/api/college/slots/:id/allot', async (req, res) => {
 
   if (!targetSlot) {
     return res.status(404).json({ success: false, error: 'GD slot not found' });
+  }
+
+  if (activityType !== undefined) {
+    targetSlot.activityType = activityType;
+  }
+  if (presentationTopics !== undefined) {
+    targetSlot.presentationTopics = presentationTopics;
+  }
+  if (durationMinutes !== undefined) {
+    targetSlot.durationMinutes = Number(durationMinutes);
+  }
+
+  if (targetSlot.activityType === 'presentation') {
+    targetSlot.maxCapacity = 6;
+    if (targetSlot.students && targetSlot.students.length > 0) {
+      if (targetSlot.students.length > 6) {
+        targetSlot.students = targetSlot.students.slice(0, 6);
+      }
+      targetSlot.students.forEach((st: any, idx: number) => {
+        st.seatNumber = idx + 1;
+      });
+    }
+    targetSlot.enrolledCount = Math.min(targetSlot.students?.length || 6, 6);
+    if (!durationMinutes) targetSlot.durationMinutes = 60;
+  } else {
+    if (maxCapacity !== undefined) {
+      targetSlot.maxCapacity = Number(maxCapacity);
+    } else if (!targetSlot.maxCapacity || targetSlot.maxCapacity < 15) {
+      targetSlot.maxCapacity = 15;
+    }
+    if (!durationMinutes && (!targetSlot.durationMinutes || targetSlot.durationMinutes >= 60)) {
+      targetSlot.durationMinutes = 15;
+    }
   }
 
   if (topic !== undefined) targetSlot.topic = String(topic).trim();
@@ -4261,7 +4652,10 @@ app.get('/api/faculty/sessions', async (req, res) => {
   );
 
   let slots = (persistentState.slots[code] || []).filter((slot) => {
-    if (!slot?.id || deletedSet.has(slot.id)) return false;
+    if (!slot?.id) return false;
+    const hasReports = (persistentState as any).reports && Object.values((persistentState as any).reports).some((r: any) => r?.sessionId === slot.id);
+    const isCompleted = slot.status === 'completed' || hasReports;
+    if (deletedSet.has(slot.id) && !isCompleted) return false;
     const slotColCode = normalizeCollegeCode(slot.collegeCode || code);
     if (code && slotColCode && slotColCode !== code) return false;
 
@@ -4269,6 +4663,15 @@ app.get('/api/faculty/sessions', async (req, res) => {
     const slotFacultyEmail = String(slot.assignedFacultyEmail || '').trim().toLowerCase();
     const slotFacultyName = String(slot.assignedFacultyName || '').trim().toLowerCase();
     const allottedFaculty = String((slot as any).allottedFaculty || '').trim().toLowerCase();
+
+    // Completed slots with evaluation reports in the faculty's college are always viewable by faculty
+    if (isCompleted) {
+      if (!slotFacultyName || slotFacultyName === 'unassigned' || slotFacultyName === 'assigned faculty') return true;
+      if (faculty?.name && slotFacultyName.toLowerCase().includes(faculty.name.toLowerCase())) return true;
+      if (facultyEmailQuery && slotFacultyEmail === facultyEmailQuery) return true;
+      if (slotFacultyId && facultyAssignmentIds.has(slotFacultyId)) return true;
+      return true;
+    }
 
     // Must be assigned to this specific faculty
     if (slotFacultyEmail && (
@@ -6014,14 +6417,36 @@ Generate your response in JSON format with:
       actionType = 'explain_rules';
       isProbing = false;
     } else if (silenceDurationSeconds >= 15) {
+      const topicDomain = detectTopicDomain(topic);
       const deadlockPool = [
         `Let me pose a question to the room: what unexpected regulatory or ethical challenges might emerge if this model is adopted in our Indian context?`,
         `To restart our momentum: how might this issue fundamentally impact vulnerable communities and future workplace dynamics?`,
         `Playing devil's advocate: what if the primary risks we have identified are overstated, and delaying action carries far greater opportunity costs?`,
         `Let us examine the human experience: how will this change affect psychological safety, emotional empathy, and student motivation?`,
+        `Looking at economic feasibility: how can institutions in tier-2 and tier-3 regions implement this without severe cost burdens?`,
+        `From an accountability standpoint: who should bear ultimate responsibility when decisions derived from this approach lead to harm?`,
+        `What empirical metrics or verifiable benchmarks should an independent panel look for to evaluate genuine progress here?`,
+        `If we project five years forward, what unintended consequences could emerge if adoption continues without regulatory safeguards?`,
       ];
-      const unaskedDeadlock = deadlockPool.find((q) => !allAsked.includes(q)) || deadlockPool[0];
-      speech = unaskedDeadlock;
+      const isAsked = (candidate: string) => {
+        const normCand = candidate.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+        return allAsked.some((asked: string) => {
+          const normAsked = String(asked).toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+          return normAsked === normCand || normAsked.includes(normCand.slice(0, 25)) || normCand.includes(normAsked.slice(0, 25));
+        });
+      };
+      const unaskedDeadlock = deadlockPool.find((q) => !isAsked(q));
+      const dynamicDeadlockBackups = [
+        `To explore another dimension of "${topic}": what practical implementation roadblocks must be resolved before this can succeed?`,
+        `Examining policy governance in "${topic}": what institutional checks are required to ensure transparency?`,
+        `Looking at societal impact regarding "${topic}": how do we prevent unequal access from widening existing socio-economic divides?`,
+        `Considering skill adaptation in "${topic}": how should training curricula evolve to prepare the next generation?`,
+        `From an operational risk viewpoint in "${topic}": what safeguards can protect systems against unforeseen failures?`,
+        `Reflecting on ethical responsibility in "${topic}": where must human values remain non-negotiable?`,
+        `Regarding "${topic}": how do we weigh the immediate advantages against long-term societal accountability?`,
+      ];
+      const dynamicUnasked = dynamicDeadlockBackups.find((q) => !isAsked(q));
+      speech = unaskedDeadlock || dynamicUnasked || `Looking at "${topic}" from a fresh angle: what fundamental assumption in our discussion deserves deeper scrutiny?`;
       actionType = 'deadlock_recovery';
     } else if (interruptionDetected) {
       speech = `Kindly allow the speaker to conclude their thoughts before taking the floor. Let us maintain mutual respect and speaking decorum.`;
@@ -6041,10 +6466,29 @@ Generate your response in JSON format with:
         'Looking ahead ten years: what new specialized human roles will emerge as this ecosystem matures?',
         'What empirical metrics should an independent audit committee monitor to evaluate genuine success?',
         'How do we prevent algorithmic bias and historical inequities from being amplified at scale?',
+        'What are the strongest counter-arguments against widespread adoption in our immediate environment?',
+        'How can policymakers balance rapid technological innovation against citizen privacy and consumer rights?',
+        'What foundational skills must current students cultivate to thrive alongside these developments?',
+        'From a sustainability standpoint, what is the ecological and resource footprint of scaling this solution?',
       ];
       
-      const unasked = richProbingPool.find((q) => !allAsked.includes(q)) || richProbingPool[Math.floor(Math.random() * richProbingPool.length)];
-      speech = unasked;
+      const isAsked = (candidate: string) => {
+        const normCand = candidate.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+        return allAsked.some((asked: string) => {
+          const normAsked = String(asked).toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+          return normAsked === normCand || normAsked.includes(normCand.slice(0, 25)) || normCand.includes(normAsked.slice(0, 25));
+        });
+      };
+      const unasked = richProbingPool.find((q) => !isAsked(q));
+      const dynamicProbingBackups = [
+        `Considering our discussion on "${topic}": how do we reconcile short-term economic gains with long-term ethical sustainability?`,
+        `Looking at global benchmarks for "${topic}": what valuable lessons can our institutions adopt?`,
+        `In light of the arguments shared on "${topic}": what is the most significant counter-argument that hasn't been voiced?`,
+        `How do ground realities in tier-2 and tier-3 areas challenge our assumptions about "${topic}"?`,
+        `What role should collaborative cross-disciplinary partnerships play in advancing "${topic}"?`,
+      ];
+      const dynamicUnaskedProbe = dynamicProbingBackups.find((q) => !isAsked(q));
+      speech = unasked || dynamicUnaskedProbe || `From a strategic perspective on "${topic}": what key priority should stakeholders address first?`;
     }
 
     serverAskedQuestions.add(speech);
@@ -6464,13 +6908,33 @@ function fallbackAssessment(student: any, entries: any[], topic: string, duratio
 }
 
 async function generateAssessmentReport(student: any, transcriptHistory: any[], topic: string, durationMinutes: number, metrics: any = {}) {
-  const entries = (transcriptHistory || []).filter((t: any) =>
+  const candidateId = String(student.id || '').toLowerCase();
+  const candidateName = String(student.name || '').toLowerCase();
+  let entries = (transcriptHistory || []).filter((t: any) =>
     !t.isFacilitator &&
     String(t.text || '').trim() &&
-    (t.speakerId === student.id ||
-     (t.speakerName && student.name && String(t.speakerName).toLowerCase() === String(student.name).toLowerCase()) ||
-     (student.seatNumber && t.seatNumber === student.seatNumber))
+    (
+      String(t.speakerId || '').toLowerCase() === candidateId ||
+      String(t.speakerId || '') === 'speaker-user' ||
+      String(t.speakerId || '') === 'speaker-1' ||
+      String(t.speakerId || '') === 'stu-current' ||
+      String(t.speakerId || '').startsWith('t-user') ||
+      (t.speakerName && String(t.speakerName).toLowerCase() === candidateName) ||
+      (t.speakerName && (t.speakerName.toLowerCase() === 'candidate' || t.speakerName.toLowerCase().includes('student'))) ||
+      (student.seatNumber && t.seatNumber === student.seatNumber)
+    )
   );
+
+  // Resilient fallback: If no entries matched, but non-facilitator entries exist from human participants
+  if (entries.length === 0) {
+    const nonFacilitator = (transcriptHistory || []).filter((t: any) =>
+      !t.isFacilitator && String(t.text || '').trim() && !String(t.speakerId || '').startsWith('ai-')
+    );
+    if (nonFacilitator.length > 0) {
+      entries = nonFacilitator;
+    }
+  }
+
   const spokenText = entries.map((t: any) => String(t.text).trim()).join(' ');
   const words = spokenText ? spokenText.split(/\s+/).filter(Boolean) : [];
   const wordCount = words.length;
@@ -7118,6 +7582,58 @@ app.get('/api/faculty/sessions/:id/reports', async (req, res) => {
     }
   }
 
+  // 3. Fallback: check persistentState.reports
+  if ((persistentState as any).reports) {
+    const memoryReports: any[] = Object.values((persistentState as any).reports);
+    const matching = memoryReports.filter((r: any) =>
+      r && (
+        r.sessionId === sessionId ||
+        (slot?.topic && r.topic && String(r.topic).toLowerCase() === String(slot.topic).toLowerCase())
+      )
+    );
+    if (matching.length > 0) {
+      const seen = new Set<string>();
+      const deduped: any[] = [];
+      for (const r of matching) {
+        const k = r.studentId || r.studentName;
+        if (!k || seen.has(k)) continue;
+        seen.add(k);
+        deduped.push(ensureHealthyReport(r));
+      }
+
+      const participantsMap = new Map<string, any>();
+      if (Array.isArray(slot?.students)) {
+        slot.students.forEach((s: any) => {
+          if (s?.id && !s.isEmptySeat && s.college !== 'Available Desk' && !/^Seat\s+\d+$/i.test(s.name || '')) {
+            participantsMap.set(s.id, s);
+          }
+        });
+      }
+      deduped.forEach((r: any, idx: number) => {
+        if (!participantsMap.has(r.studentId)) {
+          participantsMap.set(r.studentId, {
+            id: r.studentId,
+            name: r.studentName || `Participant ${idx + 1}`,
+            studentId: r.studentId,
+            seatNumber: r.seatNumber || (participantsMap.size + 1),
+            course: 'Engineering',
+            batch: '2024-2028',
+            college: slot?.collegeCode || 'Institution',
+            speakingDurationSeconds: r.speakingDurationSeconds || r.speakingTimeSeconds || 0,
+            speakingTurns: r.speakingTurns || 0,
+          });
+        }
+      });
+
+      return res.json({
+        success: true,
+        sessionId,
+        reports: deduped,
+        participants: Array.from(participantsMap.values()),
+      });
+    }
+  }
+
   res.json({ success: true, sessionId, reports: [], participants: [] });
 });
 
@@ -7189,6 +7705,36 @@ app.get(['/api/college/slots/:id/reports', '/api/admin/sessions/:id/reports'], a
       }
     } catch (e: any) {
       console.warn('[Slot Reports] Prisma slot read error:', e.message);
+    }
+  }
+
+  if (!targetSlot) {
+    const memReports: any[] = Object.values((persistentState as any).reports || {});
+    const slotReports = memReports.filter((r: any) => r?.sessionId === sessionId);
+    const rec = persistentState.recordings?.[sessionId];
+    if (slotReports.length > 0 || rec) {
+      const firstRep = slotReports[0];
+      const sLower = sessionId.toLowerCase();
+      let colCode = 'DIT';
+      if (sLower.includes('bmsit')) colCode = 'BMSIT-2002';
+      else if (sLower.includes('vut')) colCode = 'VUT';
+      const facName = colCode.startsWith('BMSIT') ? 'Harish' : colCode === 'VUT' ? 'River' : 'Assigned Faculty';
+      targetSlot = {
+        id: sessionId,
+        topic: firstRep?.topic || 'Ecommerce',
+        slotName: firstRep?.topic ? `Discussion: ${firstRep.topic}` : `Slot ${sessionId}`,
+        collegeCode: colCode,
+        status: 'completed',
+        durationMinutes: 15,
+        maxCapacity: 15,
+        enrolledCount: slotReports.length,
+        assignedFacultyName: facName,
+        students: [],
+        recordingUrl: rec?.recordingUrl || '',
+        recordingDurationSeconds: rec?.durationSeconds || 0,
+        recordingFileSize: rec?.fileSizeBytes || 0,
+        recordedAt: rec?.recordedAt || '',
+      };
     }
   }
 
@@ -7311,6 +7857,19 @@ app.get(['/api/college/slots/:id/reports', '/api/admin/sessions/:id/reports'], a
       }
     } catch (e: any) {
       console.warn('[Slot Reports] Prisma read failed:', e.message);
+    }
+  }
+
+  if (existingReports.length === 0 && (persistentState as any).reports) {
+    const memReports: any[] = Object.values((persistentState as any).reports);
+    const seen = new Set<string>();
+    for (const r of memReports) {
+      if (r && (r.sessionId === sessionId || (targetSlot?.topic && r.topic && String(r.topic).toLowerCase() === String(targetSlot.topic).toLowerCase()))) {
+        const k = r.studentId || r.studentName;
+        if (!k || seen.has(k)) continue;
+        seen.add(k);
+        existingReports.push(ensureHealthyReport(r));
+      }
     }
   }
 
@@ -7674,9 +8233,13 @@ const LIVE_ROOMS = new Map<string, LiveGDRoomState>();
 function getSlotCapacity(slotId: string) {
   for (const slots of Object.values(persistentState.slots)) {
     const slot = slots.find((s) => s.id === slotId);
-    if (slot) return Math.max(8, Number(slot.maxCapacity || 8));
+    if (slot) {
+      if (slot.activityType === 'presentation') return 6;
+      return Math.max(8, Number(slot.maxCapacity || 15));
+    }
   }
-  return Math.max(8, Number((currentLiveSession as any)?.maxCapacity || 8));
+  if ((currentLiveSession as any)?.activityType === 'presentation') return 6;
+  return Math.max(8, Number((currentLiveSession as any)?.maxCapacity || 15));
 }
 
 export interface AIParticipantProfile {
@@ -7808,33 +8371,79 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
 
         room.silenceTimerSeconds += 1;
 
-        // Broadcast current silence countdown tick to all peers
+        // Broadcast current silence countdown tick to all peers (turn arbitration: 3s intervals up to 9s max)
         io.to(`room-${slotId}`).emit('silence-timer-tick', {
           silenceTimerSeconds: room.silenceTimerSeconds,
-          maxSilence: 15,
+          maxSilence: 9,
         });
 
-        // Silence watchdog: trigger AI moderator intervention if no one speaks for 15s
-        const now = Date.now();
-        const deadlockCooldownMs = 18000;
-        if (
-          room.silenceTimerSeconds >= 15 &&
-          (!room.lastDeadlockAt || now - room.lastDeadlockAt >= deadlockCooldownMs)
-        ) {
+        // Strict 3-Second Turn Arbitration:
+        // Stage 1: At 3s silence, AI gives Instruction 1 that others can talk
+        if (room.silenceTimerSeconds === 3) {
+          const instruction1 = "The floor is open — who would like to build on that point or share an alternative perspective?";
+          const interventionTx: BackendTranscript = {
+            id: `t-facilitator-silence1-${Date.now()}`,
+            sessionId: room.slotId,
+            speakerId: 'facilitator',
+            speakerName: 'AI Facilitator (ERUS)',
+            seatNumber: null,
+            isFacilitator: true,
+            timestamp: '00:00',
+            timestampSeconds: Date.now(),
+            text: instruction1,
+            type: 'intervention',
+            sentiment: 'neutral',
+          };
+          room.transcripts.push(interventionTx);
+          persistTranscriptToMongoDB(interventionTx);
+          room.facilitatorSpeakingUntil = Date.now() + 3500;
+          io.to(`room-${slotId}`).emit('facilitator-intervention', {
+            text: instruction1,
+            action: 'silence_instruction_1',
+            transcript: interventionTx,
+          });
+        }
+        // Stage 2: At 6s silence (after another 3s interval), AI gives Instruction 2 (reminds twice)
+        else if (room.silenceTimerSeconds === 6) {
+          const instruction2 = "Let's keep the discussion moving — feel free to jump in with your thoughts or counter-arguments.";
+          const interventionTx: BackendTranscript = {
+            id: `t-facilitator-silence2-${Date.now()}`,
+            sessionId: room.slotId,
+            speakerId: 'facilitator',
+            speakerName: 'AI Facilitator (ERUS)',
+            seatNumber: null,
+            isFacilitator: true,
+            timestamp: '00:00',
+            timestampSeconds: Date.now(),
+            text: instruction2,
+            type: 'intervention',
+            sentiment: 'neutral',
+          };
+          room.transcripts.push(interventionTx);
+          persistTranscriptToMongoDB(interventionTx);
+          room.facilitatorSpeakingUntil = Date.now() + 3500;
+          io.to(`room-${slotId}`).emit('facilitator-intervention', {
+            text: instruction2,
+            action: 'silence_instruction_2',
+            transcript: interventionTx,
+          });
+        }
+        // Stage 3: At 9s silence (after another 3s and no one started), point out the candidate who spoke less or not yet started and ask them the question!
+        else if (room.silenceTimerSeconds >= 9) {
           room.silenceTimerSeconds = 0;
-          room.lastDeadlockAt = now;
+          room.lastDeadlockAt = Date.now();
           room.deadlockCount += 1;
           room.waitingForParticipantId = undefined;
           await triggerDeadlockIntervention(room);
         }
       } else {
-        // Someone is actively speaking -> floor is active
+        // Someone is actively speaking -> floor is active, reset silence immediately!
         room.silenceTimerSeconds = 0;
 
         // Broadcast active floor tick
         io.to(`room-${slotId}`).emit('silence-timer-tick', {
           silenceTimerSeconds: 0,
-          maxSilence: 15,
+          maxSilence: 9,
         });
         
         // Track current speaker's continuous speaking time (no mid-speech interruptions)
@@ -8339,8 +8948,17 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
     .slice(lastFacilitatorIndex + 1)
     .filter((t) => !t.isFacilitator && (t.speakerId === completedUserId || t.speakerId === speakerPeer?.userId));
 
-  const missingTurnTranscript = !isOpening && currentTurnTranscripts.length === 0;
-  const spokenThought = currentTurnTranscripts.map((t) => t.text.trim()).join(' ');
+  let spokenThought = currentTurnTranscripts.map((t) => t.text.trim()).join(' ');
+  if (!spokenThought) {
+    const recentCandidateTx = room.transcripts
+      .filter((t) => !t.isFacilitator && (t.speakerId === completedUserId || t.speakerId === speakerPeer?.userId))
+      .slice(-1)[0];
+    if (recentCandidateTx && recentCandidateTx.text) {
+      spokenThought = recentCandidateTx.text.trim();
+    }
+  }
+
+  const missingTurnTranscript = !isOpening && !spokenThought;
 
   // If transcription failed for this turn, advance to another participant with a neutral
   // invitation. Never feed an older participant statement back into AI analysis.
@@ -8437,7 +9055,14 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
         invitation = `Welcome participants to today's group discussion on "${room.topic}". The discussion has now officially commenced. To begin, let us invite ${targetReal.name} from ${seatStr}. ${firstName}, please share your opening thoughts on this topic.`;
       }
     } else if (missingTurnTranscript) {
-      invitation = `We did not capture the last response clearly. Let's keep the discussion moving: ${targetReal.name} from ${seatStr}, please share a fresh perspective on "${room.topic}" that has not already been covered.`;
+      const dynamicMissingPool = [
+        `Let us keep the discussion moving: ${targetReal.name} from ${seatStr}, please share a fresh perspective on "${room.topic}".`,
+        `Continuing with our group discussion: ${targetReal.name} from ${seatStr}, how do you evaluate the core challenges in "${room.topic}"?`,
+        `Let us invite ${targetReal.name} from ${seatStr}. ${firstName}, what is your take on the practical realities of "${room.topic}"?`,
+        `${targetReal.name} from ${seatStr}, please share your viewpoint on the key issues regarding "${room.topic}".`,
+        `Passing the floor to ${targetReal.name} from ${seatStr}: ${firstName}, what unexplored angle of "${room.topic}" would you highlight?`,
+      ];
+      invitation = dynamicMissingPool.find((p) => !room.askedQuestions?.has(p)) || dynamicMissingPool[(room.deadlockCount || 0) % dynamicMissingPool.length];
     } else if (utteranceClassification.category === 'greeting' || utteranceClassification.category === 'mic_check') {
       const studentTurnCount = speakerPeer?.speakingTurns || 0;
       if (studentTurnCount > 1 && utteranceClassification.category === 'greeting') {
@@ -8825,22 +9450,55 @@ async function triggerDeadlockIntervention(room: LiveGDRoomState) {
   const primaryPool = domainDeadlockQuestions[deadlockDomain] || domainDeadlockQuestions.general;
   const combinedPool = [...primaryPool, ...domainDeadlockQuestions.general];
   if (!room.askedQuestions) room.askedQuestions = new Set<string>();
-  const getQuestionStem = (q: string) => q.replace(/^[^,]+,\s*/, '').toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+  room.deadlockCount = (room.deadlockCount || 0) + 1;
+
+  const getQuestionStem = (q: string) => {
+    return String(q || '')
+      .replace(/^[^,]+,\s*/, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, '')
+      .trim();
+  };
+
   const unaskedPool = combinedPool.filter((q) => {
     const stem = getQuestionStem(q);
+    if (!stem) return false;
     for (const asked of room.askedQuestions!) {
       const askedStem = getQuestionStem(asked);
-      if (asked.includes(q) || q.includes(asked) || (stem.length > 20 && askedStem.includes(stem.slice(-28)))) return false;
+      if (askedStem === stem) return false;
+      if (stem.length > 20 && askedStem.includes(stem.slice(0, 30))) return false;
+      if (askedStem.length > 20 && stem.includes(askedStem.slice(0, 30))) return false;
     }
     return true;
   });
-  const candidatesPool = unaskedPool.length > 0 ? unaskedPool : combinedPool;
-  let deadlockQuestion = candidatesPool[(room.deadlockCount - 1) % candidatesPool.length];
+
+  let candidatesPool = unaskedPool;
+  if (candidatesPool.length === 0) {
+    const dynamicUnasked = [
+      `${candidateName} ${seatStr}, since the floor is quiet, how might we weigh the short-term conveniences against long-term societal accountability in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, ${firstName}, what unexpected regulatory or ethical challenges might emerge as "${room.topic}" scales across India?`,
+      `${candidateName} ${seatStr}, looking at financial feasibility, how can smaller institutions afford the transition in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, ${firstName}, what critical emotional or human psychological considerations are being overlooked in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, playing devil's advocate: what if our primary assumptions about "${room.topic}" are overly cautious?`,
+      `${candidateName} ${seatStr}, ${firstName}, from a grassroots standpoint, how does "${room.topic}" impact non-metro and rural communities?`,
+      `${candidateName} ${seatStr}, what verifiable benchmarks should an independent audit committee monitor to ensure genuine success in "${room.topic}"?`,
+    ];
+    candidatesPool = dynamicUnasked.filter((q) => {
+      const stem = getQuestionStem(q);
+      return !Array.from(room.askedQuestions!).some((asked) => getQuestionStem(asked) === stem);
+    });
+    if (candidatesPool.length === 0) {
+      candidatesPool = dynamicUnasked;
+    }
+  }
+
+  const pickIndex = (room.deadlockCount - 1) % candidatesPool.length;
+  let deadlockQuestion = candidatesPool[pickIndex] || candidatesPool[0];
 
   if (ai) {
     try {
-      const priorQuestionsList = Array.from(room.askedQuestions || []).slice(-6).map((q) => `- ${q}`).join('\n');
-      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500));
+      const priorQuestionsList = Array.from(room.askedQuestions || []).slice(-8).map((q) => `- ${q}`).join('\n');
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 4500));
       const aiPromise = ai.models.generateContent({
         model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
         contents: `You are the live moderator of an Indian collegiate Group Discussion.
@@ -8856,8 +9514,8 @@ ${priorQuestionsList || '(none)'}
 
 Write ONE short, natural moderator question under 25 words.
 Call exactly ${candidateName} ${seatStr} by name and seat number to give them their turn.
-Ask a clear question on "${room.topic}".
-CRITICAL: DO NOT REPEAT ANY OF THE PREVIOUS QUESTIONS OR THEMES.
+Ask a clear question on a FRESH angle of "${room.topic}" (e.g. ethical implications, economic viability, human impact, or practical hurdles).
+CRITICAL MANDATE: DO NOT REPEAT ANY OF THE PREVIOUS QUESTIONS OR THEMES.
 Do not mention AI.`,
       });
       const response: any = await Promise.race([aiPromise, timeoutPromise]);
@@ -8866,7 +9524,7 @@ Do not mention AI.`,
         const genStem = getQuestionStem(generated);
         const isDuplicate = Array.from(room.askedQuestions || []).some((asked) => {
           const askedStem = getQuestionStem(asked);
-          return asked.toLowerCase() === generated.toLowerCase() || (genStem.length > 20 && askedStem.includes(genStem.slice(-28)));
+          return askedStem === genStem || (genStem.length > 20 && askedStem.includes(genStem.slice(0, 30)));
         });
         if (!isDuplicate) {
           deadlockQuestion = generated;
@@ -9013,8 +9671,8 @@ io.on('connection', (socket) => {
       peer,
     });
 
-    if (room.status === 'active' && (!room.openingStarted || (!room.initialSpeakerSelected && !isObserver)) && !room.currentSpeakerId && !room.waitingForParticipantId) {
-      room.openingStarted = false;
+    if (room.status === 'active' && !room.openingStarted && !room.currentSpeakerId && !room.waitingForParticipantId) {
+      room.openingStarted = true;
       scheduleNextTurn(room);
     }
   });
@@ -9051,10 +9709,9 @@ io.on('connection', (socket) => {
       topic: room.topic || targetSlot?.topic,
     });
 
-    const nowMs = Date.now();
-    const recentlySpokeOpening = room.facilitatorSpeakingUntil && room.facilitatorSpeakingUntil > nowMs;
-    if (!room.openingStarted || !recentlySpokeOpening) {
-      room.openingStarted = false;
+    const hasFacilitatorSpoken = room.transcripts.some((t) => t.isFacilitator);
+    if (!room.openingStarted && !hasFacilitatorSpoken) {
+      room.openingStarted = true;
       room.initialSpeakerSelected = false;
       room.deadlockCount = 0;
       scheduleNextTurn(room);
@@ -9170,7 +9827,7 @@ io.on('connection', (socket) => {
     if (cameraActive !== undefined) peer.cameraActive = cameraActive;
 
     if (isSpeaking) {
-      // Automatic anti-interruption mute: if someone else already holds the floor, block the interruption!
+      // Continuous open mic: do NOT mute when interruption occurs. Instead, AI instructs them!
       const currentActiveSpeakerId = room.currentSpeakerId;
       if (currentActiveSpeakerId && currentActiveSpeakerId !== peer.userId) {
         let activeSpeakerName = 'another participant';
@@ -9185,12 +9842,33 @@ io.on('connection', (socket) => {
         }
 
         peer.interruptionCount = (peer.interruptionCount || 0) + 1;
-        peer.isSpeaking = false;
+        peer.isSpeaking = true;
+        peer.micActive = true;
 
-        socket.emit('floor-busy', {
-          message: `Floor is held by ${activeSpeakerName}. Your microphone is muted by AI to prevent interruptions.`,
-          currentSpeakerId: currentActiveSpeakerId,
-          currentSpeakerName: activeSpeakerName,
+        const warningMsg = `One at a time, please. Let ${activeSpeakerName} complete their thought before responding.`;
+        const interventionTx: BackendTranscript = {
+          id: `t-interruption-${Date.now()}`,
+          sessionId: room.slotId,
+          speakerId: 'facilitator',
+          speakerName: 'AI Facilitator (ERUS)',
+          seatNumber: null,
+          isFacilitator: true,
+          timestamp: '00:00',
+          timestampSeconds: Date.now(),
+          text: warningMsg,
+          type: 'intervention',
+          sentiment: 'neutral',
+        };
+        room.transcripts.push(interventionTx);
+        persistTranscriptToMongoDB(interventionTx);
+
+        // Broadcast verbal & visual instruction to room
+        io.to(`room-${safeSlotId}`).emit('facilitator-intervention', {
+          text: warningMsg,
+          action: 'interruption_warning',
+          targetUserId: peer.userId,
+          targetSeatNumber: peer.seatNumber,
+          transcript: interventionTx,
         });
 
         io.to(`room-${safeSlotId}`).emit('peer-speaking-updated', {
@@ -9198,10 +9876,10 @@ io.on('connection', (socket) => {
           userId: peer.userId,
           seatNumber: peer.seatNumber,
           role: peer.role,
-          isSpeaking: false,
-          micActive: false,
+          isSpeaking: true,
+          micActive: true,
           cameraActive: peer.cameraActive,
-          volumeLevel: 0,
+          volumeLevel: volumeLevel || 50,
         });
         return;
       }
@@ -9243,6 +9921,17 @@ io.on('connection', (socket) => {
             isFloorLocked: false,
             floorVersion: room.floorVersion,
           });
+
+          // In a live GD with 2 or more real human participants, unlock the floor so
+          // other human peers can respond directly to each other without AI interrupting!
+          const realStudentPeers = Array.from(room.peers.values()).filter(
+            (p) => p.role === 'student' && p.role !== 'faculty' && p.role !== 'college_admin'
+          );
+          if (realStudentPeers.length >= 2 && !room.simulationMode) {
+            room.silenceTimerSeconds = 0;
+            return;
+          }
+
           scheduleNextTurn(room, peer.userId);
         }
       }, 1200);
@@ -9347,6 +10036,17 @@ io.on('connection', (socket) => {
             speakerSocketId: null,
             floorVersion: room.floorVersion,
           });
+
+          // In a live GD with 2 or more real human participants, unlock the floor so
+          // other human peers can respond directly to each other without AI interrupting!
+          const realStudentPeers = Array.from(room.peers.values()).filter(
+            (p) => p.role === 'student' && p.role !== 'faculty' && p.role !== 'college_admin'
+          );
+          if (realStudentPeers.length >= 2 && !room.simulationMode) {
+            room.silenceTimerSeconds = 0;
+            return;
+          }
+
           scheduleNextTurn(room, peer.userId);
         }
       }

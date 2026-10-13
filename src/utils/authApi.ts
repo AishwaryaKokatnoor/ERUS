@@ -139,17 +139,26 @@ export async function verifyCurrentSession(): Promise<AuthUser | null> {
 }
 
 const COMPLETED_SLOTS_KEY = 'erus_completed_slots_v1';
+const SLOTS_CACHE_KEY = 'erus_slots_cache_v1';
+const COLLEGES_CACHE_KEY = 'erus_colleges_cache_v1';
 
 // ==========================================
 // PURGE LEGACY LOCALSTORAGE ON BOOT
-// Preserve auth token, user, and completed slot IDs
+// Preserve auth token, user, completed slot IDs, and live slot/college caches
 // ==========================================
 if (typeof localStorage !== 'undefined') {
   try {
+    const allowedKeys = new Set([
+      TOKEN_KEY,
+      USER_KEY,
+      COMPLETED_SLOTS_KEY,
+      SLOTS_CACHE_KEY,
+      COLLEGES_CACHE_KEY,
+    ]);
     const keysToRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.startsWith('erus_') && k !== TOKEN_KEY && k !== USER_KEY && k !== COMPLETED_SLOTS_KEY) {
+      if (k && k.startsWith('erus_') && !allowedKeys.has(k)) {
         keysToRemove.push(k);
       }
     }
@@ -157,11 +166,37 @@ if (typeof localStorage !== 'undefined') {
   } catch {}
 }
 
-// In-Memory Data Stores (Authoritative Source is MongoDB via Backend API)
-let inMemoryCustomColleges: any[] = [];
+// In-Memory Data Stores backed by localStorage for cross-tab synchronization
+let inMemoryCustomColleges: any[] = (() => {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(COLLEGES_CACHE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+  }
+  return [];
+})();
 const inMemoryStudentsMap = new Map<string, any[]>();
 const inMemoryFacultyMap = new Map<string, any[]>();
-const inMemorySlotsMap = new Map<string, any[]>();
+const inMemorySlotsMap = new Map<string, any[]>(
+  (() => {
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const raw = localStorage.getItem(SLOTS_CACHE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return Object.entries(parsed).map(([k, v]) => [k, Array.isArray(v) ? v : []] as [string, any[]]);
+          }
+        }
+      } catch {}
+    }
+    return [];
+  })()
+);
 const inMemoryDeletedSlotIds = new Set<string>();
 const inMemoryCompletedSlotIds = new Set<string>(
   (() => {
@@ -177,6 +212,51 @@ const inMemoryCompletedSlotIds = new Set<string>(
     return [];
   })()
 );
+
+function persistCollegesCacheToStorage() {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(COLLEGES_CACHE_KEY, JSON.stringify(inMemoryCustomColleges));
+  } catch {}
+}
+
+function persistSlotsCacheToStorage() {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const obj: Record<string, any[]> = {};
+    for (const [k, v] of inMemorySlotsMap.entries()) {
+      obj[k] = v;
+    }
+    localStorage.setItem(SLOTS_CACHE_KEY, JSON.stringify(obj));
+  } catch {}
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    try {
+      if (e.key === SLOTS_CACHE_KEY && e.newValue) {
+        const parsed = JSON.parse(e.newValue);
+        if (parsed && typeof parsed === 'object') {
+          for (const [k, v] of Object.entries(parsed)) {
+            if (Array.isArray(v)) {
+              inMemorySlotsMap.set(k, v);
+              window.dispatchEvent(
+                new CustomEvent('erus-slots-updated', {
+                  detail: { collegeCode: k, slots: v, slotCount: v.length, studentLimit: v.length * 15 },
+                })
+              );
+            }
+          }
+        }
+      } else if (e.key === COLLEGES_CACHE_KEY && e.newValue) {
+        const parsed = JSON.parse(e.newValue);
+        if (Array.isArray(parsed)) {
+          inMemoryCustomColleges = parsed;
+        }
+      }
+    } catch {}
+  });
+}
 
 export function getCompletedSlotIds(): Set<string> {
   return new Set(inMemoryCompletedSlotIds);
@@ -202,6 +282,7 @@ export function markSlotCompletedLocally(slotId?: string) {
     const updated = list.map((s: any) => (s && s.id === cleanId ? { ...s, status: 'completed' } : s));
     inMemorySlotsMap.set(code, updated);
   }
+  persistSlotsCacheToStorage();
 }
 
 export function getLocalCustomColleges(): any[] {
@@ -212,6 +293,7 @@ export function saveLocalCustomCollege(col: any) {
   const filtered = inMemoryCustomColleges.filter((c) => c.code?.toUpperCase() !== col.code?.toUpperCase());
   filtered.unshift(col);
   inMemoryCustomColleges = filtered;
+  persistCollegesCacheToStorage();
 }
 
 export function getLocalStudents(collegeCode: string): any[] {
@@ -246,7 +328,7 @@ export function markSlotDeletedLocally(slotId: string) {
 export function normalizeClientCollegeCode(rawCode?: string): string {
   if (!rawCode) return '';
   const c = String(rawCode).trim().toUpperCase();
-  if (c === 'BMSIT2002' || c === 'BMSI' || c === 'BMS' || c.includes('BMSIT')) {
+  if (c === 'BMSIT2002' || c === 'BMSI' || c === 'BMS') {
     return 'BMSIT';
   }
   if (c === 'VIT2002') {
@@ -255,15 +337,33 @@ export function normalizeClientCollegeCode(rawCode?: string): string {
   return c;
 }
 
+export function areCollegeCodesEquivalent(codeA?: string, codeB?: string): boolean {
+  const a = normalizeClientCollegeCode(codeA);
+  const b = normalizeClientCollegeCode(codeB);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const baseA = a.split('-')[0];
+  const baseB = b.split('-')[0];
+  return Boolean(baseA && baseB && baseA === baseB);
+}
+
 export function getLocalSlots(collegeCode: string): any[] {
   const targetCode = normalizeClientCollegeCode(collegeCode);
   if (!targetCode) return [];
-  const list = inMemorySlotsMap.get(targetCode) || [];
+  let list = inMemorySlotsMap.get(targetCode) || [];
+  if (list.length === 0) {
+    for (const [k, v] of inMemorySlotsMap.entries()) {
+      if (areCollegeCodesEquivalent(k, targetCode) && Array.isArray(v) && v.length > 0) {
+        list = v;
+        break;
+      }
+    }
+  }
   return list
     .filter((s: any) => {
       if (!s || !s.id || inMemoryDeletedSlotIds.has(s.id)) return false;
       const sCode = normalizeClientCollegeCode(s.collegeCode || targetCode);
-      return sCode === targetCode;
+      return areCollegeCodesEquivalent(sCode, targetCode);
     })
     .map((s: any) => {
       if (s.status === 'completed') markSlotCompletedLocally(s.id);
@@ -272,9 +372,9 @@ export function getLocalSlots(collegeCode: string): any[] {
       const numMatch = (s.slotName || '').match(/^(Slot\s+\d+)/i) || (s.id || '').match(/slot-.*?-(\d+)/i);
       const prefix = numMatch ? (numMatch[1].startsWith('Slot') ? numMatch[1] : `Slot ${numMatch[1]}`) : '';
       if (prefix && topic && !topic.toLowerCase().includes('pending') && !s.description?.includes('Waiting for College Admin to allot')) {
-        return { ...s, status: resolvedStatus, collegeCode: targetCode, slotName: `${prefix}: ${topic}` };
+        return { ...s, status: resolvedStatus, collegeCode: s.collegeCode || targetCode, slotName: `${prefix}: ${topic}` };
       }
-      return { ...s, status: resolvedStatus, collegeCode: targetCode };
+      return { ...s, status: resolvedStatus, collegeCode: s.collegeCode || targetCode };
     });
 }
 
@@ -285,14 +385,15 @@ export function saveLocalSlots(collegeCode: string, slots: any[]) {
     .filter((s: any) => {
       if (!s || !s.id || inMemoryDeletedSlotIds.has(s.id)) return false;
       const sCode = normalizeClientCollegeCode(s.collegeCode || targetCode);
-      return sCode === targetCode;
+      return areCollegeCodesEquivalent(sCode, targetCode);
     })
     .map((s: any) => {
       if (s.status === 'completed') markSlotCompletedLocally(s.id);
       const resolvedStatus = s.status === 'completed' || isSlotCompletedLocally(s.id) ? 'completed' : s.status;
-      return { ...s, status: resolvedStatus, collegeCode: targetCode };
+      return { ...s, status: resolvedStatus, collegeCode: s.collegeCode || targetCode };
     });
   inMemorySlotsMap.set(targetCode, filtered);
+  persistSlotsCacheToStorage();
 }
 
 // ==========================================
@@ -569,7 +670,7 @@ export function isFacultyAssignedToSlot(slot: any, user: any): boolean {
 
   const userCode = normalizeClientCollegeCode((user as any).collegeCode);
   const slotCode = normalizeClientCollegeCode(slot.collegeCode);
-  if (userCode && slotCode && userCode !== slotCode) {
+  if (userCode && slotCode && !areCollegeCodesEquivalent(userCode, slotCode)) {
     return false;
   }
 
@@ -648,7 +749,7 @@ export function isStudentAssignedToSlot(slot: any, user: any): boolean {
 
   const userCode = normalizeClientCollegeCode((user as any).collegeCode);
   const slotCode = normalizeClientCollegeCode(slot.collegeCode);
-  if (userCode && slotCode && userCode !== slotCode) {
+  if (userCode && slotCode && !areCollegeCodesEquivalent(userCode, slotCode)) {
     return false;
   }
 
@@ -663,7 +764,7 @@ export function isStudentAssignedToSlot(slot: any, user: any): boolean {
     const isEnrolled = slot.students.some((s: any) => {
       if (!s) return false;
       const sCode = normalizeClientCollegeCode(s.collegeCode);
-      if (userCode && sCode && userCode !== sCode) return false;
+      if (userCode && sCode && !areCollegeCodesEquivalent(userCode, sCode)) return false;
 
       const sId = String(s.id || '').trim().toLowerCase();
       const sStudentId = String(s.studentId || '').trim().toLowerCase();
@@ -713,7 +814,7 @@ export function hasStudentParticipatedInSlot(slot: any, user: any, reportHistory
 
   const userCode = normalizeClientCollegeCode((user as any).collegeCode);
   const slotCode = normalizeClientCollegeCode(slot.collegeCode);
-  if (userCode && slotCode && userCode !== slotCode) {
+  if (userCode && slotCode && !areCollegeCodesEquivalent(userCode, slotCode)) {
     return false;
   }
 
@@ -742,7 +843,7 @@ export function hasStudentParticipatedInSlot(slot: any, user: any, reportHistory
     const stMatch = slot.students.find((s: any) => {
       if (!s) return false;
       const sCode = normalizeClientCollegeCode(s.collegeCode);
-      if (userCode && sCode && userCode !== sCode) return false;
+      if (userCode && sCode && !areCollegeCodesEquivalent(userCode, sCode)) return false;
       if (s.isUser) return true;
       const sId = String(s.id || '').trim().toLowerCase();
       const sStudentId = String(s.studentId || '').trim().toLowerCase();
@@ -796,11 +897,11 @@ export async function fetchStudentAssignedSlots(
       const data = await res.json();
       if (data.success && Array.isArray(data.slots)) {
         return data.slots
-          .filter((s: any) => s && s.id && !deleted.has(s.id) && normalizeClientCollegeCode(s.collegeCode || code) === code)
+          .filter((s: any) => s && s.id && !deleted.has(s.id) && areCollegeCodesEquivalent(s.collegeCode || code, code))
           .map((s: any) => {
             if (s.status === 'completed') markSlotCompletedLocally(s.id);
             const resolvedStatus = s.status === 'completed' || isSlotCompletedLocally(s.id) ? 'completed' : s.status;
-            return { ...s, status: resolvedStatus, collegeCode: code };
+            return { ...s, status: resolvedStatus, collegeCode: s.collegeCode || code };
           });
       }
     }
@@ -811,7 +912,7 @@ export async function fetchStudentAssignedSlots(
   return allSlots.filter(
     (s) =>
       !deleted.has(s.id) &&
-      normalizeClientCollegeCode(s.collegeCode || code) === code &&
+      areCollegeCodesEquivalent(s.collegeCode || code, code) &&
       (isSlotAssignedToFaculty(s) || isStudentAssignedToSlot(s, { id: studentId, email: studentEmail, collegeCode: code, role: 'student' }))
   );
 }
@@ -832,11 +933,11 @@ export async function fetchCollegeSlots(collegeCode: string = 'DIT'): Promise<an
       const data = await res.json();
       if (data.success && Array.isArray(data.slots)) {
         backendSlots = data.slots
-          .filter((s: any) => s && s.id && !deleted.has(s.id) && normalizeClientCollegeCode(s.collegeCode || code) === code)
+          .filter((s: any) => s && s.id && (!deleted.has(s.id) || s.status === 'completed' || isSlotCompletedLocally(s.id)) && areCollegeCodesEquivalent(s.collegeCode || code, code))
           .map((s: any) => {
             if (s.status === 'completed') markSlotCompletedLocally(s.id);
             const resolvedStatus = s.status === 'completed' || isSlotCompletedLocally(s.id) ? 'completed' : s.status;
-            return { ...s, status: resolvedStatus, collegeCode: code };
+            return { ...s, status: resolvedStatus, collegeCode: s.collegeCode || code };
           });
       }
     }
@@ -854,8 +955,7 @@ export async function fetchCollegeSlots(collegeCode: string = 'DIT'): Promise<an
 }
 
 export async function deleteCollegeSlot(slotId: string, collegeCode: string = 'DIT') {
-  const raw = collegeCode.toUpperCase();
-  const code = raw === 'BMSIT2002' || raw === 'BMSI' || raw === 'BMS' || raw.includes('BMS') ? 'BMSIT' : raw;
+  const code = normalizeClientCollegeCode(collegeCode);
 
   // 0. Permanently mark slotId as deleted locally
   markSlotDeletedLocally(slotId);
@@ -865,8 +965,6 @@ export async function deleteCollegeSlot(slotId: string, collegeCode: string = 'D
     const local = getLocalSlots(code).filter((s) => s.id !== slotId);
     saveLocalSlots(code, local);
   } catch {}
-
-
 
   // 3. Request backend deletion
   try {
@@ -913,10 +1011,54 @@ export async function createCollegeSlot(payload: any) {
   return { success: true, slot: newSlot };
 }
 
+function buildLocalFallbackSlots(collegeCode: string, count: number, startIdx: number): any[] {
+  const normCode = normalizeClientCollegeCode(collegeCode);
+  const timings = [
+    '10:00 AM - 10:15 AM',
+    '10:30 AM - 10:45 AM',
+    '11:00 AM - 11:15 AM',
+    '11:30 AM - 11:45 AM',
+    '12:00 PM - 12:15 PM',
+    '02:00 PM - 02:15 PM',
+    '02:30 PM - 02:45 PM',
+    '03:00 PM - 03:15 PM',
+    '03:30 PM - 03:45 PM',
+    '04:00 PM - 04:15 PM',
+  ];
+  const todayStr = new Date().toISOString().split('T')[0];
+  const nowBaseMs = Date.now();
+  const created: any[] = [];
+  for (let i = 0; i < count; i++) {
+    const slotNum = startIdx + i + 1;
+    created.push({
+      id: `slot-${normCode.toLowerCase()}-${slotNum}-${nowBaseMs + i}`,
+      slotName: `Slot ${slotNum}`,
+      topic: '',
+      description: 'Cohort of 15 students. Waiting for College Admin to allot Topic & Faculty In-Charge.',
+      slotTiming: timings[(slotNum - 1) % timings.length],
+      slotDate: todayStr,
+      status: 'scheduled',
+      durationMinutes: 15,
+      enrolledCount: 15,
+      maxCapacity: 15,
+      assignedFacultyId: '',
+      assignedFacultyName: 'Unassigned',
+      assignedFacultyEmail: '',
+      assignedFacultyDept: '',
+      collegeCode: normCode,
+      createdAt: new Date(nowBaseMs + i).toISOString(),
+      students: [],
+    });
+  }
+  return created;
+}
+
 export async function updateCollegeStudentLimit(
   collegeIdOrCode: string,
   studentLimit: number,
-  addSlots?: number
+  addSlots?: number,
+  collegeCode?: string,
+  collegeName?: string
 ): Promise<{
   success: boolean;
   college?: any;
@@ -928,18 +1070,25 @@ export async function updateCollegeStudentLimit(
 }> {
   const limitNum = Math.max(1, studentLimit || 60);
   const slotsToAdd = addSlots && addSlots > 0 ? addSlots : Math.max(1, Math.ceil(limitNum / 15));
+  const targetCode = normalizeClientCollegeCode(
+    collegeCode || (!String(collegeIdOrCode).startsWith('col-') ? collegeIdOrCode : '') || ''
+  );
 
   try {
     const res = await fetch(`/api/admin/colleges/${encodeURIComponent(collegeIdOrCode)}/limit`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ studentLimit: limitNum, addSlots: slotsToAdd }),
+      body: JSON.stringify({
+        studentLimit: limitNum,
+        addSlots: slotsToAdd,
+        collegeCode: targetCode || collegeCode,
+        collegeName,
+      }),
     });
     if (res.ok) {
       const data = await res.json();
-      const resolvedCode = normalizeClientCollegeCode(data.college?.code || collegeIdOrCode);
+      const resolvedCode = normalizeClientCollegeCode(data.college?.code || targetCode || collegeIdOrCode);
       if (data.slots && Array.isArray(data.slots)) {
-        saveLocalSlots(collegeIdOrCode, data.slots);
         if (resolvedCode) {
           saveLocalSlots(resolvedCode, data.slots);
         }
@@ -970,12 +1119,38 @@ export async function updateCollegeStudentLimit(
         }
         return c;
       });
+      persistCollegesCacheToStorage();
       return data;
     }
   } catch (e) {
     console.warn('Error updating college student limit:', e);
   }
-  return { success: true, studentLimit: limitNum, addedSlotsCount: slotsToAdd };
+
+  // Fallback local generation if backend was unreachable
+  const fallbackCode = targetCode || normalizeClientCollegeCode(collegeIdOrCode) || 'BMSIT';
+  const existingSlots = getLocalSlots(fallbackCode);
+  const appendedSlots = buildLocalFallbackSlots(fallbackCode, slotsToAdd, existingSlots.length);
+  const combined = [...existingSlots, ...appendedSlots];
+  saveLocalSlots(fallbackCode, combined);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('erus-slots-updated', {
+        detail: {
+          collegeCode: fallbackCode,
+          slots: combined,
+          studentLimit: combined.length * 15,
+          slotCount: combined.length,
+        },
+      })
+    );
+  }
+  return {
+    success: true,
+    slots: combined,
+    slotCount: combined.length,
+    studentLimit: combined.length * 15,
+    addedSlotsCount: slotsToAdd,
+  };
 }
 
 export async function generateCollegeSlots(
@@ -1025,6 +1200,7 @@ export async function allotSlotTopicAndFaculty(
   slotId: string,
   collegeCode: string,
   data: {
+    activityType?: 'gd' | 'presentation';
     topic: string;
     description?: string;
     slotName?: string;
@@ -1034,6 +1210,9 @@ export async function allotSlotTopicAndFaculty(
     assignedFacultyDept?: string;
     slotTiming?: string;
     slotDate?: string;
+    maxCapacity?: number;
+    durationMinutes?: number;
+    presentationTopics?: string[];
   }
 ): Promise<{ success: boolean; slot?: any; error?: string }> {
   const code = (collegeCode || 'DIT').toUpperCase();
@@ -1047,9 +1226,20 @@ export async function allotSlotTopicAndFaculty(
         const prefix = slotNumMatch ? (slotNumMatch[1].startsWith('Slot') ? slotNumMatch[1] : `Slot ${slotNumMatch[1]}`) : 'Slot';
         const syncedSlotName = data.topic ? `${prefix}: ${data.topic}` : (data.slotName || s.slotName || prefix);
 
+        const isPresentation = data.activityType === 'presentation' || s.activityType === 'presentation';
+        const capacity = isPresentation ? 6 : (data.maxCapacity || s.maxCapacity || 15);
+        const students = Array.isArray(s.students) 
+          ? (isPresentation && s.students.length > 6 ? s.students.slice(0, 6) : s.students)
+          : [];
+
         return {
           ...s,
           ...data,
+          activityType: data.activityType || s.activityType || 'gd',
+          maxCapacity: capacity,
+          durationMinutes: data.durationMinutes || s.durationMinutes || (isPresentation ? 60 : 15),
+          enrolledCount: Math.min(students.length || capacity, capacity),
+          students,
           topic: data.topic,
           slotName: syncedSlotName,
           assignedFacultyId: data.assignedFacultyId,
@@ -1092,10 +1282,13 @@ export async function fetchAdminColleges(): Promise<any[]> {
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.colleges)) {
-        inMemoryCustomColleges = data.colleges.filter(
-          (c: any) => !['DIT', 'IITB'].includes(c?.code?.toUpperCase()) && !['col-1', 'col-2'].includes(c?.id)
-        );
-        return data.colleges;
+        if (data.colleges.length > 0) {
+          inMemoryCustomColleges = data.colleges.filter(
+            (c: any) => !['DIT', 'IITB'].includes(c?.code?.toUpperCase()) && !['col-1', 'col-2'].includes(c?.id)
+          );
+          persistCollegesCacheToStorage();
+          return data.colleges;
+        }
       }
     }
   } catch (e) {
@@ -1106,14 +1299,19 @@ export async function fetchAdminColleges(): Promise<any[]> {
 }
 
 export async function registerNewCollege(payload: any) {
-  const cleanCode = (payload.code || '').trim().toUpperCase();
+  const cleanCode = normalizeClientCollegeCode((payload.code || '').trim().toUpperCase());
   const collegeName = (payload.name || '').trim();
   const adminPass = payload.adminPassword || `Erus@${cleanCode}2026`;
+  const studentLimit = Number(payload.studentLimit) || 60;
+  const initialSlotsCount = Math.max(1, Math.ceil(studentLimit / 15));
 
   // 1. Purge in-memory student, faculty, and slot data for this college code
   inMemoryStudentsMap.delete(cleanCode);
   inMemoryFacultyMap.delete(cleanCode);
   inMemorySlotsMap.delete(cleanCode);
+
+  const initialLocalSlots = buildLocalFallbackSlots(cleanCode, initialSlotsCount, 0);
+  saveLocalSlots(cleanCode, initialLocalSlots);
 
   const newCollegeObj = {
     id: `col-${Date.now()}`,
@@ -1124,8 +1322,8 @@ export async function registerNewCollege(payload: any) {
     status: 'active',
     studentCount: 0,
     facultyCount: 0,
-    slotCount: 0,
-    studentLimit: Number(payload.studentLimit) || 60,
+    slotCount: initialLocalSlots.length,
+    studentLimit: initialLocalSlots.length * 15,
     adminEmail: payload.contactEmail || `admin@${cleanCode.toLowerCase()}.edu.in`,
     adminName: payload.adminName || `${cleanCode} Administrator`,
     createdAt: new Date().toISOString(),
@@ -1163,6 +1361,22 @@ export async function registerNewCollege(payload: any) {
       const data = await res.json();
       if (data && data.college) {
         data.college.adminPassword = adminPass;
+        saveLocalCustomCollege(data.college);
+      }
+      if (data && Array.isArray(data.slots)) {
+        saveLocalSlots(cleanCode, data.slots);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('erus-slots-updated', {
+              detail: {
+                collegeCode: cleanCode,
+                slots: data.slots,
+                studentLimit: data.studentLimit || data.slots.length * 15,
+                slotCount: data.slots.length,
+              },
+            })
+          );
+        }
       }
       return data;
     }
@@ -1173,6 +1387,8 @@ export async function registerNewCollege(payload: any) {
   return {
     success: true,
     college: newCollegeObj,
+    slots: initialLocalSlots,
+    slotCount: initialLocalSlots.length,
     generatedCredentials: creds,
   };
 }
@@ -1218,14 +1434,16 @@ export async function deleteCollege(
       return !(matchId || matchCode || matchTargetCode || matchName);
     });
     inMemoryCustomColleges = updated;
+    persistCollegesCacheToStorage();
 
     // Clear all in-memory student, faculty, and slot keys associated with this college
-    const codesToClear = Array.from(new Set([resolvedCode, code, target.toUpperCase()].filter(Boolean)));
+    const codesToClear = Array.from(new Set([resolvedCode, code, target.toUpperCase(), normalizeClientCollegeCode(resolvedCode || code)].filter(Boolean)));
     codesToClear.forEach((c) => {
       inMemoryStudentsMap.delete(c);
       inMemoryFacultyMap.delete(c);
       inMemorySlotsMap.delete(c);
     });
+    persistSlotsCacheToStorage();
   } catch (e) {
     console.warn('Error clearing local college state:', e);
   }
@@ -1370,14 +1588,14 @@ export async function fetchFacultyAssignedSlots(
             (s: any) =>
               s &&
               s.id &&
-              !deleted.has(s.id) &&
-              normalizeClientCollegeCode(s.collegeCode || code) === code &&
-              isFacultyAssignedToSlot(s, { id: facultyId, facultyId, email: facultyEmail, name: facultyName, collegeCode: code, role: 'faculty' })
+              (!deleted.has(s.id) || s.status === 'completed' || isSlotCompletedLocally(s.id)) &&
+              areCollegeCodesEquivalent(s.collegeCode || code, code) &&
+              (isFacultyAssignedToSlot(s, { id: facultyId, facultyId, email: facultyEmail, name: facultyName, collegeCode: code, role: 'faculty' }) || s.status === 'completed')
           )
           .map((s: any) => {
             if (s.status === 'completed') markSlotCompletedLocally(s.id);
             const resolvedStatus = s.status === 'completed' || isSlotCompletedLocally(s.id) ? 'completed' : s.status;
-            return { ...s, status: resolvedStatus, collegeCode: code };
+            return { ...s, status: resolvedStatus, collegeCode: s.collegeCode || code };
           });
       }
     }
@@ -1392,9 +1610,9 @@ export async function fetchFacultyAssignedSlots(
       (s: any) =>
         s &&
         s.id &&
-        !deleted.has(s.id) &&
-        normalizeClientCollegeCode(s.collegeCode || code) === code &&
-        isFacultyAssignedToSlot(s, { id: facultyId, facultyId, email: facultyEmail, name: facultyName, collegeCode: code, role: 'faculty' })
+        (!deleted.has(s.id) || s.status === 'completed' || isSlotCompletedLocally(s.id)) &&
+        areCollegeCodesEquivalent(s.collegeCode || code, code) &&
+        (isFacultyAssignedToSlot(s, { id: facultyId, facultyId, email: facultyEmail, name: facultyName, collegeCode: code, role: 'faculty' }) || s.status === 'completed')
     );
   } catch {
     return [];
