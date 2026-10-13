@@ -1681,10 +1681,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         }));
       }
     } else {
-      if (rtcIsFloorLocked && rtcFloorSpeakerName && !rtcFloorSpeakerName.toLowerCase().includes('facilitator')) {
-        alert(`The floor is currently held by ${rtcFloorSpeakerName}. Microphones are automatically muted by AI to prevent interruptions. You can speak as soon as they finish.`);
-        return;
-      }
       if (roomVoice.isSpeaking() || session.isFacilitatorSpeaking) {
         roomVoice.stop();
         setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
@@ -2208,25 +2204,32 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       ? generateInitiationPrompt(openingCandidate, session.topic)
       : `Welcome participants to today's group discussion on "${session.topic}". The discussion has now officially commenced. Each candidate will have the opportunity to present their views. Please unmute your microphone and share your opening thoughts on "${session.topic}".`;
 
-    // Broadcast over socket so all connected peers receive the opening facilitator prompt
+    // Broadcast over socket so all connected peers and the local user receive the opening facilitator prompt
     if (rtcBroadcastFacilitatorSpeech) {
       rtcBroadcastFacilitatorSpeech(initiationPrompt, 'initiate_opening_speaker');
-    }
-
-    speakFacilitator(initiationPrompt, 'initiate_opening_speaker', 'intro', () => {
       if (openingCandidate?.isUser) {
         setInvitedStudentPrompt({
           student: openingCandidate,
           reason: `AI Facilitator has invited you to initiate the discussion!`,
           promptText: initiationPrompt,
         });
-      } else if (openingCandidate && autoSimulatePeers && !hasRealStudentPeers) {
-        setTimeout(() => {
-          const openingStmt = generateStudentOpeningStatement(openingCandidate, session.topic);
-          startPeerSpeech(openingCandidate, openingStmt);
-        }, 1200);
       }
-    });
+    } else {
+      speakFacilitator(initiationPrompt, 'initiate_opening_speaker', 'intro', () => {
+        if (openingCandidate?.isUser) {
+          setInvitedStudentPrompt({
+            student: openingCandidate,
+            reason: `AI Facilitator has invited you to initiate the discussion!`,
+            promptText: initiationPrompt,
+          });
+        } else if (openingCandidate && autoSimulatePeers && !hasRealStudentPeers) {
+          setTimeout(() => {
+            const openingStmt = generateStudentOpeningStatement(openingCandidate, session.topic);
+            startPeerSpeech(openingCandidate, openingStmt);
+          }, 1200);
+        }
+      });
+    }
   };
 
   // If silence occurs during discussion, AI Facilitator asks a targeted question explicitly mentioning the candidate by name

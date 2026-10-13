@@ -61,21 +61,24 @@ class RoomVoiceEngine {
   private isAudioUnlocked: boolean = false;
 
   public unlock() {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    if (typeof window === 'undefined') return;
     try {
-      if (window.speechSynthesis.paused) {
-        window.speechSynthesis.resume();
+      if (window.speechSynthesis) {
+        if (window.speechSynthesis.paused) {
+          window.speechSynthesis.resume();
+        }
+        this.refreshVoices();
       }
-      this.refreshVoices();
 
-      // Prime Chromium & Windows Speech Dispatcher with a micro silent utterance on first user gesture
-      if (!this.isAudioUnlocked) {
+      // Resume Web Audio Context if present
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtx && !this.isAudioUnlocked) {
         this.isAudioUnlocked = true;
         try {
-          const silentUtterance = new SpeechSynthesisUtterance('');
-          silentUtterance.volume = 0;
-          silentUtterance.rate = 2.0;
-          window.speechSynthesis.speak(silentUtterance);
+          const ctx = new AudioCtx();
+          if (ctx.state === 'suspended') {
+            ctx.resume();
+          }
         } catch {}
       }
     } catch {}
