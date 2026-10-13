@@ -934,20 +934,75 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     const isPeerSpeaking = !!(activeSpk && !isUserSpeaking);
 
     // If a peer is speaking:
-    // - Elevate and zoom into their position on the round table
-    // - Orient the table so the active speaker is positioned directly opposite the current user's vantage point (TOP-CENTER: angle = -PI/2)
-    // - Keep the active speaker in full focus along with adjacent participants on immediate left and right
-    // - Gracefully zoom out or dim/fade remaining participants off-focus
+    // - Orient table so active speaker is positioned directly OPPOSITE the current user's vantage point.
+    // - Current user is at bottom center (angle = PI/2).
+    // - Active speaker is at top center (angle = -PI/2), facing the user.
+    // - Keep active speaker in full focus along with immediate left and right neighbors.
+    // - Gracefully zoom out or dim remaining participants.
     if (isPeerSpeaking && activeSpk) {
       const spkIdx = students.findIndex((s) => s.id === activeSpk.id);
       const safeSpkIdx = spkIdx >= 0 ? spkIdx : 0;
+      const userIdx = students.findIndex((s) => s.isUser);
 
+      // If user is present, anchor user at bottom-center (PI/2) and speaker at top-center (-PI/2)
+      if (userIdx >= 0 && userIdx !== safeSpkIdx && n > 2) {
+        // Place active speaker directly opposite user (-PI/2) and user at bottom (+PI/2)
+        // Divide peers into left and right arcs between speaker and user
+        const otherStudents = students.filter((s) => s.id !== activeSpk.id && !s.isUser);
+        const half = Math.ceil(otherStudents.length / 2);
+        const rightStudents = otherStudents.slice(0, half);
+        const leftStudents = otherStudents.slice(half);
+
+        const results: Array<{ student: Student; angle: number; zoomLevel: 'zoomed' | 'neighbor' | 'dimmed' | 'normal' }> = [];
+
+        // 1. Active Speaker at top center (-PI/2 = 270 deg)
+        results.push({
+          student: activeSpk,
+          angle: -Math.PI / 2,
+          zoomLevel: 'zoomed',
+        });
+
+        // 2. Right arc participants (between top -PI/2 and bottom PI/2, through 0)
+        rightStudents.forEach((student, idx) => {
+          const step = Math.PI / (rightStudents.length + 1);
+          const angle = -Math.PI / 2 + step * (idx + 1);
+          const isImmediateNeighbor = idx === 0;
+          results.push({
+            student,
+            angle,
+            zoomLevel: isImmediateNeighbor ? 'neighbor' : 'dimmed',
+          });
+        });
+
+        // 3. User at bottom center (PI/2 = 90 deg, directly opposite speaker)
+        results.push({
+          student: students[userIdx],
+          angle: Math.PI / 2,
+          zoomLevel: 'normal',
+        });
+
+        // 4. Left arc participants (between bottom PI/2 and top 3PI/2 = -PI/2, through PI)
+        leftStudents.forEach((student, idx) => {
+          const step = Math.PI / (leftStudents.length + 1);
+          const angle = Math.PI / 2 + step * (idx + 1);
+          const isImmediateNeighbor = idx === leftStudents.length - 1;
+          results.push({
+            student,
+            angle,
+            zoomLevel: isImmediateNeighbor ? 'neighbor' : 'dimmed',
+          });
+        });
+
+        return results;
+      }
+
+      // Default or 2-participant case: Speaker at -PI/2 (top), other(s) opposite
       const reordered: Array<{ student: Student; angle: number; zoomLevel: 'zoomed' | 'neighbor' | 'dimmed' | 'normal' }> = [];
       for (let i = 0; i < n; i++) {
         const studentIndex = (safeSpkIdx + i) % n;
         const student = students[studentIndex];
 
-        // Angle: index 0 (speaker) is at -PI/2 (top center, facing user at bottom)
+        // Speaker at -PI/2 (top center)
         const angle = -Math.PI / 2 + (i * 2 * Math.PI) / n;
 
         let zoomLevel: 'zoomed' | 'neighbor' | 'dimmed' | 'normal' = 'normal';
@@ -956,7 +1011,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         } else if (i === 1 || i === n - 1) {
           zoomLevel = 'neighbor'; // Immediate left & right neighbors beside speaker
         } else {
-          zoomLevel = 'dimmed'; // Remaining participants zoom off
+          zoomLevel = 'dimmed';
         }
 
         reordered.push({ student, angle, zoomLevel });
