@@ -934,10 +934,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     const isPeerSpeaking = !!(activeSpk && !isUserSpeaking);
 
     // If a peer is speaking:
-    // - Speaker is placed opposite to the user (at TOP-CENTER: angle = -PI/2)
-    // - Speaker is zoomed in automatically
-    // - Speaker's immediate left and right neighbors are placed beside him and remain clearly visible
-    // - Remaining participants zoom off (scaled down, dimmed)
+    // - Elevate and zoom into their position on the round table
+    // - Orient the table so the active speaker is positioned directly opposite the current user's vantage point (TOP-CENTER: angle = -PI/2)
+    // - Keep the active speaker in full focus along with adjacent participants on immediate left and right
+    // - Gracefully zoom out or dim/fade remaining participants off-focus
     if (isPeerSpeaking && activeSpk) {
       const spkIdx = students.findIndex((s) => s.id === activeSpk.id);
       const safeSpkIdx = spkIdx >= 0 ? spkIdx : 0;
@@ -964,8 +964,26 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       return reordered;
     }
 
-    // When the user themselves is speaking OR floor is open:
-    // (EXPLICIT USER MANDATE: Do NOT center or rotate table on audience when user is speaking)
+    // When the user themselves is speaking:
+    // "When the user themselves is speaking, center the table on the audience facing the user."
+    // User is seated at bottom (angle = PI/2) and the audience is centered directly in front/facing them.
+    if (isUserSpeaking) {
+      const userIdx = students.findIndex((s) => s.isUser);
+      const safeUserIdx = userIdx >= 0 ? userIdx : 0;
+
+      return students.map((student, idx) => {
+        const relativeIdx = (idx - safeUserIdx + n) % n;
+        // User (relativeIdx = 0) is at bottom (PI/2). Audience members are distributed facing user.
+        const angle = Math.PI / 2 + (relativeIdx * 2 * Math.PI) / n;
+        return {
+          student,
+          angle,
+          zoomLevel: relativeIdx === 0 ? ('zoomed' as const) : ('neighbor' as const),
+        };
+      });
+    }
+
+    // When floor is open / silent:
     // Retain natural balanced seating order around the round table!
     const userIdx = students.findIndex((s) => s.isUser);
     const baseOffset = userIdx >= 0 ? userIdx : 0;
@@ -3197,14 +3215,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               <div className="relative z-10 my-4 flex-1 flex items-center justify-center overflow-x-auto py-12 sm:py-16 px-4 sm:px-8 scrollbar-thin scroll-smooth">
                 <div className={`relative flex items-center justify-center transition-all duration-500 mx-auto aspect-square ${
                   filledStudents.length <= 4
-                    ? 'w-[380px] sm:w-[440px] max-w-full'
+                    ? 'w-[440px] sm:w-[500px] max-w-full'
                     : filledStudents.length <= 8
-                    ? 'w-[480px] sm:w-[560px] max-w-full'
-                    : 'w-[560px] sm:w-[660px] max-w-full'
+                    ? 'w-[540px] sm:w-[620px] max-w-full'
+                    : 'w-[640px] sm:w-[740px] max-w-full'
                 }`}>
                   
                   {/* Central True Circular Conference Table */}
-                  <div className="absolute inset-12 sm:inset-16 rounded-full bg-gradient-to-b from-slate-100 via-slate-200 to-slate-300 dark:from-slate-800/90 dark:via-slate-850 dark:to-slate-900 border-4 border-slate-300 dark:border-slate-700/80 shadow-2xl flex flex-col items-center justify-center p-4">
+                  <div className="absolute inset-16 sm:inset-20 rounded-full bg-gradient-to-b from-slate-100 via-slate-200 to-slate-300 dark:from-slate-800/90 dark:via-slate-850 dark:to-slate-900 border-4 border-slate-300 dark:border-slate-700/80 shadow-2xl flex flex-col items-center justify-center p-4">
                     <div className="w-full h-full rounded-full bg-white/85 dark:bg-slate-950/70 border border-slate-300/80 dark:border-slate-700/50 flex flex-col items-center justify-center p-4 relative overflow-hidden shadow-inner text-center">
                       <span className="text-[10px] uppercase font-mono tracking-widest text-slate-500 dark:text-slate-400 font-semibold">
                         Round Table Conference ({filledStudents.length} {filledStudents.length === 1 ? 'Participant' : 'Participants'})
@@ -5219,12 +5237,19 @@ export const StudentVideoFrame: React.FC<{
   const isCameraEnabled = isUser ? isUserCameraOn : (student.cameraActive !== false || hasRemoteVideoTrack);
   const isMicLive = isUser ? isListeningMic : (isCurrentSpeaker || student.isSpeaking);
 
+  // Clear human face portrait avatar fallback (using SVG Lorelei portraits seeded by name)
+  const resolvedAvatar = student.avatar || (
+    student.name
+      ? `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(student.name)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`
+      : ''
+  );
+
   return (
     <div className="relative w-full h-full rounded-inherit overflow-hidden bg-slate-900 flex items-center justify-center select-none">
       {/* 1. Camera Feed / Avatar Image / Empty Waiting Seat */}
       {student.isEmptySeat ? (
         <div className="w-full h-full flex flex-col items-center justify-center bg-slate-100/70 dark:bg-slate-900/60 text-slate-400 dark:text-slate-500">
-          <User className="w-5 h-5 text-slate-300 dark:text-slate-600 mb-0.5" />
+          <User className="w-6 h-6 text-slate-300 dark:text-slate-600 mb-0.5" />
           <span className="text-[8px] font-mono uppercase tracking-wider text-slate-400 dark:text-slate-500">Empty</span>
         </div>
       ) : isLiveWebcam && effectiveStream ? (
@@ -5234,27 +5259,38 @@ export const StudentVideoFrame: React.FC<{
           className={`w-full h-full object-cover ${isUser ? 'transform -scale-x-100' : ''}`} 
         />
       ) : isCameraEnabled ? (
-        student.avatar ? (
+        resolvedAvatar ? (
           <img
-            src={student.avatar}
+            src={resolvedAvatar}
             alt={student.name}
-            className="w-full h-full object-cover"
+            className="w-full h-full object-cover bg-slate-800"
             referrerPolicy="no-referrer"
           />
         ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center bg-slate-800 text-slate-400">
-            <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold text-white uppercase">
+          <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-tr from-indigo-700 to-purple-600 text-white">
+            <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center text-sm font-bold uppercase shadow-inner">
               {student.name.charAt(0)}
             </div>
           </div>
         )
       ) : (
         /* Camera Off Fallback Placeholder */
-        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-800 text-slate-400">
-          <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-slate-700/90 flex items-center justify-center text-[10px] sm:text-xs font-bold text-slate-200 uppercase">
-            {student.name.charAt(0)}
+        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-800 text-slate-300 relative">
+          {resolvedAvatar ? (
+            <img
+              src={resolvedAvatar}
+              alt={student.name}
+              className="w-full h-full object-cover opacity-85"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-200 uppercase">
+              {student.name.charAt(0)}
+            </div>
+          )}
+          <div className="absolute inset-0 bg-slate-950/40 flex items-center justify-center">
+            <VideoOff className="w-3.5 h-3.5 text-rose-400 drop-shadow" />
           </div>
-          <VideoOff className="w-2.5 h-2.5 text-rose-400 mt-0.5" />
         </div>
       )}
 
@@ -5270,9 +5306,9 @@ export const StudentVideoFrame: React.FC<{
             </div>
           ) : (
             <div className="flex items-center gap-0.5">
-              <span className="w-0.5 sm:w-1 bg-indigo-400 rounded-full animate-bounce [animation-duration:0.6s]" style={{ height: size === 'large' ? '14px' : '7px' }} />
-              <span className="w-0.5 sm:w-1 bg-indigo-400 rounded-full animate-bounce [animation-duration:0.6s] [animation-delay:0.15s]" style={{ height: size === 'large' ? '18px' : '10px' }} />
-              <span className="w-0.5 sm:w-1 bg-indigo-400 rounded-full animate-bounce [animation-duration:0.6s] [animation-delay:0.3s]" style={{ height: size === 'large' ? '12px' : '6px' }} />
+              <span className="w-1 bg-indigo-400 rounded-full animate-bounce [animation-duration:0.6s]" style={{ height: size === 'large' ? '14px' : '9px' }} />
+              <span className="w-1 bg-indigo-400 rounded-full animate-bounce [animation-duration:0.6s] [animation-delay:0.15s]" style={{ height: size === 'large' ? '18px' : '12px' }} />
+              <span className="w-1 bg-indigo-400 rounded-full animate-bounce [animation-duration:0.6s] [animation-delay:0.3s]" style={{ height: size === 'large' ? '12px' : '8px' }} />
             </div>
           )}
         </div>
@@ -5409,14 +5445,14 @@ export const StudentPodCard: React.FC<{
         )}
       </div>
 
-      {/* 2. Student Video / Avatar Bubble */}
+      {/* 2. Student Video / Avatar Bubble (Enlarged for clear human face visibility) */}
       <div className="relative">
         {/* Speaking Voice Waves Aura */}
         {(isCurrentSpeaker || isZoomedSpeaker) && (
-          <div className="absolute -inset-2 rounded-2xl bg-emerald-500/40 animate-pulse pointer-events-none" />
+          <div className="absolute -inset-2.5 rounded-2xl bg-emerald-500/40 animate-pulse pointer-events-none" />
         )}
 
-        <div className={`w-11 h-11 sm:w-13 sm:h-13 rounded-2xl overflow-hidden border-2 transition-all shadow-md relative bg-slate-900 ${
+        <div className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl overflow-hidden border-2 transition-all shadow-md relative bg-slate-900 ${
           student.isEmptySeat
             ? 'border-dashed border-slate-300 dark:border-slate-700 bg-slate-100/60 dark:bg-slate-900/60 shadow-none'
             : isZoomedSpeaker

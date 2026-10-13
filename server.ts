@@ -9923,12 +9923,12 @@ io.on('connection', (socket) => {
           });
 
           // In a live GD with 2 or more real human participants, unlock the floor so
-          // other human peers can respond directly to each other without AI interrupting!
+          // other human peers can respond directly to each other; silence watchdog will arbitrate turns at 3s/6s/9s.
           const realStudentPeers = Array.from(room.peers.values()).filter(
             (p) => p.role === 'student' && p.role !== 'faculty' && p.role !== 'college_admin'
           );
           if (realStudentPeers.length >= 2 && !room.simulationMode) {
-            room.silenceTimerSeconds = 0;
+            // Let the silence watchdog track silence starting now
             return;
           }
 
@@ -10038,12 +10038,12 @@ io.on('connection', (socket) => {
           });
 
           // In a live GD with 2 or more real human participants, unlock the floor so
-          // other human peers can respond directly to each other without AI interrupting!
+          // other human peers can respond directly to each other; silence watchdog will arbitrate turns at 3s/6s/9s.
           const realStudentPeers = Array.from(room.peers.values()).filter(
             (p) => p.role === 'student' && p.role !== 'faculty' && p.role !== 'college_admin'
           );
           if (realStudentPeers.length >= 2 && !room.simulationMode) {
-            room.silenceTimerSeconds = 0;
+            // Let the silence watchdog track silence starting now
             return;
           }
 
