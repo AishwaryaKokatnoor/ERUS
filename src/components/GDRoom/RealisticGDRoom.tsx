@@ -3192,24 +3192,24 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
             {/* Middle Stage: The 3 Layout Visibility Types */}
 
-            {/* 1. ROUND TABLE LAYOUT (Dynamic Table Sizing, Zero Empty Seats & Speaker-Centric Zoom) */}
+            {/* 1. ROUND TABLE LAYOUT (Dynamic Circular Table Sizing, Zero Empty Seats & Speaker-Centric Zoom) */}
             {currentLayout === 'round_table' && (
               <div className="relative z-10 my-4 flex-1 flex items-center justify-center overflow-x-auto py-12 sm:py-16 px-4 sm:px-8 scrollbar-thin scroll-smooth">
-                <div className={`relative flex items-center justify-center transition-all duration-500 mx-auto ${
+                <div className={`relative flex items-center justify-center transition-all duration-500 mx-auto aspect-square ${
                   filledStudents.length <= 4
-                    ? 'w-full max-w-xl min-h-[380px] sm:min-h-[420px]'
+                    ? 'w-[380px] sm:w-[440px] max-w-full'
                     : filledStudents.length <= 8
-                    ? 'w-full max-w-3xl min-h-[440px] sm:min-h-[480px]'
-                    : 'w-full max-w-5xl min-h-[500px] sm:min-h-[540px]'
+                    ? 'w-[480px] sm:w-[560px] max-w-full'
+                    : 'w-[560px] sm:w-[660px] max-w-full'
                 }`}>
                   
-                  {/* Central Round / Oval Conference Table */}
-                  <div className="absolute inset-10 sm:inset-14 rounded-[56px] sm:rounded-[72px] bg-gradient-to-b from-slate-100 via-slate-200 to-slate-300 dark:from-slate-800/90 dark:via-slate-850 dark:to-slate-900 border-4 border-slate-300 dark:border-slate-700/80 shadow-xl dark:shadow-2xl flex flex-col items-center justify-center p-4">
-                    <div className="w-full h-full rounded-[44px] sm:rounded-[60px] bg-white/85 dark:bg-slate-950/70 border border-slate-300/80 dark:border-slate-700/50 flex flex-col items-center justify-center p-3 relative overflow-hidden shadow-inner text-center">
+                  {/* Central True Circular Conference Table */}
+                  <div className="absolute inset-12 sm:inset-16 rounded-full bg-gradient-to-b from-slate-100 via-slate-200 to-slate-300 dark:from-slate-800/90 dark:via-slate-850 dark:to-slate-900 border-4 border-slate-300 dark:border-slate-700/80 shadow-2xl flex flex-col items-center justify-center p-4">
+                    <div className="w-full h-full rounded-full bg-white/85 dark:bg-slate-950/70 border border-slate-300/80 dark:border-slate-700/50 flex flex-col items-center justify-center p-4 relative overflow-hidden shadow-inner text-center">
                       <span className="text-[10px] uppercase font-mono tracking-widest text-slate-500 dark:text-slate-400 font-semibold">
                         Round Table Conference ({filledStudents.length} {filledStudents.length === 1 ? 'Participant' : 'Participants'})
                       </span>
-                      <p className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200 mt-0.5 line-clamp-2 max-w-md">
+                      <p className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200 mt-1 line-clamp-2 max-w-[240px] sm:max-w-xs">
                         {session.topic}
                       </p>
                       
@@ -3223,17 +3223,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                         </span>
                       </div>
 
-                      {/* Clean decorative table ring */}
-                      <div className="absolute inset-4 rounded-full border border-indigo-200/50 dark:border-indigo-900/40 pointer-events-none" />
+                      {/* Clean decorative circular table ring */}
+                      <div className="absolute inset-4 rounded-full border border-dashed border-indigo-200/60 dark:border-indigo-900/40 pointer-events-none" />
                     </div>
                   </div>
 
-                  {/* Seating Perimeter: Dynamic Filled Seats with Speaker-Centric Zoom & First-Person Vantage */}
+                  {/* Seating Perimeter: Dynamic Filled Seats on True Circular Perimeter with Speaker-Centric Zoom */}
                   {roundTablePositionedStudents.map(({ student, angle, zoomLevel }) => {
-                    const Rx = 43; // horizontal radius %
-                    const Ry = 42; // vertical radius %
-                    const leftPct = 50 + Rx * Math.cos(angle);
-                    const topPct = 50 + Ry * Math.sin(angle);
+                    const R = 43; // Uniform circular radius %
+                    const leftPct = 50 + R * Math.cos(angle);
+                    const topPct = 50 + R * Math.sin(angle);
 
                     return (
                       <div
