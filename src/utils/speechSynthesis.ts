@@ -55,7 +55,10 @@ class RoomVoiceEngine {
     window.addEventListener('click', unlock, { passive: true });
     window.addEventListener('touchstart', unlock, { passive: true });
     window.addEventListener('keydown', unlock, { passive: true });
+    window.addEventListener('pointerdown', unlock, { passive: true });
   }
+
+  private isAudioUnlocked: boolean = false;
 
   public unlock() {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
@@ -64,6 +67,17 @@ class RoomVoiceEngine {
         window.speechSynthesis.resume();
       }
       this.refreshVoices();
+
+      // Prime Chromium & Windows Speech Dispatcher with a micro silent utterance on first user gesture
+      if (!this.isAudioUnlocked) {
+        this.isAudioUnlocked = true;
+        try {
+          const silentUtterance = new SpeechSynthesisUtterance('');
+          silentUtterance.volume = 0;
+          silentUtterance.rate = 2.0;
+          window.speechSynthesis.speak(silentUtterance);
+        } catch {}
+      }
     } catch {}
   }
 
