@@ -47,18 +47,18 @@ class RoomVoiceEngine {
     this.setupUserGestureUnlock();
   }
 
+  private isAudioUnlocked: boolean = false;
+  private hasUnlockedGesture: boolean = false;
+
   private setupUserGestureUnlock() {
     if (typeof window === 'undefined') return;
     const unlock = () => {
       this.unlock();
     };
-    window.addEventListener('click', unlock, { passive: true });
-    window.addEventListener('touchstart', unlock, { passive: true });
-    window.addEventListener('keydown', unlock, { passive: true });
-    window.addEventListener('pointerdown', unlock, { passive: true });
+    ['click', 'touchstart', 'keydown', 'pointerdown', 'mousedown'].forEach((evt) => {
+      window.addEventListener(evt, unlock, { passive: true });
+    });
   }
-
-  private isAudioUnlocked: boolean = false;
 
   public unlock() {
     if (typeof window === 'undefined') return;
@@ -66,6 +66,16 @@ class RoomVoiceEngine {
       if (window.speechSynthesis) {
         if (window.speechSynthesis.paused) {
           window.speechSynthesis.resume();
+        }
+        // Speak a silent instant dummy utterance on first interaction to permanently unlock speech synthesis
+        if (!this.hasUnlockedGesture) {
+          this.hasUnlockedGesture = true;
+          try {
+            const dummy = new SpeechSynthesisUtterance(' ');
+            dummy.volume = 0.01;
+            dummy.rate = 10;
+            window.speechSynthesis.speak(dummy);
+          } catch {}
         }
         this.refreshVoices();
       }
@@ -289,9 +299,9 @@ class RoomVoiceEngine {
 
     const normalized = cleanText.toLowerCase().replace(/[^a-z0-9]/g, '');
     const now = Date.now();
-    // Prevent duplicate/repeated speech of the exact same prompt within 4 seconds (unless forced)
-    if (!force && normalized && normalized === this.lastSpokenNormalized && now - this.lastSpokenAt < 4000) {
-      console.log('[AI Facilitator Voice] Skipping duplicate prompt within 4s:', cleanText.slice(0, 40));
+    // Only skip duplicate if currently actively speaking the exact same text right now
+    if (!force && this.isCurrentlySpeaking && normalized && normalized === this.lastSpokenNormalized && now - this.lastSpokenAt < 2000) {
+      console.log('[AI Facilitator Voice] Skipping duplicate prompt while already speaking:', cleanText.slice(0, 40));
       if (onEnd) onEnd();
       return;
     }
@@ -310,6 +320,9 @@ class RoomVoiceEngine {
       if (hadActiveSpeech) {
         try {
           window.speechSynthesis.cancel();
+          if (window.speechSynthesis.paused) {
+            window.speechSynthesis.resume();
+          }
         } catch {}
       }
 
@@ -338,8 +351,6 @@ class RoomVoiceEngine {
             clearInterval(this.watchdogInterval);
             this.watchdogInterval = null;
           }
-          // IMPORTANT: Do NOT call window.speechSynthesis.cancel() on natural completion,
-          // as Chromium/Windows SAPI cuts off the trailing audio buffer of the final words!
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('erus-ai-voice-end'));
           }
@@ -368,7 +379,7 @@ class RoomVoiceEngine {
 
           this.activeUtterances.add(utterance);
           this.currentUtterance = utterance;
-          (window as any).__activeUtterance = utterance;
+          (window as any).__activeUtterances = this.activeUtterances;
 
           let hasAdvanced = false;
           let didStartSpeaking = false;
@@ -417,23 +428,28 @@ class RoomVoiceEngine {
             advance();
           };
 
-          // Chromium watchdog to prevent 14-second freeze without interrupting speech
+          // Chromium watchdog & anti-freeze: ping pause & resume every 4s to defeat 14-second stall
           if (this.watchdogInterval) clearInterval(this.watchdogInterval);
           this.watchdogInterval = setInterval(() => {
-            if (typeof window !== 'undefined' && window.speechSynthesis && window.speechSynthesis.speaking) {
-              if (window.speechSynthesis.paused) {
-                window.speechSynthesis.resume();
+            if (typeof window !== 'undefined' && window.speechSynthesis) {
+              if (window.speechSynthesis.speaking) {
+                if (window.speechSynthesis.paused) {
+                  window.speechSynthesis.resume();
+                } else {
+                  window.speechSynthesis.pause();
+                  window.speechSynthesis.resume();
+                }
+              } else if (!this.isCurrentlySpeaking) {
+                clearInterval(this.watchdogInterval);
+                this.watchdogInterval = null;
               }
-            } else if (!this.isCurrentlySpeaking) {
-              clearInterval(this.watchdogInterval);
-              this.watchdogInterval = null;
             }
-          }, 3500);
+          }, 4000);
 
           console.log(`[AI Facilitator Voice] Speaking chunk (${currentIndex}/${sentences.length}):`, sentence, '| Voice:', voice?.name || 'Default');
           window.speechSynthesis.speak(utterance);
 
-          // Ensure unpaused and retry if Windows SAPI silently dropped the utterance after cancel()
+          // Ensure unpaused and retry if Windows SAPI silently dropped the utterance
           retryTimer = setTimeout(() => {
             if (genId !== this.speechGenerationId || hasAdvanced) return;
             if (typeof window !== 'undefined' && window.speechSynthesis) {
@@ -441,31 +457,23 @@ class RoomVoiceEngine {
                 window.speechSynthesis.resume();
               }
               if (!didStartSpeaking && !window.speechSynthesis.speaking) {
-                console.log('[AI Facilitator Voice] Retrying silent utterance...');
+                console.log('[AI Facilitator Voice] Utterance not yet speaking, resuming...');
                 try {
-                  window.speechSynthesis.cancel();
-                  setTimeout(() => {
-                    if (genId === this.speechGenerationId && !hasAdvanced) {
-                      window.speechSynthesis.speak(utterance);
-                      if (window.speechSynthesis.paused) {
-                        window.speechSynthesis.resume();
-                      }
-                    }
-                  }, 80);
+                  window.speechSynthesis.resume();
                 } catch {}
               }
             }
-          }, 420);
+          }, 550);
         } catch (innerErr) {
           console.warn('[AI Facilitator Voice] Inner speak error:', innerErr);
           speakNextChunk();
         }
       };
 
-      // Give Windows SAPI 140ms to settle if we just cancelled prior speech, or 25ms if idle
+      // Give Windows SAPI 120ms to settle if we just cancelled prior speech, or 25ms if idle
       setTimeout(() => {
         speakNextChunk();
-      }, hadActiveSpeech ? 140 : 25);
+      }, hadActiveSpeech ? 120 : 25);
     } catch (e) {
       console.warn('Facilitator voice synthesis error:', e);
       this.isCurrentlySpeaking = false;

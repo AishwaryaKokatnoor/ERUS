@@ -1473,16 +1473,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             committedResultIndexRef.current = event.results.length - 1;
             return;
           }
-          // Human student priority: if facilitator is speaking when student starts talking, stop facilitator immediately
-          if (roomVoice.isSpeaking()) {
-            if (isListeningMicRef.current) {
-              roomVoice.stop();
-              setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
-            } else {
-              aiVoicePausedMicRef.current = true;
-              committedResultIndexRef.current = event.results.length - 1;
-              return;
-            }
+          // Prevent acoustic loop: do not let speaker sound picked up by microphone cut off the AI facilitator
+          if (roomVoice.isSpeaking() || session.isFacilitatorSpeaking) {
+            aiVoicePausedMicRef.current = true;
+            committedResultIndexRef.current = event.results.length - 1;
+            return;
           }
           aiVoicePausedMicRef.current = false;
           lastWebSpeechTimeRef.current = Date.now();
@@ -1758,22 +1753,35 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     phase?: GDFacilitatorPhase,
     onSpeechEnd?: () => void
   ) => {
+    roomVoice.unlock();
     const isDirective = actionType === 'initiate_opening_speaker' || 
                         actionType === 'explain_rules' || 
                         actionType === 'welcome' ||
                         actionType === 'classroom_opening' ||
+                        actionType === 'classroom_call_presenter' ||
+                        actionType === 'classroom_transition' ||
+                        actionType === 'classroom_closing' ||
+                        actionType === 'classroom_ai_question' ||
+                        actionType === 'classroom_qa_invite' ||
+                        actionType === 'silence_instruction_1' ||
+                        actionType === 'silence_instruction_2' ||
+                        actionType === 'targeted_question_student' ||
+                        actionType === 'interruption_arbitration' ||
                         actionType === 'test_voice' ||
                         actionType === 'topic_announcement' ||
-                        phase === 'intro';
+                        actionType === 'moderation' ||
+                        actionType === 'conclusion' ||
+                        phase === 'intro' ||
+                        phase === 'conclusion';
 
-    // Participant priority: only defer non-directive prompts if a student participant is actively speaking on the floor
+    // Only defer non-directive speech if a remote peer is actively speaking on the floor
     const isParticipantSpeaking = !isDirective && !!(
-      (rtcIsSpeakingLive && (rtcLocalVolume > 20 || userMediaAudioLevel > 20)) ||
       rtcPeers.some((p) => p.isSpeaking && p.role === 'student')
     );
     if (isParticipantSpeaking) {
-      console.log('[Facilitator] Participant is speaking, cannot vocalize AI speech.');
+      console.log('[Facilitator] Remote participant is speaking, skipping non-directive prompt.');
       setIsAiProcessing(false);
+      if (onSpeechEnd) onSpeechEnd();
       return;
     }
 

@@ -22,6 +22,7 @@ import {
   PresentationAIQuestion
 } from '../../utils/classroomPresentationEngine';
 import { useUserMedia } from '../../utils/useUserMedia';
+import { roomVoice } from '../../utils/speechSynthesis';
 
 export interface ClassroomPresentationRoomProps {
   session: GDSession;
@@ -127,39 +128,20 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   const currentPresenter = presentationStudents[activeStudentIndex];
   const currentTopic = studentTopics[activeStudentIndex] || session.topic;
 
-  // Speak script via Browser Speech Synthesis with Indian English tone
+  // Speak script via RoomVoiceEngine with Indian English tone and robust chunking
   const speakAI = (text: string, onEnd?: () => void) => {
-    setAiSpeech(text);
-    if (typeof window === 'undefined' || !('speechSynthesis' in window) || isRoomAudioMuted) {
+    const clean = String(text || '').trim();
+    setAiSpeech(clean);
+    if (!clean || isRoomAudioMuted) {
       if (onEnd) setTimeout(onEnd, 1200);
       return;
     }
 
-    try {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.95;
-      utterance.pitch = 1.0;
-
-      const voices = window.speechSynthesis.getVoices();
-      const inVoice = voices.find((v) => /en-IN|India|Indian|Ravi|Heera|Veena/i.test(v.name || v.lang)) || voices[0];
-      if (inVoice) utterance.voice = inVoice;
-
-      setAiSpeaking(true);
-      utterance.onend = () => {
-        setAiSpeaking(false);
-        if (onEnd) onEnd();
-      };
-      utterance.onerror = () => {
-        setAiSpeaking(false);
-        if (onEnd) onEnd();
-      };
-
-      window.speechSynthesis.speak(utterance);
-    } catch {
+    setAiSpeaking(true);
+    roomVoice.speakAsFacilitator(clean, () => {
       setAiSpeaking(false);
       if (onEnd) onEnd();
-    }
+    }, true);
   };
 
   const handleFacultyStartPresentation = () => {
