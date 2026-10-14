@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Mic, MicOff, Video, VideoOff, Play, CheckCircle2, 
   HelpCircle, Sparkles, Volume2, VolumeX, LogOut, MessageSquare, 
-  Share2, Shield, Eye, Award, Clock, ArrowRight, UserCheck, School
+  Share2, Shield, Eye, Award, Clock, ArrowRight, ArrowLeft, UserCheck, School
 } from 'lucide-react';
 import { 
   GDSession, Student, TranscriptEntry, PresentationPhase, 
@@ -38,6 +38,7 @@ export interface ClassroomPresentationRoomProps {
   onResetSlots?: () => void;
   currentUser?: AuthUser | null;
   bookedSlotId?: string | null;
+  onBackToDashboard?: () => void;
 }
 
 export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps> = ({
@@ -52,6 +53,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   availableSlots = [],
   onSelectSlot,
   currentUser,
+  onBackToDashboard,
 }) => {
   // Enforce exactly 6 presentation students (Student 1 to 6)
   const presentationStudents: Student[] = useMemo(() => {
@@ -321,6 +323,17 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
       {/* ======================================================== */}
       <header className="h-16 px-6 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0 backdrop-blur-md">
         <div className="flex items-center gap-3">
+          {onBackToDashboard && (
+            <button
+              type="button"
+              onClick={onBackToDashboard}
+              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
+              title="Return to Dashboard"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span className="hidden sm:inline">Back</span>
+            </button>
+          )}
           <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
             <School className="w-5 h-5" />
           </div>

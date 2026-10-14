@@ -1613,27 +1613,7 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                 </p>
               </div>
 
-              {displaySlots.length > 0 && (
-                <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => setIsScheduleSlotOpen(true)}
-                  className="px-3.5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
-                  title="Schedule a new Group Discussion slot for your institution"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Schedule New Slot</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRegenerateSlots}
-                  disabled={loading}
-                  className="px-3.5 py-2.5 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/60 hover:bg-amber-100 dark:hover:bg-amber-900/60 text-amber-800 dark:text-amber-200 font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
-                  title="Auto-generate 15-student quota discussion slots"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Generate Quota Slots</span>
-                </button>
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
                 <button
                   type="button"
                   onClick={loadAllData}
@@ -1645,7 +1625,6 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                   <span>Refresh Slots</span>
                 </button>
               </div>
-              )}
             </div>
           </div>
 
@@ -1654,23 +1633,16 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
             <div className="p-8 text-center bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 space-y-3">
               <Calendar className="w-8 h-8 mx-auto mb-2 text-slate-400 opacity-60" />
               <p className="font-semibold text-sm">No discussion slots provisioned yet.</p>
-              <p className="text-xs mt-1">Slots are provisioned based on the student quota configured by the Super Admin, or you can schedule slots directly.</p>
+              <p className="text-xs mt-1">Discussion slots are provisioned based on institutional quotas configured by the Super Administrator.</p>
               <div className="flex items-center justify-center gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={handleRegenerateSlots}
-                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  onClick={loadAllData}
+                  disabled={loading}
+                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
                 >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Auto-Generate Quota Slots</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsScheduleSlotOpen(true)}
-                  className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 text-slate-700 dark:text-slate-200 font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Schedule Custom Slot</span>
+                  <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                  <span>Refresh Slots</span>
                 </button>
               </div>
             </div>

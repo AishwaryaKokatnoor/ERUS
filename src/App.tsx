@@ -1935,6 +1935,17 @@ function GDAppContent() {
               onResetSlots={handleResetSlots}
               currentUser={currentUser}
               bookedSlotId={studentBookedSlotId}
+              onBackToDashboard={() => {
+                if (currentUser?.role === 'super_admin') {
+                  setCurrentTab('super_admin');
+                } else if (currentUser?.role === 'college_admin') {
+                  setCurrentTab('college_admin');
+                } else if (currentUser?.role === 'faculty') {
+                  setCurrentTab('faculty');
+                } else {
+                  setCurrentTab('topics');
+                }
+              }}
             />
           ) : (
             <RealisticGDRoom
@@ -1951,6 +1962,17 @@ function GDAppContent() {
               onResetSlots={handleResetSlots}
               currentUser={currentUser}
               bookedSlotId={studentBookedSlotId}
+              onBackToDashboard={() => {
+                if (currentUser?.role === 'super_admin') {
+                  setCurrentTab('super_admin');
+                } else if (currentUser?.role === 'college_admin') {
+                  setCurrentTab('college_admin');
+                } else if (currentUser?.role === 'faculty') {
+                  setCurrentTab('faculty');
+                } else {
+                  setCurrentTab('topics');
+                }
+              }}
               onUpdateLayout={(newLayout) => {
                 setSession((prev) => ({ ...prev, roomLayout: newLayout }));
                 setAvailableSlots((prev) =>

@@ -44,7 +44,8 @@ import {
   Maximize2,
   Minimize2,
   X,
-  Download
+  Download,
+  ArrowLeft
 } from 'lucide-react';
 import { GDSession, Student, TranscriptEntry, GDFacilitatorPhase, GDRoomLayoutType, FacultyLiveNote } from '../../types/gd';
 import { AuthUser } from '../../types/auth';
@@ -81,6 +82,7 @@ interface RealisticGDRoomProps {
   currentUser?: AuthUser | null;
   onUpdateLayout?: (layout: GDRoomLayoutType) => void;
   bookedSlotId?: string | null;
+  onBackToDashboard?: () => void;
 }
 
 export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
@@ -98,6 +100,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   currentUser,
   onUpdateLayout,
   bookedSlotId,
+  onBackToDashboard,
 }) => {
   const [activeTab, setActiveTab] = useState<'transcript' | 'rules' | 'analytics' | 'breakout'>('transcript');
   const deduplicatedTranscripts = useMemo(() => {
@@ -2323,6 +2326,18 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           <div>
             {/* Clean Metadata: Group Discussion Set, Slot Details, and Allotted Faculty */}
             <div className="flex items-center gap-2 flex-wrap mb-2">
+              {onBackToDashboard && (
+                <button
+                  type="button"
+                  onClick={onBackToDashboard}
+                  className="px-3 py-1 rounded-full text-xs font-bold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                  title="Return to Dashboard"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
+                  <span>Back</span>
+                </button>
+              )}
+
               {/* Group Discussion Set */}
               <span className="px-3 py-1 rounded-full text-xs font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 flex items-center gap-1.5 shadow-2xs">
                 <Radio className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 animate-pulse shrink-0" />
