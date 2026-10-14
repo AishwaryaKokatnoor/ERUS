@@ -91,17 +91,22 @@ export function useUserMedia(): UserMediaControls {
       analyserRef.current = analyser;
 
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      let lastVolumeUpdate = 0;
 
       const updateVolume = () => {
         if (!analyserRef.current) return;
-        analyserRef.current.getByteFrequencyData(dataArray);
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) {
-          sum += dataArray[i];
+        const now = performance.now();
+        if (now - lastVolumeUpdate > 100) {
+          lastVolumeUpdate = now;
+          analyserRef.current.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+          }
+          const average = sum / dataArray.length;
+          const normalized = Math.min(100, Math.round((average / 128) * 100));
+          setAudioLevel((prev) => (Math.abs(prev - normalized) >= 3 ? normalized : prev));
         }
-        const average = sum / dataArray.length;
-        const normalized = Math.min(100, Math.round((average / 128) * 100));
-        setAudioLevel(normalized);
 
         animFrameRef.current = requestAnimationFrame(updateVolume);
       };
