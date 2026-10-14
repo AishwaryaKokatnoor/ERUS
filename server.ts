@@ -403,6 +403,7 @@ function healEvaluatedSlots() {
 
         const synthSlot: BackendCollegeSlotItem = {
           id: sessionId,
+          createdAt: new Date().toISOString(),
           slotName: firstRep?.topic ? `Discussion: ${firstRep.topic}` : `Slot ${sessionId}`,
           topic: firstRep?.topic || 'Ecommerce',
           description: 'Completed group discussion evaluation session',
@@ -9925,7 +9926,7 @@ io.on('connection', (socket) => {
           // In a live GD with 2 or more real human participants, unlock the floor so
           // other human peers can respond directly to each other; silence watchdog will arbitrate turns at 3s/6s/9s.
           const realStudentPeers = Array.from(room.peers.values()).filter(
-            (p) => p.role === 'student' && p.role !== 'faculty' && p.role !== 'college_admin'
+            (p) => p.role === 'student'
           );
           if (realStudentPeers.length >= 2 && !room.simulationMode) {
             // Let the silence watchdog track silence starting now
@@ -10040,7 +10041,7 @@ io.on('connection', (socket) => {
           // In a live GD with 2 or more real human participants, unlock the floor so
           // other human peers can respond directly to each other; silence watchdog will arbitrate turns at 3s/6s/9s.
           const realStudentPeers = Array.from(room.peers.values()).filter(
-            (p) => p.role === 'student' && p.role !== 'faculty' && p.role !== 'college_admin'
+            (p) => p.role === 'student'
           );
           if (realStudentPeers.length >= 2 && !room.simulationMode) {
             // Let the silence watchdog track silence starting now

@@ -451,10 +451,10 @@ export function useGDRecorder({
             // Fallback for real peer participants (not user themselves and not empty seat)
             if (!resolvedStream && !tile.id.includes('empty') && !tile.id.includes('user')) {
               const livePeerStreams = Array.from(peers.values()).filter(
-                (s) => s.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)
+                (s: any) => s && typeof s.getVideoTracks === 'function' && s.getVideoTracks().some((t: any) => t.readyState === 'live' || t.enabled)
               );
               if (livePeerStreams.length > 0) {
-                resolvedStream = livePeerStreams[0];
+                resolvedStream = livePeerStreams[0] as MediaStream;
               }
             }
           }

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Mic, MicOff, Video, VideoOff, Play, CheckCircle2, 
   HelpCircle, Sparkles, Volume2, VolumeX, LogOut, MessageSquare, 
-  Share2, Shield, Eye, Award, Clock, ArrowRight, ArrowLeft, UserCheck, School
+  Share2, Shield, Eye, Award, Clock, ArrowRight, ArrowLeft, UserCheck, School, Radio
 } from 'lucide-react';
 import { 
   GDSession, Student, TranscriptEntry, PresentationPhase, 

@@ -44,7 +44,9 @@ export type GDFacilitatorPhase =
   | 'discussion'
   | 'probing'
   | 'deadlock'
-  | 'conclusion';
+  | 'conclusion'
+  | 'moderation'
+  | 'turn_transition';
 
 export interface GDSession {
   id: string;
