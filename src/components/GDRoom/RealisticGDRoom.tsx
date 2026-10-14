@@ -1182,7 +1182,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   const [classroomCurrentQuestion, setClassroomCurrentQuestion] = useState<string>('');
   const [classroomCurrentAnswer, setClassroomCurrentAnswer] = useState<string>('');
   const [classroomCurrentTakeaway, setClassroomCurrentTakeaway] = useState<string>('');
-  const [isClassroomAutoRunning, setIsClassroomAutoRunning] = useState<boolean>(true);
+  const [isClassroomAutoRunning, setIsClassroomAutoRunning] = useState<boolean>(false);
   const [classroomWatchdogCountdown, setClassroomWatchdogCountdown] = useState<number>(8);
   const classroomWatchdogTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -2357,22 +2357,36 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   // 1. Seminar Opening
   const handleStartClassroomOpening = useCallback(() => {
+    roomVoice.unlock();
     setClassroomPhase('opening');
     setClassroomCurrentQuestion('');
     setClassroomCurrentAnswer('');
     setClassroomCurrentTakeaway('');
-    speakFacilitator(CLASSROOM_INSTRUCTOR_SCRIPTS.OPENING, 'classroom_opening', 'intro', () => {
-      if (isClassroomAutoRunning) {
-        setTimeout(() => {
-          handleClassroomCallPresenter(0);
-        }, 1200);
-      }
+    setPresentationSeconds(0);
+    setCurrentPresenterIndex(0);
+
+    setSession((prev) => ({
+      ...prev,
+      status: 'active',
+      startedAt: prev.startedAt || Date.now(),
+    }));
+
+    const firstStudent = activeDisplayStudents[0] || session.students[0];
+    const firstStudentName = firstStudent?.name || 'Student Number 1';
+    const firstAssigned = classroomAssignedTopics[0];
+    const firstTopicTitle = firstAssigned?.subTopicTitle || session.topic || 'Engineering and Applied Systems';
+
+    const openingScript = `Good morning everyone! Welcome to today's classroom presentation activity on "${session.topic || 'the assigned topic'}". Each student will present their assigned topic in sequence. Let us begin with our first presenter: Student Number 1, ${firstStudentName}, please come forward to the stage and begin your presentation on "${firstTopicTitle}". All the best!`;
+
+    speakFacilitator(openingScript, 'classroom_opening', 'intro', () => {
+      handleClassroomCallPresenter(0);
     });
-  }, [isClassroomAutoRunning]);
+  }, [session.topic, activeDisplayStudents, session.students, classroomAssignedTopics, speakFacilitator, setSession]);
 
   // 2. Calling Students in Serial Order (1 to 6)
   const handleClassroomCallPresenter = useCallback((index: number) => {
-    if (index >= 6) {
+    const totalStudents = Math.min(6, activeDisplayStudents.length);
+    if (index >= totalStudents) {
       handleClassroomDeliverClosing();
       return;
     }
@@ -2384,11 +2398,19 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     setClassroomCurrentTakeaway('');
     setInvitedPeerStudentId(null);
 
-    const callScript = CLASSROOM_INSTRUCTOR_SCRIPTS.CALLING[index] || CLASSROOM_INSTRUCTOR_SCRIPTS.CALLING[0];
+    const targetStudent = activeDisplayStudents[index] || session.students[index] || activeDisplayStudents[0];
+    const targetName = targetStudent?.name || `Student Number ${index + 1}`;
+    const assigned = classroomAssignedTopics[index] || classroomAssignedTopics[0];
+    const targetTopic = assigned?.subTopicTitle || `Topic ${index + 1}`;
+
+    const callScript = index === 0
+      ? `Student Number 1, ${targetName}, please take the stage and begin your presentation on "${targetTopic}". You have the floor!`
+      : `Thank you! Now, I invite our next presenter, Student Number ${index + 1}, ${targetName}, to take the stage and present "${targetTopic}". Please begin!`;
+
     speakFacilitator(callScript, 'classroom_call_presenter', 'discussion', () => {
       handleClassroomStartPresenting(index);
     });
-  }, [classroomAssignedTopics]);
+  }, [activeDisplayStudents, session.students, classroomAssignedTopics, handleClassroomDeliverClosing, speakFacilitator]);
 
   // 3. Presentation Delivery at Podium
   const handleClassroomStartPresenting = useCallback((index: number) => {
@@ -2932,13 +2954,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                       onStartSession(session.id);
                     }
                     setTimeout(() => {
-                      handleInitiateOpeningSpeaker(true);
+                      if (currentLayout === 'classroom') {
+                        handleStartClassroomOpening();
+                      } else {
+                        handleInitiateOpeningSpeaker(true);
+                      }
                     }, 350);
                   }}
                   className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-700/30 transition-all hover:scale-105 active:scale-95 cursor-pointer animate-pulse ring-2 ring-emerald-400/50"
                 >
                   <Play className="w-4 h-4 fill-white" />
-                  <span>Start Group Discussion</span>
+                  <span>{currentLayout === 'classroom' ? 'Start Presentation' : 'Start Group Discussion'}</span>
                 </button>
               )}
 
@@ -2954,14 +2980,18 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                       onStartSession(session.id);
                     }
                     setTimeout(() => {
-                      handleInitiateOpeningSpeaker(true);
+                      if (currentLayout === 'classroom') {
+                        handleStartClassroomOpening();
+                      } else {
+                        handleInitiateOpeningSpeaker(true);
+                      }
                     }, 350);
                   }}
                   className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-600 text-white shadow-md transition-all active:scale-95 cursor-pointer border border-emerald-500/50"
-                  title="Restart discussion from beginning and deliver opening speech"
+                  title={currentLayout === 'classroom' ? 'Restart presentation from beginning and deliver opening speech' : 'Restart discussion from beginning and deliver opening speech'}
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Restart Discussion</span>
+                  <span>{currentLayout === 'classroom' ? 'Restart Presentation' : 'Restart Discussion'}</span>
                 </button>
               )}
 
@@ -3479,316 +3509,124 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               </div>
             )}
 
-            {/* 3. CLASSROOM PRESENTATION LAYOUT */}
+            {/* 3. CLASSROOM PRESENTATION LAYOUT - CLEAN PRESENTER IN THE MIDDLE & MONITORED BY FACULTY */}
             {currentLayout === 'classroom' && (
-              <div className="relative z-10 my-3 flex-1 flex flex-col items-center justify-center w-full space-y-4">
+              <div className="relative z-10 my-2 flex-1 flex flex-col items-center justify-between w-full max-w-4xl mx-auto px-3 space-y-4">
                 
-                {/* Stage Activity Control Bar */}
-                <div className="w-full max-w-4xl bg-slate-900/95 border-2 border-indigo-500/50 rounded-2xl p-3 sm:p-4 shadow-2xl text-white">
-                  <div className="flex flex-col md:flex-row items-center justify-between gap-3 border-b border-slate-800 pb-3">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white shadow-md">
-                        <Presentation className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] uppercase font-mono tracking-widest text-indigo-400 font-bold">
-                            ERUS AI INSTRUCTOR • Student Presentation Activity
-                          </span>
-                          <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-semibold">
-                            60–75 Mins Total
-                          </span>
-                        </div>
-                        <h3 className="text-xs sm:text-sm font-bold text-slate-100 truncate max-w-md sm:max-w-xl">
-                          {session.topic}
-                        </h3>
-                      </div>
+                {/* 1. Slim Minimal Faculty Monitoring Bar */}
+                <div className="w-full bg-slate-900/90 border border-indigo-500/30 rounded-2xl p-3 sm:px-5 sm:py-3 shadow-xl backdrop-blur-md flex flex-wrap items-center justify-between gap-3 text-white">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white shadow-md">
+                      <Presentation className="w-5 h-5" />
                     </div>
-
-                    <div className="flex items-center gap-2">
-                      {/* Live Presentation Stopwatch */}
-                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 font-mono text-xs text-slate-200">
-                        <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                        <span>
-                          {Math.floor(presentationSeconds / 60).toString().padStart(2, '0')}:{(presentationSeconds % 60).toString().padStart(2, '0')}
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] uppercase font-mono tracking-wider text-indigo-400 font-bold">
+                          Classroom Presentation
                         </span>
-                        <span className="text-[10px] text-slate-400">(6-8m target)</span>
+                        <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-semibold">
+                          Monitored by Faculty
+                        </span>
                       </div>
-
-                      {/* Auto-Progress Toggle */}
-                      <button
-                        type="button"
-                        onClick={() => setIsClassroomAutoRunning((prev) => !prev)}
-                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
-                          isClassroomAutoRunning
-                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
-                            : 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
-                        }`}
-                        title="Toggle automated speech and progression"
-                      >
-                        <FastForward className="w-3.5 h-3.5" />
-                        <span>{isClassroomAutoRunning ? 'Auto: ON' : 'Auto: OFF'}</span>
-                      </button>
+                      <h3 className="text-xs sm:text-sm font-bold text-slate-100 truncate max-w-sm sm:max-w-md">
+                        {session.topic}
+                      </h3>
                     </div>
                   </div>
 
-                  {/* Stage Status & Quick Actions Bar */}
-                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs text-slate-400 font-medium">Activity Stage:</span>
-                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border flex items-center gap-1.5 ${
-                        classroomPhase === 'not_started'
-                          ? 'bg-slate-800 text-slate-300 border-slate-700'
-                          : classroomPhase === 'opening'
-                          ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40 animate-pulse'
-                          : classroomPhase === 'calling_presenter'
-                          ? 'bg-blue-500/20 text-blue-300 border-blue-500/40'
-                          : classroomPhase === 'presenting'
-                          ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
-                          : classroomPhase === 'peer_qa_invite' || classroomPhase === 'peer_qa_active'
-                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
-                          : classroomPhase === 'silence_watchdog' || classroomPhase === 'ai_answering'
-                          ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                          : classroomPhase === 'takeaway_feedback'
-                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                          : 'bg-indigo-600 text-white border-indigo-400'
-                      }`}>
-                        <CircleDot className="w-3 h-3" />
-                        {classroomPhase === 'not_started' && '1. Waiting to Start'}
-                        {classroomPhase === 'opening' && '1. Seminar Opening Script'}
-                        {classroomPhase === 'calling_presenter' && `2. Calling Student #${currentPresenterIndex + 1}`}
-                        {classroomPhase === 'presenting' && `3. Presenting: Student #${currentPresenterIndex + 1} (${currentPresenterStudent.name.split(' ')[0]})`}
-                        {classroomPhase === 'peer_qa_invite' && '4. Inviting Peer Questions'}
-                        {classroomPhase === 'peer_qa_active' && `4. Peer Q&A (${classroomWatchdogCountdown}s Watchdog)`}
-                        {classroomPhase === 'silence_watchdog' && '4. Watchdog: AI Instructor Question'}
-                        {classroomPhase === 'ai_answering' && '4. Presenter Answering Question'}
-                        {classroomPhase === 'takeaway_feedback' && '5. Key Takeaway & Transition'}
-                        {classroomPhase === 'closing' && '6. Seminar Closing Remarks'}
-                        {classroomPhase === 'completed' && 'Completed!'}
-                      </span>
-                    </div>
-
-                    {/* Stage Interactive Action Buttons */}
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {classroomPhase === 'not_started' && (
+                  {/* Actions & Status */}
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    {classroomPhase === 'not_started' ? (
+                      canStartSession ? (
                         <button
                           type="button"
                           onClick={handleStartClassroomOpening}
-                          className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md flex items-center gap-1.5 cursor-pointer transition-all"
+                          className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-700/30 transition-all hover:scale-105 active:scale-95 cursor-pointer ring-2 ring-emerald-400/50"
                         >
-                          <Play className="w-3.5 h-3.5 fill-current" />
-                          Start Seminar Opening
+                          <Play className="w-4 h-4 fill-white" />
+                          <span>Start Presentation</span>
                         </button>
-                      )}
-
-                      {classroomPhase === 'opening' && (
-                        <button
-                          type="button"
-                          onClick={() => handleClassroomCallPresenter(0)}
-                          className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md flex items-center gap-1.5 cursor-pointer transition-all"
-                        >
-                          <ArrowRight className="w-3.5 h-3.5" />
-                          Call Student 1
-                        </button>
-                      )}
-
-                      {classroomPhase === 'calling_presenter' && (
-                        <button
-                          type="button"
-                          onClick={() => handleClassroomStartPresenting(currentPresenterIndex)}
-                          className="px-3 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow-md flex items-center gap-1.5 cursor-pointer transition-all"
-                        >
-                          <Play className="w-3.5 h-3.5 fill-current" />
-                          Begin Presentation
-                        </button>
-                      )}
-
-                      {classroomPhase === 'presenting' && (
-                        <button
-                          type="button"
-                          onClick={() => handleClassroomInitiatePeerQA(currentPresenterIndex)}
-                          className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold shadow-md flex items-center gap-1.5 cursor-pointer transition-all"
-                        >
-                          <MessageSquare className="w-3.5 h-3.5" />
-                          Conclude Speech & Open Q&A
-                        </button>
-                      )}
-
-                      {(classroomPhase === 'peer_qa_invite' || classroomPhase === 'peer_qa_active') && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => handleClassroomPeerAsksQuestion(currentPresenterIndex)}
-                            className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold shadow-md flex items-center gap-1.5 cursor-pointer transition-all"
-                          >
-                            <Users className="w-3.5 h-3.5" />
-                            Peer Asks Question
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleClassroomTriggerSilenceWatchdog(currentPresenterIndex)}
-                            className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-md flex items-center gap-1.5 cursor-pointer transition-all"
-                          >
-                            <Sparkles className="w-3.5 h-3.5" />
-                            Silence Watchdog (AI Question)
-                          </button>
-                        </>
-                      )}
-
-                      {classroomPhase === 'ai_answering' && (
-                        <button
-                          type="button"
-                          onClick={() => handleClassroomTakeawayAndTransition(currentPresenterIndex)}
-                          className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-md flex items-center gap-1.5 cursor-pointer transition-all"
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          Deliver Takeaway & Transition
-                        </button>
-                      )}
-
-                      {classroomPhase === 'takeaway_feedback' && (
-                        <button
-                          type="button"
-                          onClick={() => currentPresenterIndex < 5 ? handleClassroomCallPresenter(currentPresenterIndex + 1) : handleClassroomDeliverClosing()}
-                          className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md flex items-center gap-1.5 cursor-pointer transition-all"
-                        >
-                          <ArrowRight className="w-3.5 h-3.5" />
-                          {currentPresenterIndex < 5 ? `Call Next Student (#${currentPresenterIndex + 2})` : 'Deliver Closing Remarks'}
-                        </button>
-                      )}
-
-                      {(classroomPhase === 'closing' || classroomPhase === 'completed') && (
-                        <button
-                          type="button"
-                          onClick={handleResetClassroomActivity}
-                          className="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold shadow-md flex items-center gap-1.5 cursor-pointer transition-all"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5" />
-                          Restart Activity
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Closing Remarks Card (Page 5: 5 Lessons & 3 Reflections) */}
-                {(classroomPhase === 'closing' || classroomPhase === 'completed') && (
-                  <div className="w-full max-w-4xl bg-gradient-to-b from-indigo-950 via-slate-900 to-slate-950 border-2 border-indigo-400 rounded-2xl p-5 shadow-2xl text-white space-y-4">
-                    <div className="flex items-center justify-between border-b border-indigo-800/60 pb-3">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2.5 rounded-xl bg-gradient-to-tr from-amber-500 to-indigo-600 text-white shadow-lg">
-                          <Award className="w-6 h-6" />
+                      ) : (
+                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700 text-xs text-amber-300 font-medium">
+                          <Clock className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                          <span>Waiting for faculty to start...</span>
                         </div>
-                        <div>
-                          <span className="text-[10px] font-mono uppercase tracking-widest text-amber-400 font-bold">
-                            ERUS AI INSTRUCTOR • CLOSING REMARKS & LEARNING OUTCOMES
+                      )
+                    ) : (
+                      <>
+                        {/* Live Presentation Stopwatch */}
+                        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 font-mono text-xs text-slate-200">
+                          <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>
+                            {Math.floor(presentationSeconds / 60).toString().padStart(2, '0')}:{(presentationSeconds % 60).toString().padStart(2, '0')}
                           </span>
-                          <h3 className="text-base sm:text-lg font-bold text-white">
-                            Congratulations to all Six Students!
-                          </h3>
                         </div>
-                      </div>
-                      <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-bold">
-                        Activity Complete
-                      </span>
-                    </div>
 
-                    {/* 5 Important Lessons */}
-                    <div className="space-y-2">
-                      <h4 className="text-xs font-bold font-mono uppercase tracking-wider text-indigo-300 flex items-center gap-1.5">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                        Five Important Lessons from Today's Activity:
-                      </h4>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                        <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-700/80">
-                          <span className="text-[10px] font-mono text-indigo-400 font-bold block mb-0.5">1. TECHNICAL KNOWLEDGE</span>
-                          <p className="text-xs text-slate-200">Understand the topic beyond memorizing facts. Explain the concepts in your own words.</p>
-                        </div>
-                        <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-700/80">
-                          <span className="text-[10px] font-mono text-indigo-400 font-bold block mb-0.5">2. COMMUNICATION SKILLS</span>
-                          <p className="text-xs text-slate-200">Speak clearly, organize your ideas, and use simple, professional language.</p>
-                        </div>
-                        <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-700/80">
-                          <span className="text-[10px] font-mono text-indigo-400 font-bold block mb-0.5">3. PRESENTATION SKILLS</span>
-                          <p className="text-xs text-slate-200">Introduce your topic, explain points logically, provide examples, conclude effectively.</p>
-                        </div>
-                        <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-700/80">
-                          <span className="text-[10px] font-mono text-indigo-400 font-bold block mb-0.5">4. CRITICAL THINKING</span>
-                          <p className="text-xs text-slate-200">Listen carefully, ask meaningful questions, and evaluate different perspectives.</p>
-                        </div>
-                        <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-700/80 sm:col-span-2 lg:col-span-1">
-                          <span className="text-[10px] font-mono text-indigo-400 font-bold block mb-0.5">5. CONFIDENCE</span>
-                          <p className="text-xs text-slate-200">Do not be afraid of making mistakes. Every presentation and question helps you improve.</p>
-                        </div>
-                      </div>
-                    </div>
+                        {/* Presenter Order Badge */}
+                        <span className="px-2.5 py-1 rounded-xl bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-semibold">
+                          Presenter {currentPresenterIndex + 1} of {Math.min(6, activeDisplayStudents.length)}
+                        </span>
 
-                    {/* 3 Reflection Questions */}
-                    <div className="bg-slate-900/90 border border-indigo-500/30 rounded-xl p-3">
-                      <h4 className="text-xs font-bold font-mono uppercase tracking-wider text-amber-300 mb-1.5 flex items-center gap-1.5">
-                        <Target className="w-4 h-4 text-amber-400" />
-                        Three Student Reflection Questions:
-                      </h4>
-                      <ol className="text-xs text-slate-200 space-y-1 list-decimal list-inside font-medium">
-                        <li>What did I learn from today's presentations?</li>
-                        <li>What is one skill I need to improve?</li>
-                        <li>What will I do differently in my next presentation?</li>
-                      </ol>
-                    </div>
-                  </div>
-                )}
+                        {/* Faculty Navigation Controls */}
+                        {canStartSession && classroomPhase !== 'closing' && classroomPhase !== 'completed' && (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextIdx = currentPresenterIndex + 1;
+                                if (nextIdx < Math.min(6, activeDisplayStudents.length)) {
+                                  handleClassroomCallPresenter(nextIdx);
+                                } else {
+                                  handleClassroomDeliverClosing();
+                                }
+                              }}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md transition-all active:scale-95 cursor-pointer"
+                              title="Call the next presenter in sequence"
+                            >
+                              <span>{currentPresenterIndex < Math.min(6, activeDisplayStudents.length) - 1 ? `Next Presenter (#${currentPresenterIndex + 2})` : 'Conclude'}</span>
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </button>
 
-                {/* Front of Classroom: Presentation Board & Podium */}
-                {classroomPhase !== 'closing' && classroomPhase !== 'completed' && (
-                  <div className="w-full max-w-4xl bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 border-2 border-indigo-500/40 rounded-2xl p-3 sm:p-4 shadow-xl text-white relative overflow-hidden">
-                    
-                    <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
-
-                    {/* Presentation Sub-Topic Banner */}
-                    <div className="bg-gradient-to-r from-indigo-950/80 via-slate-900 to-purple-950/80 border border-indigo-500/30 rounded-xl p-3 mb-3">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <div>
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-indigo-600/40 text-indigo-300 font-bold border border-indigo-500/40">
-                              Presenter {currentPresenterIndex + 1} of 6 • Seat #{currentPresenterStudent.seatNumber}
-                            </span>
-                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 font-semibold">
-                              Focus: {currentPresenterAssignedTopic.focusArea}
-                            </span>
-                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold">
-                              Rubric: {currentPresenterAssignedTopic.questionType}
-                            </span>
+                            <button
+                              type="button"
+                              onClick={handleResetClassroomActivity}
+                              className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all cursor-pointer"
+                              title="Restart presentation from Student 1"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                            </button>
                           </div>
-                          <h4 className="text-sm sm:text-base font-bold text-white">
-                            📌 Assigned Sub-Topic: "{currentPresenterAssignedTopic.subTopicTitle}"
-                          </h4>
-                        </div>
+                        )}
 
+                        {/* Student Presenter Finished Button */}
                         {currentPresenterStudent.isUser && classroomPhase === 'presenting' && (
                           <button
                             type="button"
                             onClick={handleClassroomConcludeUserSpeech}
-                            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg flex items-center gap-1.5 cursor-pointer whitespace-nowrap self-start sm:self-auto transition-all"
+                            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md transition-all cursor-pointer"
                           >
-                            <CheckCircle2 className="w-4 h-4" />
-                            Finish Presentation
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Done Presenting</span>
                           </button>
                         )}
-                      </div>
-                    </div>
+                      </>
+                    )}
+                  </div>
+                </div>
 
-                    {/* Presenter at the Podium Spotlight */}
-                    <div 
-                      onDoubleClick={() => handleToggleEnlargeStudent(currentPresenterStudent)}
-                      title={`${currentPresenterStudent.name} • Double-click to enlarge spotlight`}
-                      className="flex flex-col sm:flex-row items-center justify-center gap-4 bg-slate-800/70 border border-slate-700/70 rounded-xl p-3 backdrop-blur-sm cursor-pointer"
-                    >
-                      {/* Presenter Avatar & Badge */}
-                      <div className="relative flex flex-col items-center flex-shrink-0">
-                        {isSpeakingLive && (
-                          <div className="absolute -inset-2 rounded-2xl bg-indigo-500/30 animate-pulse pointer-events-none" />
-                        )}
-                        <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden border-2 border-indigo-400 ring-4 ring-indigo-500/20 shadow-lg relative bg-slate-900">
+                {/* 2. PRESENTER IN THE MIDDLE (CENTER STAGE) */}
+                {classroomPhase !== 'closing' && classroomPhase !== 'completed' ? (
+                  <div className="w-full flex flex-col items-center justify-center my-auto py-2">
+                    <div className="w-full max-w-xl bg-gradient-to-b from-slate-900/95 via-slate-900 to-indigo-950/40 border-2 border-indigo-500/40 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-md flex flex-col items-center text-center relative overflow-hidden">
+                      
+                      {/* Ambient Aura when Presenter is Speaking */}
+                      {(isSpeakingLive || currentPresenterStudent.isSpeaking) && (
+                        <div className="absolute inset-0 bg-indigo-500/10 animate-pulse pointer-events-none rounded-3xl" />
+                      )}
+
+                      {/* Large Center Stage Video / Avatar Frame */}
+                      <div className="relative flex flex-col items-center">
+                        <div className="w-48 h-48 sm:w-56 sm:h-56 md:w-60 md:h-60 rounded-3xl overflow-hidden border-4 border-indigo-400/90 ring-8 ring-indigo-500/20 shadow-2xl relative bg-slate-950">
                           <StudentVideoFrame
                             student={currentPresenterStudent}
                             isCurrentSpeaker={isSpeakingLive || currentPresenterStudent.isSpeaking}
@@ -3800,191 +3638,124 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                             isFaculty={isFaculty}
                           />
                         </div>
-                        <span className="absolute -bottom-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white text-[9px] font-bold px-2 py-0.5 rounded-full shadow border border-indigo-300/40 whitespace-nowrap z-20">
-                          🎙️ PRESENTER AT PODIUM
+
+                        {/* Placard Badge */}
+                        <div className="absolute -bottom-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white text-[11px] sm:text-xs font-bold px-3 py-1 rounded-full shadow-lg border border-indigo-300/40 whitespace-nowrap z-20 flex items-center gap-1.5">
+                          <Radio className="w-3.5 h-3.5 text-emerald-300 animate-pulse" />
+                          <span>PRESENTER • SEAT #{currentPresenterStudent.seatNumber}</span>
+                        </div>
+                      </div>
+
+                      {/* Presenter Name & Role */}
+                      <div className="mt-6 flex flex-col items-center">
+                        <h2 className="text-xl sm:text-2xl font-bold text-white flex items-center gap-2">
+                          {currentPresenterStudent.name}
+                          {currentPresenterStudent.isUser && !isFaculty && (
+                            <span className="px-2 py-0.5 rounded-full bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 text-[10px] font-semibold">
+                              You
+                            </span>
+                          )}
+                        </h2>
+                        
+                        {/* Sub-Topic Title */}
+                        <div className="mt-2 px-4 py-1.5 rounded-xl bg-indigo-950/70 border border-indigo-500/40 text-xs sm:text-sm font-semibold text-indigo-200 max-w-md">
+                          📌 Topic: "{currentPresenterAssignedTopic.subTopicTitle}"
+                        </div>
+                      </div>
+
+                      {/* Live Speech Caption */}
+                      <div className="mt-4 w-full bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-xs sm:text-sm text-slate-200 italic font-medium min-h-[44px] flex items-center justify-center">
+                        <span>
+                          "{latestSpeakerTranscript?.text || (currentPresenterStudent.isSpeaking ? 'Delivering presentation on assigned topic...' : classroomPhase === 'not_started' ? 'Waiting for faculty to begin...' : 'Presenting to classroom audience...')}"
                         </span>
                       </div>
-
-                      {/* Presenter Info & Live Q&A Stream */}
-                      <div className="flex-1 text-center sm:text-left min-w-0">
-                        <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
-                          <h3 className="text-sm sm:text-base font-bold text-white truncate">
-                            {currentPresenterStudent.name}
-                          </h3>
-                          <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 text-[10px] font-mono border border-indigo-500/30 font-semibold">
-                            Seat {currentPresenterStudent.seatNumber} • {currentPresenterStudent.isUser && !isFaculty ? 'You (Speaking)' : 'Presenter'}
-                          </span>
-                          <span className="text-xs text-slate-400">
-                            ({currentPresenterStudent.speakingTurns || 0} speaking turns)
-                          </span>
+                    </div>
+                  </div>
+                ) : (
+                  /* 2.5 CLOSING REMARKS & 5 LESSONS (When Completed) */
+                  <div className="w-full max-w-2xl bg-gradient-to-b from-indigo-950 via-slate-900 to-slate-950 border-2 border-indigo-400 rounded-2xl p-6 shadow-2xl text-white space-y-4 my-auto">
+                    <div className="flex items-center justify-between border-b border-indigo-800/60 pb-3">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2.5 rounded-xl bg-gradient-to-tr from-amber-500 to-indigo-600 text-white shadow-lg">
+                          <Award className="w-6 h-6" />
                         </div>
-
-                        {/* Interactive Speech & Q&A Box */}
-                        <div className="mt-2 bg-slate-900/90 border border-slate-700/80 rounded-lg p-2.5 max-w-2xl space-y-2">
-                          {classroomPhase === 'presenting' && (
-                            <div>
-                              <div className="flex items-center gap-1.5 text-[10px] text-indigo-300 font-mono font-semibold mb-1">
-                                <Radio className="w-3 h-3 text-emerald-400 animate-pulse" />
-                                <span>PRESENTER ADDRESSING CLASSROOM:</span>
-                              </div>
-                              <p className="text-xs sm:text-sm text-slate-200 font-medium italic">
-                                "{latestSpeakerTranscript?.text || (currentPresenterStudent.isSpeaking ? 'Delivering presentation points on assigned topic...' : 'Presenting to the audience and taking questions.')}"
-                              </p>
-                            </div>
-                          )}
-
-                          {(classroomPhase === 'peer_qa_invite' || classroomPhase === 'peer_qa_active') && (
-                            <div className="bg-amber-950/40 border border-amber-500/30 rounded-lg p-2">
-                              <div className="flex items-center justify-between text-[10px] text-amber-300 font-mono font-semibold mb-1">
-                                <span>❓ PEER QUESTIONING SESSION:</span>
-                                <span>Watchdog: {classroomWatchdogCountdown}s</span>
-                              </div>
-                              <p className="text-xs text-slate-200 font-medium">
-                                {classroomCurrentQuestion || 'AI Instructor invited Student Number ' + (session.students.find((s) => s.id === invitedPeerStudentId)?.seatNumber || 2) + ' to ask a question. Waiting for peer question...'}
-                              </p>
-                            </div>
-                          )}
-
-                          {(classroomPhase === 'silence_watchdog' || classroomPhase === 'ai_answering') && (
-                            <div className="space-y-1.5">
-                              <div className="bg-rose-950/40 border border-rose-500/30 rounded-lg p-2">
-                                <div className="text-[10px] text-rose-300 font-mono font-semibold mb-0.5">
-                                  🤖 AI INSTRUCTOR QUESTION ({currentPresenterAssignedTopic.questionType}):
-                                </div>
-                                <p className="text-xs text-slate-200 font-medium italic">
-                                  "{classroomCurrentQuestion || currentPresenterAssignedTopic.suggestedQuestion}"
-                                </p>
-                              </div>
-                              {classroomCurrentAnswer && (
-                                <div className="bg-emerald-950/40 border border-emerald-500/30 rounded-lg p-2">
-                                  <div className="text-[10px] text-emerald-300 font-mono font-semibold mb-0.5">
-                                    💬 PRESENTER'S ANSWER:
-                                  </div>
-                                  <p className="text-xs text-slate-200 font-medium italic">
-                                    "{classroomCurrentAnswer}"
-                                  </p>
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {classroomPhase === 'takeaway_feedback' && (
-                            <div className="bg-indigo-950/50 border border-indigo-400/40 rounded-lg p-2">
-                              <div className="text-[10px] text-indigo-300 font-mono font-semibold mb-0.5">
-                                💡 KEY POINT TO REMEMBER:
-                              </div>
-                              <p className="text-xs text-slate-100 font-medium">
-                                "{classroomCurrentTakeaway || currentPresenterAssignedTopic.keyTakeaway}"
-                              </p>
-                            </div>
-                          )}
+                        <div>
+                          <span className="text-[10px] font-mono uppercase tracking-widest text-amber-400 font-bold">
+                            Faculty Evaluation • Activity Completed
+                          </span>
+                          <h3 className="text-base sm:text-lg font-bold text-white">
+                            Congratulations to all Presenters!
+                          </h3>
                         </div>
                       </div>
+                      {canStartSession && (
+                        <button
+                          type="button"
+                          onClick={handleResetClassroomActivity}
+                          className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow transition-all cursor-pointer flex items-center gap-1.5"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Restart</span>
+                        </button>
+                      )}
                     </div>
 
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-200">
+                      <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-700/80">
+                        <span className="text-[10px] font-mono text-indigo-400 font-bold block mb-0.5">1. TECHNICAL DEPTH</span>
+                        <p>Explain key engineering concepts clearly in your own words.</p>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-700/80">
+                        <span className="text-[10px] font-mono text-indigo-400 font-bold block mb-0.5">2. COMMUNICATION</span>
+                        <p>Speak clearly, structure your points logically, and engage the audience.</p>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-700/80">
+                        <span className="text-[10px] font-mono text-indigo-400 font-bold block mb-0.5">3. REAL-WORLD CONTEXT</span>
+                        <p>Connect academic theory directly to practical industry applications.</p>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-700/80">
+                        <span className="text-[10px] font-mono text-indigo-400 font-bold block mb-0.5">4. CONFIDENCE & DELIVERY</span>
+                        <p>Maintain poise, answer questions politely, and accept feedback.</p>
+                      </div>
+                    </div>
                   </div>
                 )}
 
-                {/* Audience Tiered Desk Rows */}
-                <div className="w-full max-w-4xl space-y-3">
-                  
-                  <div className="flex items-center justify-between px-2 text-xs text-slate-500 dark:text-slate-400 font-medium">
-                    <span className="uppercase tracking-wider font-bold text-[10px] text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
+                {/* 3. CLASSROOM AUDIENCE (PEERS FACING PRESENTER) */}
+                <div className="w-full max-w-4xl space-y-2">
+                  <div className="flex items-center justify-between px-2 text-xs text-slate-400 font-medium">
+                    <span className="uppercase tracking-wider font-bold text-[10px] text-indigo-400 flex items-center gap-1.5">
                       <Users className="w-3.5 h-3.5" />
                       Classroom Audience (Facing Presenter)
                     </span>
-                    <span className="text-[11px] font-mono">
-                      Tiered Seating • 6 Participating Students
+                    <span className="text-[11px] font-mono text-slate-400">
+                      {activeDisplayStudents.length} Students Present
                     </span>
                   </div>
 
-                  {/* Row 1 (Front Row): Seats 1 to 5 */}
-                  {activeDisplayStudents.slice(0, 5).length > 0 && (
-                    <div className="bg-slate-100/90 dark:bg-slate-850/70 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5">
-                      <div className="flex items-center justify-between mb-1.5 px-1 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                        <span>Row 1 • Front Row Desks</span>
-                        <span>{activeDisplayStudents.slice(0, 5).length} Present</span>
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                        {activeDisplayStudents.slice(0, 5).map((student, idx) => (
-                          <ClassroomDeskCard
-                            key={student.id}
-                            student={student}
-                            isCurrentSpeaker={student.id === currentSpeakerStudent?.id}
-                            isUserCameraOn={isCameraOn}
-                            videoStream={videoStream}
-                            audioLevel={audioLevel}
-                            isListeningMic={isListeningMic}
-                            isFaculty={isFaculty}
-                            assignedTopic={classroomAssignedTopics[idx]}
-                            isPresenterAtPodium={student.id === currentPresenterStudent.id}
-                            isInvitedPeer={student.id === invitedPeerStudentId}
-                            onInvitePeer={(s) => handleClassroomPeerAsksQuestion(currentPresenterIndex, s.id)}
-                            onAddNote={handleOpenNoteModal}
-                            onEnlarge={handleToggleEnlargeStudent}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Row 2 (Middle Row): Seats 6 to 10 */}
-                  {activeDisplayStudents.slice(5, 10).length > 0 && (
-                    <div className="bg-slate-100/90 dark:bg-slate-850/70 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5">
-                      <div className="flex items-center justify-between mb-1.5 px-1 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                        <span>Row 2 • Middle Row Desks</span>
-                        <span>{activeDisplayStudents.slice(5, 10).length} Present</span>
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                        {activeDisplayStudents.slice(5, 10).map((student, idx) => (
-                          <ClassroomDeskCard
-                            key={student.id}
-                            student={student}
-                            isCurrentSpeaker={student.id === currentSpeakerStudent?.id}
-                            isUserCameraOn={isCameraOn}
-                            videoStream={videoStream}
-                            audioLevel={audioLevel}
-                            isListeningMic={isListeningMic}
-                            isFaculty={isFaculty}
-                            assignedTopic={classroomAssignedTopics[5 + idx]}
-                            isPresenterAtPodium={student.id === currentPresenterStudent.id}
-                            isInvitedPeer={student.id === invitedPeerStudentId}
-                            onInvitePeer={(s) => handleClassroomPeerAsksQuestion(currentPresenterIndex, s.id)}
-                            onAddNote={handleOpenNoteModal}
-                            onEnlarge={handleToggleEnlargeStudent}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Row 3 (Back Row): Seats 11 to 15+ */}
-                  {activeDisplayStudents.length > 10 && (
-                    <div className="bg-slate-100/90 dark:bg-slate-850/70 border border-slate-200 dark:border-slate-800 rounded-xl p-2.5">
-                      <div className="flex items-center justify-between mb-1.5 px-1 text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                        <span>Row 3 • Back Row Desks</span>
-                        <span>Seats 11 – {activeDisplayStudents.length}</span>
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                        {activeDisplayStudents.slice(10).map((student) => (
-                          <ClassroomDeskCard
-                            key={student.id}
-                            student={student}
-                            isCurrentSpeaker={student.id === currentSpeakerStudent?.id}
-                            isUserCameraOn={isCameraOn}
-                            videoStream={videoStream}
-                            audioLevel={audioLevel}
-                            isListeningMic={isListeningMic}
-                            isFaculty={isFaculty}
-                            onAddNote={handleOpenNoteModal}
-                            onEnlarge={handleToggleEnlargeStudent}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
+                  {/* Clean Single Row of Audience Desks */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+                    {activeDisplayStudents.slice(0, 6).map((student, idx) => {
+                      const isPresenter = student.id === currentPresenterStudent.id;
+                      return (
+                        <ClassroomDeskCard
+                          key={student.id}
+                          student={student}
+                          isCurrentSpeaker={student.id === currentSpeakerStudent?.id}
+                          isUserCameraOn={isCameraOn}
+                          videoStream={videoStream}
+                          audioLevel={audioLevel}
+                          isListeningMic={isListeningMic}
+                          isFaculty={isFaculty}
+                          assignedTopic={classroomAssignedTopics[idx]}
+                          isPresenterAtPodium={isPresenter}
+                          onEnlarge={handleToggleEnlargeStudent}
+                        />
+                      );
+                    })}
+                  </div>
                 </div>
+
               </div>
             )}
 
@@ -4153,7 +3924,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                           onStartSession(session.id);
                         }
                         setTimeout(() => {
-                          handleInitiateOpeningSpeaker(true);
+                          if (currentLayout === 'classroom') {
+                            handleStartClassroomOpening();
+                          } else {
+                            handleInitiateOpeningSpeaker(true);
+                          }
                         }, 350);
                       }}
                       className={`px-4 py-2.5 rounded-full font-bold text-xs text-white shadow-lg flex items-center gap-2 cursor-pointer transition-all ml-1 sm:ml-2 ${
@@ -4161,17 +3936,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                           ? 'bg-emerald-600 hover:bg-emerald-500 ring-2 ring-emerald-400/50 animate-pulse'
                           : 'bg-emerald-700 hover:bg-emerald-600 border border-emerald-500/50'
                       }`}
-                      title={!isSessionActive ? 'Start Group Discussion & Deliver AI Opening Speech' : 'Restart Discussion & Deliver AI Opening Speech'}
+                      title={!isSessionActive ? (currentLayout === 'classroom' ? 'Start Presentation & Deliver AI Opening Speech' : 'Start Group Discussion & Deliver AI Opening Speech') : (currentLayout === 'classroom' ? 'Restart Presentation & Deliver AI Opening Speech' : 'Restart Discussion & Deliver AI Opening Speech')}
                     >
                       {!isSessionActive ? (
                         <>
                           <Play className="w-4 h-4 fill-white" />
-                          <span>Start GD</span>
+                          <span>{currentLayout === 'classroom' ? 'Start Presentation' : 'Start GD'}</span>
                         </>
                       ) : (
                         <>
                           <RefreshCw className="w-3.5 h-3.5" />
-                          <span className="hidden sm:inline">Restart GD</span>
+                          <span className="hidden sm:inline">{currentLayout === 'classroom' ? 'Restart' : 'Restart GD'}</span>
                         </>
                       )}
                     </button>
