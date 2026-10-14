@@ -14,9 +14,11 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [theme, setThemeState] = useState<Theme>(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('erus_gd_theme') as Theme | null;
-      if (stored === 'light' || stored === 'dark') {
-        return stored;
+      if (stored === 'light') {
+        return 'light';
       }
+      // Reset any legacy dark setting to clean light mode
+      localStorage.setItem('erus_gd_theme', 'light');
     }
     // Default exclusively to clean Light mode
     return 'light';

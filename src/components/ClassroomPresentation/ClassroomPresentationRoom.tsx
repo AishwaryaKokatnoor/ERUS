@@ -3,7 +3,8 @@ import {
   Mic, MicOff, Video, VideoOff, Play, CheckCircle2, 
   HelpCircle, Sparkles, Volume2, VolumeX, LogOut, MessageSquare, 
   Share2, Shield, Eye, Award, Clock, ArrowRight, ArrowLeft, UserCheck, 
-  School, Radio, Laptop, GraduationCap, Monitor
+  School, Radio, Laptop, GraduationCap, Monitor, ChevronLeft, ChevronRight,
+  FileText, Send, X
 } from 'lucide-react';
 import { 
   GDSession, Student, TranscriptEntry, PresentationPhase, 
@@ -56,43 +57,39 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   currentUser,
   onBackToDashboard,
 }) => {
-  // Enforce exactly 6 presentation students (Student 1 to 6)
+  // Only real enrolled students in this session (No fake AI audience)
   const presentationStudents: Student[] = useMemo(() => {
-    const raw = (session.students || []).filter((s) => !s.isEmptySeat);
-    const result: Student[] = [];
-    const collegeName = currentUser?.college || session.collegeCode || 'Engineering Institute';
-
-    for (let i = 1; i <= 6; i++) {
-      const existing = raw.find((s) => s.seatNumber === i) || raw[i - 1];
-      if (existing) {
-        result.push({
-          ...existing,
-          seatNumber: i,
-          name: existing.isUser && currentUser?.name ? currentUser.name : (existing.name || `Student Number ${i}`),
-        });
-      } else {
-        result.push({
-          id: `stu-pres-${i}`,
-          name: `Student Number ${i}`,
-          seatNumber: i,
-          college: collegeName,
-          course: 'Engineering',
-          batch: '2024-2028',
-          avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=student-${i}`,
-          isUser: currentUser?.role === 'student' && i === 1,
-          micActive: false,
-          isSpeaking: false,
-          hasRaisedHand: false,
-          speakingDurationSeconds: 0,
-          speakingTurns: 0,
-          interruptionCount: 0,
-          questionsAnswered: 0,
-          questionsInitiated: 0,
-          sentiment: 'neutral',
-        });
-      }
+    const raw = (session.students || []).filter((s) => !s.isEmptySeat && !s.id?.startsWith('ai-') && !s.id?.startsWith('stu-pres-'));
+    if (raw.length > 0) {
+      return raw.map((s, idx) => ({
+        ...s,
+        seatNumber: s.seatNumber || (idx + 1),
+        name: s.isUser && currentUser?.name ? currentUser.name : (s.name || `Student ${idx + 1}`),
+      }));
     }
-    return result;
+    // Default to the logged-in student user as the sole presenter
+    const collegeName = currentUser?.college || session.collegeCode || 'BMSIT';
+    return [
+      {
+        id: currentUser?.id || 'stu-presenter-1',
+        name: currentUser?.name || 'Vikram',
+        seatNumber: 1,
+        college: collegeName,
+        course: 'Computer Science & Engineering',
+        batch: '2024-2028',
+        avatar: currentUser?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=presenter`,
+        isUser: true,
+        micActive: false,
+        isSpeaking: false,
+        hasRaisedHand: false,
+        speakingDurationSeconds: 0,
+        speakingTurns: 0,
+        interruptionCount: 0,
+        questionsAnswered: 0,
+        questionsInitiated: 0,
+        sentiment: 'neutral',
+      },
+    ];
   }, [session.students, currentUser, session.collegeCode]);
 
   // Per-student individual assigned topics
@@ -101,13 +98,13 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
       if (session.presentationTopics && session.presentationTopics[idx]) {
         return session.presentationTopics[idx];
       }
-      return DEFAULT_PRESENTATION_TOPICS[idx] || `Research & Applications in ${session.topic || 'Engineering'}`;
+      return DEFAULT_PRESENTATION_TOPICS[idx] || session.topic || `Research & Applications in Engineering`;
     });
   }, [presentationStudents, session.presentationTopics, session.topic]);
 
   // Activity Execution State (Serial Flow per PDF specification)
   const [phase, setPhase] = useState<PresentationPhase>('opening');
-  const [activeStudentIndex, setActiveStudentIndex] = useState<number>(0); // 0 to 5 (Student 1 to 6)
+  const [activeStudentIndex, setActiveStudentIndex] = useState<number>(0);
   const [presenterSeconds, setPresenterSeconds] = useState<number>(0);
   const [aiSpeech, setAiSpeech] = useState<string>(PRESENTATION_OPENING_SCRIPT);
   const [aiSpeaking, setAiSpeaking] = useState<boolean>(false);
@@ -122,20 +119,169 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   const [isRoomAudioMuted, setIsRoomAudioMuted] = useState<boolean>(voiceMuted);
   const [isSharingScreen, setIsSharingScreen] = useState<boolean>(false);
 
+  // Persistent video ref for presenter webcam (eliminates 1s re-render flicker/glitch)
+  const presenterVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    if (presenterVideoRef.current && videoStream && isCameraOn) {
+      if (presenterVideoRef.current.srcObject !== videoStream) {
+        presenterVideoRef.current.srcObject = videoStream;
+        presenterVideoRef.current.play().catch(() => {});
+      }
+    }
+  }, [videoStream, isCameraOn]);
+
+  // Real Screen Sharing & Topic Slide Deck
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const screenVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [currentSlideIndex, setCurrentSlideIndex] = useState<number>(0);
+  const [slideMode, setSlideMode] = useState<'screen' | 'deck'>('deck');
+
+  // Presentation slides generated for currentTopic
+  const topicSlides = useMemo(() => {
+    const t = studentTopics[activeStudentIndex] || session.topic || 'Engineering System Architecture';
+    return [
+      {
+        num: 1,
+        title: `${t}`,
+        subtitle: 'Architecture, Foundational Principles & Core Objectives',
+        bullets: [
+          'Problem definition and the technological rationale behind this architecture',
+          'Primary functional layers and mathematical/computational foundations',
+          'Scope of research, modern industrial relevance, and project boundaries'
+        ],
+        badge: 'Slide 1 of 4 • Topic Overview'
+      },
+      {
+        num: 2,
+        title: 'Core Methodologies & Technical Mechanisms',
+        subtitle: 'Workflow Pipeline, Algorithms & Operational Protocols',
+        bullets: [
+          'End-to-end data processing lifecycle and algorithmic execution flow',
+          'Latency reduction, concurrency management, and hardware/software interfaces',
+          'Fault tolerance, reliability metrics, and performance optimizations'
+        ],
+        badge: 'Slide 2 of 4 • Mechanism Analysis'
+      },
+      {
+        num: 3,
+        title: 'Real-World Applications & Industry Impact',
+        subtitle: 'Enterprise Deployments, Case Studies & Empirical Benchmarks',
+        bullets: [
+          'Production use-cases across engineering and digital infrastructure',
+          'Empirical benchmark comparison against traditional baseline implementations',
+          'Cost efficiency, operational scaling, and environmental sustainability trade-offs'
+        ],
+        badge: 'Slide 3 of 4 • Practical Industry Impact'
+      },
+      {
+        num: 4,
+        title: 'Technical Challenges, Future Scope & Summary',
+        subtitle: 'Critical Limitations, Emerging Trends & Concluding Takeaways',
+        bullets: [
+          'Identified bottlenecks, security considerations, and open research challenges',
+          'Projected technological advancements and convergence over the next 5 years',
+          'Summary of technical recommendations and readiness for Q&A discussion'
+        ],
+        badge: 'Slide 4 of 4 • Concluding Discussion'
+      }
+    ];
+  }, [activeStudentIndex, studentTopics, session.topic]);
+
+  const handleToggleScreenShare = async () => {
+    if (isSharingScreen) {
+      if (screenStream) {
+        screenStream.getTracks().forEach((t) => t.stop());
+      }
+      setScreenStream(null);
+      setIsSharingScreen(false);
+    } else {
+      try {
+        if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+          const stream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: false,
+          });
+          setScreenStream(stream);
+          setSlideMode('screen');
+          setIsSharingScreen(true);
+
+          const track = stream.getVideoTracks()[0];
+          if (track) {
+            track.onended = () => {
+              setScreenStream(null);
+              setIsSharingScreen(false);
+            };
+          }
+        } else {
+          setSlideMode('deck');
+          setIsSharingScreen(true);
+        }
+      } catch (e) {
+        console.warn('Display media not selected, opening slide deck viewer:', e);
+        setSlideMode('deck');
+        setIsSharingScreen(true);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (screenVideoRef.current && screenStream && isSharingScreen && slideMode === 'screen') {
+      if (screenVideoRef.current.srcObject !== screenStream) {
+        screenVideoRef.current.srcObject = screenStream;
+        screenVideoRef.current.play().catch(() => {});
+      }
+    }
+  }, [screenStream, isSharingScreen, slideMode]);
+
   // Live Speech Recognition for User
   const [liveSpeech, setLiveSpeech] = useState<string>('');
   const speechRecognitionRef = useRef<any>(null);
   const hasStartedOpeningRef = useRef<boolean>(false);
+  const transcriptBottomRef = useRef<HTMLDivElement | null>(null);
 
   const isFaculty = currentUser?.role === 'faculty' || currentUser?.role === 'college_admin';
   const currentStudentNumber = activeStudentIndex + 1;
-  const currentPresenter = presentationStudents[activeStudentIndex];
+  const currentPresenter = presentationStudents[activeStudentIndex] || presentationStudents[0];
   const currentTopic = studentTopics[activeStudentIndex] || session.topic;
+
+  // Append entry to live activity transcript feed
+  const addTranscriptEntry = (speakerName: string, text: string, isFacilitator = false) => {
+    const clean = String(text || '').trim();
+    if (!clean) return;
+    const newEntry: TranscriptEntry = {
+      id: `pres-trans-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      sessionId: session.id,
+      speakerId: isFacilitator ? 'facilitator' : (currentPresenter?.id || 'presenter'),
+      speakerName,
+      seatNumber: isFacilitator ? null : (currentPresenter?.seatNumber ?? 1),
+      text: clean,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      timestampSeconds: elapsedSeconds,
+      type: isFacilitator ? 'moderation' : 'statement',
+      isFacilitator,
+      sentiment: 'neutral',
+    };
+    setTranscripts((prev) => {
+      if (prev.length > 0 && prev[prev.length - 1].text === clean && prev[prev.length - 1].isFacilitator === isFacilitator) {
+        return prev;
+      }
+      return [...prev, newEntry];
+    });
+  };
+
+  // Auto-scroll transcript feed
+  useEffect(() => {
+    if (transcriptBottomRef.current) {
+      transcriptBottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [transcripts]);
 
   // Speak script via RoomVoiceEngine with Indian English tone and robust chunking
   const speakAI = (text: string, onEnd?: () => void) => {
     const clean = String(text || '').trim();
     setAiSpeech(clean);
+    addTranscriptEntry('ERUS AI Instructor', clean, true);
     if (!clean || isRoomAudioMuted) {
       if (onEnd) setTimeout(onEnd, 1200);
       return;
@@ -265,7 +411,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
     const clarification = currentAiQuestion?.clarification || 'Thank you for your response. Clear communication of technical concepts is essential.';
     const nextNum = currentStudentNumber + 1;
 
-    if (nextNum > 6) {
+    if (nextNum > presentationStudents.length) {
       // Stage 5: Closing remarks
       setPhase('closing');
       speakAI(PRESENTATION_CLOSING_SCRIPT, () => {
@@ -289,6 +435,10 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
       if (speechRecognitionRef.current) {
         try { speechRecognitionRef.current.stop(); } catch {}
       }
+      if (liveSpeech.trim()) {
+        addTranscriptEntry(currentPresenter?.name || 'Presenter', liveSpeech.trim(), false);
+        setLiveSpeech('');
+      }
     } else {
       setIsMicOn(true);
       try { await startAudioAnalyser(); } catch {}
@@ -303,6 +453,12 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
               .map((r: any) => r[0]?.transcript)
               .join(' ');
             setLiveSpeech(transcript);
+          };
+          rec.onend = () => {
+            if (liveSpeech.trim()) {
+              addTranscriptEntry(currentPresenter?.name || 'Presenter', liveSpeech.trim(), false);
+              setLiveSpeech('');
+            }
           };
           rec.start();
           speechRecognitionRef.current = rec;
@@ -357,7 +513,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                 Classroom Presentation Mode
               </h1>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-amber-100 text-amber-800 border border-amber-300">
-                Seminar Hall (6 Students)
+                Seminar Stage
               </span>
             </div>
             <p className="text-xs text-slate-500 truncate max-w-xs sm:max-w-md">
@@ -366,14 +522,15 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
           </div>
         </div>
 
-        {/* Serial Order Stepper (Student 1 to 6) */}
+        {/* Stepper for enrolled real presenters */}
         <div className="hidden lg:flex items-center gap-1.5 bg-slate-100/90 p-1.5 rounded-2xl border border-slate-200">
-          {[1, 2, 3, 4, 5, 6].map((num) => {
+          {presentationStudents.map((stu, idx) => {
+            const num = idx + 1;
             const isCompleted = num < currentStudentNumber;
             const isCurrent = num === currentStudentNumber;
             return (
               <button
-                key={num}
+                key={stu.id}
                 type="button"
                 onClick={() => isFaculty && callStudentToPresent(num)}
                 className={`flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-semibold transition-all ${
@@ -383,7 +540,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                     ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold'
                     : 'text-slate-500 bg-white border border-slate-200 hover:bg-slate-50'
                 }`}
-                title={`Student #${num}`}
+                title={`Presenter: ${stu.name}`}
               >
                 <span>#{num}</span>
                 {isCompleted && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />}
@@ -411,12 +568,12 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
               </div>
             )
           ) : (
-            isFaculty && currentStudentNumber < 6 && (
+            isFaculty && currentStudentNumber < presentationStudents.length && (
               <button
                 onClick={() => callStudentToPresent(currentStudentNumber + 1)}
                 className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition-all cursor-pointer"
               >
-                <span>Call Next Student (#{currentStudentNumber + 1})</span>
+                <span>Next Speaker (#{currentStudentNumber + 1})</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             )
@@ -453,7 +610,6 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
         {/* STAGE & PODIUM (PRESENTER CENTERED ON LECTERN) */}
         {/* ======================================================== */}
         <section className="bg-white border border-slate-200 rounded-3xl p-4 sm:p-6 shadow-sm relative overflow-hidden">
-          {/* Subtle Stage Floor Highlight */}
           <div className="absolute top-0 inset-x-0 h-2 bg-gradient-to-r from-amber-400 via-amber-500 to-amber-400" />
           
           {/* Whiteboard / Projector Screen Behind the Podium */}
@@ -488,7 +644,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                 <span>AI Seminar Facilitator Guidance</span>
               </div>
               <p>
-                "{aiSpeech || (phase === 'presenting' ? 'Presenter is delivering the scheduled topic. Audience is taking notes.' : 'Presenting to classroom audience...')}"
+                "{aiSpeech || (phase === 'presenting' ? 'Presenter is delivering the scheduled topic.' : 'Presenting to classroom seminar hall...')}"
               </p>
             </div>
           </div>
@@ -507,22 +663,109 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                 <span>SEMINAR LECTERN • PRESENTER PODIUM</span>
               </div>
 
-              {/* Video / Screen Display Frame */}
-              <div className="w-64 h-48 sm:w-80 sm:h-56 rounded-2xl overflow-hidden border-4 border-amber-400 shadow-md relative bg-slate-900 flex items-center justify-center">
+              {/* Video / Slides Display Frame */}
+              <div className="w-72 h-52 sm:w-96 sm:h-64 rounded-2xl overflow-hidden border-4 border-amber-400 shadow-md relative bg-slate-900 flex items-center justify-center">
                 {isSharingScreen ? (
-                  <div className="w-full h-full bg-slate-950 flex flex-col items-center justify-center p-4 text-center">
-                    <Share2 className="w-12 h-12 text-amber-400 mb-2 animate-bounce" />
-                    <p className="text-sm font-bold text-white">Presentation Slides Active</p>
-                    <p className="text-xs text-slate-400">Sharing technical concepts</p>
-                  </div>
+                  slideMode === 'screen' && screenStream ? (
+                    <div className="w-full h-full bg-black relative flex items-center justify-center">
+                      <video
+                        ref={screenVideoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="w-full h-full object-contain"
+                      />
+                      <div className="absolute top-2 left-2 right-2 flex items-center justify-between z-10">
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500 text-slate-950 flex items-center gap-1 shadow-sm">
+                          <span>● Live Screen Sharing</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setSlideMode('deck')}
+                          className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white/90 text-slate-800 hover:bg-white shadow-sm cursor-pointer"
+                        >
+                          View Slide Deck
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="w-full h-full bg-white p-3 sm:p-4 flex flex-col justify-between text-left overflow-hidden">
+                      <div>
+                        <div className="flex items-center justify-between border-b border-amber-200 pb-1.5 mb-2">
+                          <span className="text-[10px] font-extrabold uppercase text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md">
+                            {topicSlides[currentSlideIndex].badge}
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={handleToggleScreenShare}
+                              className="px-1.5 py-0.5 text-[9px] font-semibold rounded bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+                              title="Share Live Window"
+                            >
+                              Share Screen
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setIsSharingScreen(false)}
+                              className="p-1 rounded hover:bg-slate-100 text-slate-500 cursor-pointer"
+                              title="Close Slides"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <h4 className="text-xs sm:text-sm font-bold text-slate-900 leading-tight">
+                          {topicSlides[currentSlideIndex].title}
+                        </h4>
+                        <p className="text-[10px] sm:text-[11px] text-amber-700 font-semibold mb-2">
+                          {topicSlides[currentSlideIndex].subtitle}
+                        </p>
+
+                        <ul className="space-y-1 sm:space-y-1.5 text-[10px] sm:text-[11px] text-slate-700">
+                          {topicSlides[currentSlideIndex].bullets.map((b, i) => (
+                            <li key={i} className="flex items-start gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mt-1 shrink-0" />
+                              <span>{b}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      {/* Slide Navigation Buttons */}
+                      <div className="pt-2 border-t border-slate-200 flex items-center justify-between">
+                        <button
+                          type="button"
+                          disabled={currentSlideIndex === 0}
+                          onClick={() => setCurrentSlideIndex((prev) => Math.max(0, prev - 1))}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-40 cursor-pointer"
+                        >
+                          <ChevronLeft className="w-3 h-3" />
+                          <span>Previous</span>
+                        </button>
+
+                        <span className="text-[10px] font-bold text-slate-600 font-mono">
+                          {currentSlideIndex + 1} / {topicSlides.length}
+                        </span>
+
+                        <button
+                          type="button"
+                          disabled={currentSlideIndex === topicSlides.length - 1}
+                          onClick={() => setCurrentSlideIndex((prev) => Math.min(topicSlides.length - 1, prev + 1))}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-500 hover:bg-amber-600 text-slate-950 disabled:opacity-40 cursor-pointer"
+                        >
+                          <span>Next</span>
+                          <ChevronRight className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  )
                 ) : isCameraOn && videoStream ? (
                   <video
+                    ref={presenterVideoRef}
                     autoPlay
                     playsInline
                     muted
-                    ref={(video) => {
-                      if (video && videoStream) video.srcObject = videoStream;
-                    }}
                     className="w-full h-full object-cover"
                   />
                 ) : (
@@ -566,7 +809,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                   )}
                 </h3>
                 <p className="text-xs text-slate-600 font-medium">
-                  Department of Computer Science & Engineering • {currentPresenter?.college || session.collegeCode || 'Engineering Institute'}
+                  Department of Computer Science & Engineering • {currentPresenter?.college || session.collegeCode || 'BMSIT'}
                 </p>
               </div>
 
@@ -626,16 +869,16 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                 {/* 3. SHARE SLIDES / SCREEN */}
                 <button
                   type="button"
-                  onClick={() => setIsSharingScreen(!isSharingScreen)}
+                  onClick={handleToggleScreenShare}
                   className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer shadow-2xs border ${
                     isSharingScreen
-                      ? 'bg-amber-600 hover:bg-amber-700 text-white border-amber-500'
-                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
+                      ? 'bg-amber-600 hover:bg-amber-700 text-white border-amber-500 shadow-sm'
+                      : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300'
                   }`}
-                  title={isSharingScreen ? 'Stop Sharing Slides' : 'Share Presentation Slides'}
+                  title={isSharingScreen ? 'Close Slides' : 'Share Presentation Slides'}
                 >
                   <Share2 className="w-4 h-4 text-amber-700" />
-                  <span>{isSharingScreen ? 'Stop Slides' : 'Share Slides'}</span>
+                  <span>{isSharingScreen ? 'Hide Slides' : 'Share Slides'}</span>
                 </button>
               </div>
 
@@ -659,7 +902,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                     className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white shadow-md hover:scale-105 active:scale-95 transition-all cursor-pointer"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>Proceed to Next Student (#{currentStudentNumber < 6 ? currentStudentNumber + 1 : 'Finish'})</span>
+                    <span>Proceed to Next Presenter (#{currentStudentNumber < presentationStudents.length ? currentStudentNumber + 1 : 'Finish'})</span>
                   </button>
                 )}
               </div>
@@ -669,124 +912,118 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
         </section>
 
         {/* ======================================================== */}
-        {/* CLASSROOM AUDIENCE (STUDENTS SEATED AT DESKS FACING PRESENTER) */}
+        {/* LIVE ACTIVITY TRANSCRIPT & FACULTY OBSERVATION (LIGHT THEME) */}
+        {/* (All AI Audience Desks Removed as Requested) */}
         {/* ======================================================== */}
-        <section className="bg-white border border-slate-200 rounded-3xl p-4 sm:p-6 shadow-sm">
-          <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-3 mb-4 flex-wrap">
+        <section className="bg-white border border-slate-200 rounded-3xl p-4 sm:p-6 shadow-sm flex flex-col gap-4">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-3 flex-wrap">
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center text-amber-700">
-                <School className="w-4 h-4" />
+              <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-700">
+                <MessageSquare className="w-4 h-4" />
               </div>
               <div>
                 <h3 className="text-sm font-bold text-slate-900">
-                  Classroom Audience Desks
+                  Live Presentation Activity Transcript
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Participating students seated in audience rows facing the lectern and presenter
+                  Synchronous speech log of the presenter delivery, peer dialogue, and AI Facilitator arbitration
                 </p>
               </div>
             </div>
 
-            <span className="text-xs font-mono font-semibold text-slate-600 bg-slate-100 px-3 py-1 rounded-full border border-slate-200">
-              5 Peers in Audience
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono font-semibold text-slate-600 bg-slate-100 px-3 py-1 rounded-full border border-slate-200">
+                {transcripts.length} Entries
+              </span>
+            </div>
           </div>
 
-          {/* Desks Grid: 5 Other Students Sitting at Desks Facing Stage */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-            {presentationStudents
-              .filter((s) => s.seatNumber !== currentStudentNumber)
-              .map((student) => {
-                const sNum = student.seatNumber;
-                const isInvitedForQA = phase === 'peer_qa' && (currentStudentNumber < 6 ? sNum === currentStudentNumber + 1 : sNum === 1);
-                const hasAlreadyPresented = sNum < currentStudentNumber;
-
-                return (
-                  <div
-                    key={student.id}
-                    onClick={() => isFaculty && callStudentToPresent(sNum)}
-                    className={`bg-white border rounded-2xl shadow-xs overflow-hidden transition-all flex flex-col justify-between cursor-pointer hover:shadow-md ${
-                      isInvitedForQA
-                        ? 'border-amber-400 ring-2 ring-amber-400/40'
-                        : 'border-slate-200 hover:border-amber-300'
-                    }`}
-                    title={isFaculty ? `Click to call Student #${sNum} to the lectern` : student.name}
-                  >
-                    {/* Desk Top Rim (Wooden classroom desk surface) */}
-                    <div className="bg-gradient-to-r from-amber-100 via-amber-200/80 to-amber-100 border-b border-amber-300/80 px-3 py-1.5 flex items-center justify-between text-[11px] font-bold text-amber-900">
-                      <span className="flex items-center gap-1">
-                        <Laptop className="w-3.5 h-3.5 text-amber-800" />
-                        <span>Desk #{sNum}</span>
-                      </span>
-                      {isInvitedForQA ? (
-                        <span className="text-[10px] text-amber-800 bg-amber-300/80 px-1.5 py-0.5 rounded-md font-extrabold animate-pulse">
-                          Q&A Floor
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-slate-600 font-mono">
-                          Facing Stage
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Desk Seated Student */}
-                    <div className="p-3 flex flex-col items-center text-center">
-                      <div className="relative">
-                        <img
-                          src={student.avatar}
-                          alt={student.name}
-                          className="w-14 h-14 rounded-2xl bg-slate-100 object-cover border-2 border-slate-200 shadow-2xs"
-                        />
-                        {isInvitedForQA && (
-                          <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-500 border-2 border-white flex items-center justify-center text-[10px] text-white font-bold animate-bounce">
-                            !
-                          </span>
-                        )}
-                      </div>
-
-                      <h4 className="mt-2 text-xs font-bold text-slate-800 truncate max-w-[120px]">
-                        {student.name}
-                        {student.isUser && ' (You)'}
-                      </h4>
-                      <p className="text-[10px] text-slate-500 truncate max-w-[120px]">
-                        {student.course} • Batch {student.batch || '2024'}
-                      </p>
-
-                      {/* Status Tag */}
-                      <div className="mt-2.5">
-                        {isInvitedForQA ? (
-                          <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1 animate-pulse">
-                            <span>🙋 Asking Question</span>
-                          </span>
-                        ) : hasAlreadyPresented ? (
-                          <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3" />
-                            <span>Speech Finished</span>
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-full text-[9px] font-medium bg-slate-100 text-slate-600 border border-slate-200">
-                            Attending Audience
-                          </span>
-                        )}
-                      </div>
-                    </div>
+          {/* Transcript Scroll Area */}
+          <div className="h-64 sm:h-80 overflow-y-auto space-y-3 pr-2 scrollbar-thin scrollbar-thumb-slate-300">
+            {transcripts.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400">
+                <MessageSquare className="w-8 h-8 mb-2 opacity-40 text-slate-400" />
+                <p className="text-xs font-medium text-slate-500">
+                  Activity speech and instructor prompts will stream live in this transcript feed.
+                </p>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Click "Start Presentation" or speak through your microphone to see live transcript logs.
+                </p>
+              </div>
+            ) : (
+              transcripts.map((entry) => (
+                <div
+                  key={entry.id}
+                  className={`flex gap-3 p-3 rounded-2xl border transition-all ${
+                    entry.isFacilitator
+                      ? 'bg-amber-50/70 border-amber-200'
+                      : 'bg-slate-50 border-slate-200'
+                  }`}
+                >
+                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-xs font-bold ${
+                    entry.isFacilitator
+                      ? 'bg-amber-200/80 text-amber-900 border border-amber-300'
+                      : 'bg-indigo-100 text-indigo-700 border border-indigo-200'
+                  }`}>
+                    {entry.isFacilitator ? <Sparkles className="w-4 h-4" /> : entry.speakerName.charAt(0)}
                   </div>
-                );
-              })}
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-slate-900">
+                          {entry.speakerName}
+                        </span>
+                        {entry.isFacilitator && (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-amber-200/60 text-amber-900 border border-amber-300">
+                            AI Instructor
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400">
+                        {entry.timestamp}
+                      </span>
+                    </div>
+
+                    <p className="text-xs sm:text-sm text-slate-800 leading-relaxed break-words">
+                      {entry.text}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
+            
+            {/* Live Typing / Speech Preview when mic is active */}
+            {isMicOn && liveSpeech && (
+              <div className="flex gap-3 p-3 rounded-2xl bg-emerald-50 border border-emerald-200 animate-pulse">
+                <div className="w-8 h-8 rounded-xl bg-emerald-200 text-emerald-800 flex items-center justify-center shrink-0">
+                  <Mic className="w-4 h-4" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="text-[10px] font-bold uppercase text-emerald-800">
+                    {currentPresenter?.name || 'Presenter'} (Speaking live...)
+                  </span>
+                  <p className="text-xs text-slate-700 italic">
+                    "{liveSpeech}"
+                  </p>
+                </div>
+              </div>
+            )}
+            <div ref={transcriptBottomRef} />
           </div>
 
-          {/* Faculty Evaluator Observer Desk */}
-          <div className="mt-4 bg-amber-50/60 border border-amber-200 rounded-2xl p-3 flex items-center justify-between gap-3 flex-wrap">
+          {/* Faculty Evaluator Observer Card */}
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-amber-200/80 text-amber-900 flex items-center justify-center">
+              <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center">
                 <GraduationCap className="w-4 h-4" />
               </div>
               <div>
                 <p className="text-xs font-bold text-slate-900">
-                  Faculty Evaluator Desk: {session.assignedFacultyName || 'Assigned Faculty Evaluator'}
+                  Faculty Evaluation Panel: {session.assignedFacultyName || 'Assigned Faculty Evaluator'}
                 </p>
-                <p className="text-[11px] text-slate-600">
-                  Monitoring technical delivery, presentation composure, and Q&A responsiveness
+                <p className="text-[11px] text-slate-500">
+                  Assessing topic depth, delivery fluency, and technical Q&A across the official 100-mark rubric
                 </p>
               </div>
             </div>
@@ -794,7 +1031,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
             <div className="flex items-center gap-2">
               <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-ping inline-block" />
-                <span>Live Observation Active</span>
+                <span>Live Assessment Active</span>
               </span>
             </div>
           </div>
