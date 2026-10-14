@@ -144,6 +144,23 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
     }, true);
   };
 
+  // Stage 2: Call specific student in serial order (Student 1 to 6)
+  const callStudentToPresent = (studentNum: number) => {
+    const idx = studentNum - 1;
+    setActiveStudentIndex(idx);
+    setPresenterSeconds(0);
+    setPhase('presenting');
+    setIsPeerQASilenceTriggered(false);
+    setCurrentAiQuestion(null);
+    setPeerQAQuestion('');
+
+    const targetStudent = presentationStudents[idx];
+    const targetTopic = studentTopics[idx];
+    const script = getSerialCallScript(studentNum, targetStudent?.name, targetTopic);
+
+    speakAI(script);
+  };
+
   const handleFacultyStartPresentation = () => {
     setSession((prev) => ({
       ...prev,
@@ -166,23 +183,6 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
     }
   }, [session.status]);
 
-  // Stage 2: Call specific student in serial order (Student 1 to 6)
-  const callStudentToPresent = (studentNum: number) => {
-    const idx = studentNum - 1;
-    setActiveStudentIndex(idx);
-    setPresenterSeconds(0);
-    setPhase('presenting');
-    setIsPeerQASilenceTriggered(false);
-    setCurrentAiQuestion(null);
-    setPeerQAQuestion('');
-
-    const targetStudent = presentationStudents[idx];
-    const targetTopic = studentTopics[idx];
-    const script = getSerialCallScript(studentNum, targetStudent?.name, targetTopic);
-
-    speakAI(script);
-  };
-
   // Presenter Speaking Timer (tracks 6 to 8 minutes)
   useEffect(() => {
     if (phase !== 'presenting' || session.status !== 'active') return;
@@ -204,6 +204,17 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
     speakAI(qaScript);
   };
 
+  const triggerAIFallbackQuestion = () => {
+    setIsPeerQASilenceTriggered(true);
+    setPhase('ai_qa');
+
+    const aiQ = generateAIQuestionForTopic(currentTopic);
+    setCurrentAiQuestion(aiQ);
+
+    const fullSilenceScript = `${PEER_QA_SILENCE_SCRIPT}\n\nMy question is: ${aiQ.question}\n\nStudent who presented the topic, please answer the question in your own words.`;
+    speakAI(fullSilenceScript);
+  };
+
   // Q&A Silence Watchdog (If no peer asks after 15 seconds, AI steps in per PDF Page 3)
   useEffect(() => {
     if (phase !== 'peer_qa' || session.status !== 'active' || isPeerQASilenceTriggered) return;
@@ -218,38 +229,6 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
     }, 1000);
     return () => clearInterval(timer);
   }, [phase, session.status, isPeerQASilenceTriggered]);
-
-  const triggerAIFallbackQuestion = () => {
-    setIsPeerQASilenceTriggered(true);
-    setPhase('ai_qa');
-
-    const aiQ = generateAIQuestionForTopic(currentTopic);
-    setCurrentAiQuestion(aiQ);
-
-    const fullSilenceScript = `${PEER_QA_SILENCE_SCRIPT}\n\nMy question is: ${aiQ.question}\n\nStudent who presented the topic, please answer the question in your own words.`;
-    speakAI(fullSilenceScript);
-  };
-
-  // Answer Q&A and Transition to Next Student (Stage 4)
-  const handleAcknowledgeAnswerAndProceed = () => {
-    const clarification = currentAiQuestion?.clarification || 'Thank you for your response. Clear communication of technical concepts is essential.';
-    const nextNum = currentStudentNumber + 1;
-
-    if (nextNum > 6) {
-      // Stage 5: Closing remarks
-      setPhase('closing');
-      speakAI(PRESENTATION_CLOSING_SCRIPT, () => {
-        setPhase('completed');
-        handleFinalizeAllPresentations();
-      });
-    } else {
-      setPhase('transition');
-      const transScript = `${clarification}\n\n${getTransitionScript(currentStudentNumber, nextNum)}`;
-      speakAI(transScript, () => {
-        callStudentToPresent(nextNum);
-      });
-    }
-  };
 
   // Finalize Activity & Generate Presentation Reports
   const handleFinalizeAllPresentations = () => {
@@ -272,6 +251,27 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
 
     console.log('[Classroom Presentation] Finalized reports for 6 students:', finalReports);
     onFinishSession();
+  };
+
+  // Answer Q&A and Transition to Next Student (Stage 4)
+  const handleAcknowledgeAnswerAndProceed = () => {
+    const clarification = currentAiQuestion?.clarification || 'Thank you for your response. Clear communication of technical concepts is essential.';
+    const nextNum = currentStudentNumber + 1;
+
+    if (nextNum > 6) {
+      // Stage 5: Closing remarks
+      setPhase('closing');
+      speakAI(PRESENTATION_CLOSING_SCRIPT, () => {
+        setPhase('completed');
+        handleFinalizeAllPresentations();
+      });
+    } else {
+      setPhase('transition');
+      const transScript = `${clarification}\n\n${getTransitionScript(currentStudentNumber, nextNum)}`;
+      speakAI(transScript, () => {
+        callStudentToPresent(nextNum);
+      });
+    }
   };
 
   // Web Speech recognition toggle for active student

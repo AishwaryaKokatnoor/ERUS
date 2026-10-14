@@ -2363,163 +2363,48 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // Implementing the official 7-Page Presentation Activity Script verbatim
   // ============================================================================
 
-  // 1. Seminar Opening
-  const handleStartClassroomOpening = useCallback(() => {
-    roomVoice.unlock();
-    setClassroomPhase('opening');
-    setClassroomCurrentQuestion('');
-    setClassroomCurrentAnswer('');
-    setClassroomCurrentTakeaway('');
-    setPresentationSeconds(0);
-    setCurrentPresenterIndex(0);
+  // Ref trampolines to prevent Temporal Dead Zone (TDZ) and circular callback dependencies
+  const handleStartClassroomOpeningRef = useRef<() => void>(() => {});
+  const handleClassroomCallPresenterRef = useRef<(index: number) => void>(() => {});
+  const handleClassroomStartPresentingRef = useRef<(index: number) => void>(() => {});
+  const handleClassroomInitiatePeerQARef = useRef<(presenterIndex: number) => void>(() => {});
+  const handleClassroomTriggerSilenceWatchdogRef = useRef<(presenterIndex: number) => void>(() => {});
+  const handleClassroomTakeawayAndTransitionRef = useRef<(presenterIndex: number) => void>(() => {});
+  const handleClassroomDeliverClosingRef = useRef<() => void>(() => {});
 
-    setSession((prev) => ({
-      ...prev,
-      status: 'active',
-      startedAt: prev.startedAt || Date.now(),
-    }));
-
-    const firstStudent = activeDisplayStudents[0] || session.students[0];
-    const firstStudentName = firstStudent?.name || 'Student Number 1';
-    const firstAssigned = classroomAssignedTopics[0];
-    const firstTopicTitle = firstAssigned?.subTopicTitle || session.topic || 'Engineering and Applied Systems';
-
-    const openingScript = `Good morning everyone! Welcome to today's classroom presentation activity on "${session.topic || 'the assigned topic'}". Each student will present their assigned topic in sequence. Let us begin with our first presenter: Student Number 1, ${firstStudentName}, please come forward to the stage and begin your presentation on "${firstTopicTitle}". All the best!`;
-
-    speakFacilitator(openingScript, 'classroom_opening', 'intro', () => {
-      handleClassroomCallPresenter(0);
+  // 8. Closing Remarks (Page 5: 5 Lessons & 3 Reflections)
+  const handleClassroomDeliverClosing = useCallback(() => {
+    setClassroomPhase('closing');
+    speakFacilitator(CLASSROOM_INSTRUCTOR_SCRIPTS.CLOSING, 'classroom_closing', 'conclusion', () => {
+      setClassroomPhase('completed');
     });
-  }, [session.topic, activeDisplayStudents, session.students, classroomAssignedTopics, speakFacilitator, setSession]);
+  }, [speakFacilitator]);
+  handleClassroomDeliverClosingRef.current = handleClassroomDeliverClosing;
 
-  // 2. Calling Students in Serial Order (1 to 6)
-  const handleClassroomCallPresenter = useCallback((index: number) => {
-    const totalStudents = Math.min(6, activeDisplayStudents.length);
-    if (index >= totalStudents) {
-      handleClassroomDeliverClosing();
-      return;
-    }
-    setCurrentPresenterIndex(index);
-    setClassroomPhase('calling_presenter');
-    setPresentationSeconds(0);
-    setClassroomCurrentQuestion('');
-    setClassroomCurrentAnswer('');
-    setClassroomCurrentTakeaway('');
-    setInvitedPeerStudentId(null);
+  // 7. Takeaway Feedback and Transition (Page 4)
+  const handleClassroomTakeawayAndTransition = useCallback((presenterIndex: number) => {
+    setClassroomPhase('takeaway_feedback');
+    const assigned = classroomAssignedTopics[presenterIndex] || classroomAssignedTopics[0];
+    setClassroomCurrentTakeaway(assigned.keyTakeaway);
 
-    const targetStudent = activeDisplayStudents[index] || session.students[index] || activeDisplayStudents[0];
-    const targetName = targetStudent?.name || `Student Number ${index + 1}`;
-    const assigned = classroomAssignedTopics[index] || classroomAssignedTopics[0];
-    const targetTopic = assigned?.subTopicTitle || `Topic ${index + 1}`;
-
-    const callScript = index === 0
-      ? `Student Number 1, ${targetName}, please take the stage and begin your presentation on "${targetTopic}". You have the floor!`
-      : `Thank you! Now, I invite our next presenter, Student Number ${index + 1}, ${targetName}, to take the stage and present "${targetTopic}". Please begin!`;
-
-    speakFacilitator(callScript, 'classroom_call_presenter', 'discussion', () => {
-      handleClassroomStartPresenting(index);
-    });
-  }, [activeDisplayStudents, session.students, classroomAssignedTopics, handleClassroomDeliverClosing, speakFacilitator]);
-
-  // 3. Presentation Delivery at Podium
-  const handleClassroomStartPresenting = useCallback((index: number) => {
-    setClassroomPhase('presenting');
-    setPresentationSeconds(0);
-    const presenter = activeDisplayStudents[index] || session.students[index] || activeDisplayStudents[0] || session.students[0];
-    const assigned = classroomAssignedTopics[index] || classroomAssignedTopics[0];
-
-    setSession((prev) => ({
-      ...prev,
-      currentSpeakerId: presenter.id,
-      students: prev.students.map((s) => ({
-        ...s,
-        isSpeaking: s.id === presenter.id,
-      })),
-    }));
-
-    if (!presenter.isUser) {
-      const speechText = generateClassroomStudentPresentation(presenter, session.topic, assigned);
-      const mins = Math.floor(elapsedSeconds / 60).toString().padStart(2, '0');
-      const secs = (elapsedSeconds % 60).toString().padStart(2, '0');
-      const pEntry: TranscriptEntry = {
-        id: `t-pres-${Date.now()}`,
-        sessionId: session.id,
-        speakerId: presenter.id,
-        speakerName: presenter.name,
-        seatNumber: presenter.seatNumber,
-        isFacilitator: false,
-        timestamp: `${mins}:${secs}`,
-        timestampSeconds: elapsedSeconds,
-        text: speechText,
-        type: 'statement',
-        sentiment: 'positive',
-      };
-      setTranscripts((prev) => [...prev, pEntry]);
-
-      roomVoice.speakAsStudent(presenter, speechText, () => {
-        setSession((prev) => ({
-          ...prev,
-          currentSpeakerId: null,
-          students: prev.students.map((s) =>
-            s.id === presenter.id
-              ? { ...s, isSpeaking: false, speakingTurns: (s.speakingTurns || 0) + 1, speakingDurationSeconds: (s.speakingDurationSeconds || 0) + 40 }
-              : s
-          ),
-        }));
+    const speech = `${CLASSROOM_INSTRUCTOR_SCRIPTS.TAKEAWAY_FEEDBACK(assigned.keyTakeaway)} ${CLASSROOM_INSTRUCTOR_SCRIPTS.TRANSITION}`;
+    speakFacilitator(speech, 'classroom_transition', 'discussion', () => {
+      if (presenterIndex < 5) {
         if (isClassroomAutoRunning) {
           setTimeout(() => {
-            handleClassroomInitiatePeerQA(index);
+            handleClassroomCallPresenterRef.current(presenterIndex + 1);
           }, 1500);
         }
-      });
-    } else {
-      // User is presenting at the podium
-      setInvitedStudentPrompt({
-        student: presenter,
-        reason: `You are at the podium! Deliver your presentation on "${assigned.subTopicTitle}". Click 'Conclude Presentation' when ready for Q&A.`,
-        promptText: `Assigned Sub-Topic: ${assigned.subTopicTitle}\nFocus Area: ${assigned.focusArea}\nRecommended: 6–8 minutes`,
-      });
-    }
-  }, [activeDisplayStudents, session.students, session.topic, classroomAssignedTopics, elapsedSeconds, isClassroomAutoRunning]);
-
-  // User concludes their presentation
-  const handleClassroomConcludeUserSpeech = useCallback(() => {
-    setInvitedStudentPrompt(null);
-    setSession((prev) => ({
-      ...prev,
-      currentSpeakerId: null,
-      students: prev.students.map((s) => ({ ...s, isSpeaking: false })),
-    }));
-    handleClassroomInitiatePeerQA(currentPresenterIndex);
-  }, [currentPresenterIndex]);
-
-  // 4. Initiate Peer Questioning (Page 3)
-  const handleClassroomInitiatePeerQA = useCallback((presenterIndex: number) => {
-    setClassroomPhase('peer_qa_invite');
-    setClassroomWatchdogCountdown(8);
-
-    const candidatePeers = session.students.filter((_, idx) => idx !== presenterIndex);
-    const peerCandidate = candidatePeers[presenterIndex % candidatePeers.length] || candidatePeers[0] || session.students[1];
-    setInvitedPeerStudentId(peerCandidate.id);
-
-    const peerNum = peerCandidate.seatNumber || (session.students.indexOf(peerCandidate) + 1);
-    const inviteScript = CLASSROOM_INSTRUCTOR_SCRIPTS.PEER_QUESTION_INVITE(peerNum);
-
-    speakFacilitator(inviteScript, 'classroom_qa_invite', 'probing', () => {
-      setClassroomPhase('peer_qa_active');
-      setClassroomWatchdogCountdown(8);
-
-      if (classroomWatchdogTimerRef.current) clearInterval(classroomWatchdogTimerRef.current);
-      let timeLeft = 8;
-      classroomWatchdogTimerRef.current = setInterval(() => {
-        timeLeft -= 1;
-        setClassroomWatchdogCountdown(timeLeft);
-        if (timeLeft <= 0) {
-          if (classroomWatchdogTimerRef.current) clearInterval(classroomWatchdogTimerRef.current);
-          handleClassroomTriggerSilenceWatchdog(presenterIndex);
+      } else {
+        if (isClassroomAutoRunning) {
+          setTimeout(() => {
+            handleClassroomDeliverClosingRef.current();
+          }, 1500);
         }
-      }, 1000);
+      }
     });
-  }, [session.students]);
+  }, [classroomAssignedTopics, isClassroomAutoRunning, speakFacilitator]);
+  handleClassroomTakeawayAndTransitionRef.current = handleClassroomTakeawayAndTransition;
 
   // 5. Silence Watchdog (AI Instructor asks topic-specific question - Pages 3 & 4)
   const handleClassroomTriggerSilenceWatchdog = useCallback((presenterIndex: number) => {
@@ -2570,7 +2455,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
           if (isClassroomAutoRunning) {
             setTimeout(() => {
-              handleClassroomTakeawayAndTransition(presenterIndex);
+              handleClassroomTakeawayAndTransitionRef.current(presenterIndex);
             }, 1200);
           }
         });
@@ -2582,7 +2467,49 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         });
       }
     });
-  }, [activeDisplayStudents, session.students, classroomAssignedTopics, elapsedSeconds, isClassroomAutoRunning]);
+  }, [activeDisplayStudents, session.students, classroomAssignedTopics, elapsedSeconds, isClassroomAutoRunning, speakFacilitator, setSession, setTranscripts]);
+  handleClassroomTriggerSilenceWatchdogRef.current = handleClassroomTriggerSilenceWatchdog;
+
+  // 4. Initiate Peer Questioning (Page 3)
+  const handleClassroomInitiatePeerQA = useCallback((presenterIndex: number) => {
+    setClassroomPhase('peer_qa_invite');
+    setClassroomWatchdogCountdown(8);
+
+    const candidatePeers = session.students.filter((_, idx) => idx !== presenterIndex);
+    const peerCandidate = candidatePeers[presenterIndex % candidatePeers.length] || candidatePeers[0] || session.students[1];
+    setInvitedPeerStudentId(peerCandidate.id);
+
+    const peerNum = peerCandidate.seatNumber || (session.students.indexOf(peerCandidate) + 1);
+    const inviteScript = CLASSROOM_INSTRUCTOR_SCRIPTS.PEER_QUESTION_INVITE(peerNum);
+
+    speakFacilitator(inviteScript, 'classroom_qa_invite', 'probing', () => {
+      setClassroomPhase('peer_qa_active');
+      setClassroomWatchdogCountdown(8);
+
+      if (classroomWatchdogTimerRef.current) clearInterval(classroomWatchdogTimerRef.current);
+      let timeLeft = 8;
+      classroomWatchdogTimerRef.current = setInterval(() => {
+        timeLeft -= 1;
+        setClassroomWatchdogCountdown(timeLeft);
+        if (timeLeft <= 0) {
+          if (classroomWatchdogTimerRef.current) clearInterval(classroomWatchdogTimerRef.current);
+          handleClassroomTriggerSilenceWatchdogRef.current(presenterIndex);
+        }
+      }, 1000);
+    });
+  }, [session.students, speakFacilitator]);
+  handleClassroomInitiatePeerQARef.current = handleClassroomInitiatePeerQA;
+
+  // User concludes their presentation
+  const handleClassroomConcludeUserSpeech = useCallback(() => {
+    setInvitedStudentPrompt(null);
+    setSession((prev) => ({
+      ...prev,
+      currentSpeakerId: null,
+      students: prev.students.map((s) => ({ ...s, isSpeaking: false })),
+    }));
+    handleClassroomInitiatePeerQARef.current(currentPresenterIndex);
+  }, [currentPresenterIndex, setSession]);
 
   // 6. Peer Student Asks Question (Pages 3 & 4)
   const handleClassroomPeerAsksQuestion = useCallback((presenterIndex: number, peerStudentId?: string, customQuestion?: string) => {
@@ -2638,7 +2565,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               speakFacilitator(CLASSROOM_INSTRUCTOR_SCRIPTS.AFTER_PEER_ANSWER, 'classroom_after_peer', 'probing', () => {
                 if (isClassroomAutoRunning) {
                   setTimeout(() => {
-                    handleClassroomTakeawayAndTransition(presenterIndex);
+                    handleClassroomTakeawayAndTransitionRef.current(presenterIndex);
                   }, 1200);
                 }
               });
@@ -2653,39 +2580,128 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         });
       });
     });
-  }, [activeDisplayStudents, session.students, invitedPeerStudentId, classroomAssignedTopics, elapsedSeconds, isClassroomAutoRunning]);
+  }, [activeDisplayStudents, session.students, invitedPeerStudentId, classroomAssignedTopics, elapsedSeconds, isClassroomAutoRunning, speakFacilitator, setTranscripts]);
 
-  // 7. Takeaway Feedback and Transition (Page 4)
-  const handleClassroomTakeawayAndTransition = useCallback((presenterIndex: number) => {
-    setClassroomPhase('takeaway_feedback');
-    const assigned = classroomAssignedTopics[presenterIndex] || classroomAssignedTopics[0];
-    setClassroomCurrentTakeaway(assigned.keyTakeaway);
+  // 3. Presentation Delivery at Podium
+  const handleClassroomStartPresenting = useCallback((index: number) => {
+    setClassroomPhase('presenting');
+    setPresentationSeconds(0);
+    const presenter = activeDisplayStudents[index] || session.students[index] || activeDisplayStudents[0] || session.students[0];
+    const assigned = classroomAssignedTopics[index] || classroomAssignedTopics[0];
 
-    const speech = `${CLASSROOM_INSTRUCTOR_SCRIPTS.TAKEAWAY_FEEDBACK(assigned.keyTakeaway)} ${CLASSROOM_INSTRUCTOR_SCRIPTS.TRANSITION}`;
-    speakFacilitator(speech, 'classroom_transition', 'discussion', () => {
-      if (presenterIndex < 5) {
+    setSession((prev) => ({
+      ...prev,
+      currentSpeakerId: presenter.id,
+      students: prev.students.map((s) => ({
+        ...s,
+        isSpeaking: s.id === presenter.id,
+      })),
+    }));
+
+    if (!presenter.isUser) {
+      const speechText = generateClassroomStudentPresentation(presenter, session.topic, assigned);
+      const mins = Math.floor(elapsedSeconds / 60).toString().padStart(2, '0');
+      const secs = (elapsedSeconds % 60).toString().padStart(2, '0');
+      const pEntry: TranscriptEntry = {
+        id: `t-pres-${Date.now()}`,
+        sessionId: session.id,
+        speakerId: presenter.id,
+        speakerName: presenter.name,
+        seatNumber: presenter.seatNumber,
+        isFacilitator: false,
+        timestamp: `${mins}:${secs}`,
+        timestampSeconds: elapsedSeconds,
+        text: speechText,
+        type: 'statement',
+        sentiment: 'positive',
+      };
+      setTranscripts((prev) => [...prev, pEntry]);
+
+      roomVoice.speakAsStudent(presenter, speechText, () => {
+        setSession((prev) => ({
+          ...prev,
+          currentSpeakerId: null,
+          students: prev.students.map((s) =>
+            s.id === presenter.id
+              ? { ...s, isSpeaking: false, speakingTurns: (s.speakingTurns || 0) + 1, speakingDurationSeconds: (s.speakingDurationSeconds || 0) + 40 }
+              : s
+          ),
+        }));
         if (isClassroomAutoRunning) {
           setTimeout(() => {
-            handleClassroomCallPresenter(presenterIndex + 1);
+            handleClassroomInitiatePeerQARef.current(index);
           }, 1500);
         }
-      } else {
-        if (isClassroomAutoRunning) {
-          setTimeout(() => {
-            handleClassroomDeliverClosing();
-          }, 1500);
-        }
-      }
-    });
-  }, [classroomAssignedTopics, isClassroomAutoRunning]);
+      });
+    } else {
+      // User is presenting at the podium
+      setInvitedStudentPrompt({
+        student: presenter,
+        reason: `You are at the podium! Deliver your presentation on "${assigned.subTopicTitle}". Click 'Conclude Presentation' when ready for Q&A.`,
+        promptText: `Assigned Sub-Topic: ${assigned.subTopicTitle}\nFocus Area: ${assigned.focusArea}\nRecommended: 6–8 minutes`,
+      });
+    }
+  }, [activeDisplayStudents, session.students, session.topic, classroomAssignedTopics, elapsedSeconds, isClassroomAutoRunning, setSession, setTranscripts]);
+  handleClassroomStartPresentingRef.current = handleClassroomStartPresenting;
 
-  // 8. Closing Remarks (Page 5: 5 Lessons & 3 Reflections)
-  const handleClassroomDeliverClosing = useCallback(() => {
-    setClassroomPhase('closing');
-    speakFacilitator(CLASSROOM_INSTRUCTOR_SCRIPTS.CLOSING, 'classroom_closing', 'conclusion', () => {
-      setClassroomPhase('completed');
+  // 2. Calling Students in Serial Order (1 to 6)
+  const handleClassroomCallPresenter = useCallback((index: number) => {
+    const totalStudents = Math.min(6, activeDisplayStudents.length);
+    if (index >= totalStudents) {
+      handleClassroomDeliverClosingRef.current();
+      return;
+    }
+    setCurrentPresenterIndex(index);
+    setClassroomPhase('calling_presenter');
+    setPresentationSeconds(0);
+    setClassroomCurrentQuestion('');
+    setClassroomCurrentAnswer('');
+    setClassroomCurrentTakeaway('');
+    setInvitedPeerStudentId(null);
+
+    const targetStudent = activeDisplayStudents[index] || session.students[index] || activeDisplayStudents[0];
+    const targetName = targetStudent?.name || `Student Number ${index + 1}`;
+    const assigned = classroomAssignedTopics[index] || classroomAssignedTopics[0];
+    const targetTopic = assigned?.subTopicTitle || `Topic ${index + 1}`;
+
+    const callScript = index === 0
+      ? `Student Number 1, ${targetName}, please take the stage and begin your presentation on "${targetTopic}". You have the floor!`
+      : `Thank you! Now, I invite our next presenter, Student Number ${index + 1}, ${targetName}, to take the stage and present "${targetTopic}". Please begin!`;
+
+    speakFacilitator(callScript, 'classroom_call_presenter', 'discussion', () => {
+      handleClassroomStartPresentingRef.current(index);
     });
-  }, []);
+  }, [activeDisplayStudents, session.students, classroomAssignedTopics, speakFacilitator]);
+  handleClassroomCallPresenterRef.current = handleClassroomCallPresenter;
+
+  // 1. Seminar Opening
+  const handleStartClassroomOpening = useCallback(() => {
+    roomVoice.unlock();
+    setClassroomPhase('opening');
+    setClassroomCurrentQuestion('');
+    setClassroomCurrentAnswer('');
+    setClassroomCurrentTakeaway('');
+    setPresentationSeconds(0);
+    setCurrentPresenterIndex(0);
+
+    setSession((prev) => ({
+      ...prev,
+      status: 'active',
+      startedAt: prev.startedAt || Date.now(),
+    }));
+
+    const firstStudent = activeDisplayStudents[0] || session.students[0];
+    const firstStudentName = firstStudent?.name || 'Student Number 1';
+    const firstAssigned = classroomAssignedTopics[0];
+    const firstTopicTitle = firstAssigned?.subTopicTitle || session.topic || 'Engineering and Applied Systems';
+
+    const openingScript = `Good morning everyone! Welcome to today's classroom presentation activity on "${session.topic || 'the assigned topic'}". Each student will present their assigned topic in sequence. Let us begin with our first presenter: Student Number 1, ${firstStudentName}, please come forward to the stage and begin your presentation on "${firstTopicTitle}". All the best!`;
+
+    speakFacilitator(openingScript, 'classroom_opening', 'intro', () => {
+      handleClassroomCallPresenterRef.current(0);
+    });
+  }, [session.topic, activeDisplayStudents, session.students, classroomAssignedTopics, speakFacilitator, setSession]);
+  handleStartClassroomOpeningRef.current = handleStartClassroomOpening;
 
   const handleResetClassroomActivity = useCallback(() => {
     if (classroomWatchdogTimerRef.current) clearInterval(classroomWatchdogTimerRef.current);
@@ -2702,11 +2718,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   useEffect(() => {
     if (currentLayout === 'classroom' && isSessionActive && classroomPhase === 'not_started' && isClassroomAutoRunning) {
       const timer = setTimeout(() => {
-        handleStartClassroomOpening();
+        handleStartClassroomOpeningRef.current();
       }, 1200);
       return () => clearTimeout(timer);
     }
-  }, [currentLayout, isSessionActive, classroomPhase, isClassroomAutoRunning, handleStartClassroomOpening]);
+  }, [currentLayout, isSessionActive, classroomPhase, isClassroomAutoRunning]);
 
   const handleRaiseHandToggle = () => {
     const userStudent = (session?.students || []).find((s) => s.isUser) || session?.students?.[0];
