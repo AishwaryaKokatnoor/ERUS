@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Mic, MicOff, Video, VideoOff, Play, CheckCircle2, 
   HelpCircle, Sparkles, Volume2, VolumeX, LogOut, MessageSquare, 
-  Share2, Shield, Eye, Award, Clock, ArrowRight, ArrowLeft, UserCheck, School, Radio
+  Share2, Shield, Eye, Award, Clock, ArrowRight, ArrowLeft, UserCheck, 
+  School, Radio, Laptop, GraduationCap, Monitor
 } from 'lucide-react';
 import { 
   GDSession, Student, TranscriptEntry, PresentationPhase, 
@@ -116,7 +117,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   const [qaTimerSeconds, setQaTimerSeconds] = useState<number>(0);
 
   // User media (camera & mic)
-  const { isCameraOn, videoStream, toggleCamera, audioLevel } = useUserMedia();
+  const { isCameraOn, videoStream, toggleCamera, audioLevel, startAudioAnalyser, stopAudioAnalyser } = useUserMedia();
   const [isMicOn, setIsMicOn] = useState<boolean>(false);
   const [isRoomAudioMuted, setIsRoomAudioMuted] = useState<boolean>(voiceMuted);
   const [isSharingScreen, setIsSharingScreen] = useState<boolean>(false);
@@ -280,15 +281,17 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
     }
   };
 
-  // Web Speech recognition toggle for active student
-  const toggleSpeechRecognition = () => {
+  // Presenter Microphone Toggle (Mute / Unmute)
+  const handleToggleMic = async () => {
     if (isMicOn) {
       setIsMicOn(false);
+      try { stopAudioAnalyser(); } catch {}
       if (speechRecognitionRef.current) {
         try { speechRecognitionRef.current.stop(); } catch {}
       }
     } else {
       setIsMicOn(true);
+      try { await startAudioAnalyser(); } catch {}
       const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (SpeechRec) {
         try {
@@ -310,6 +313,17 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
     }
   };
 
+  const toggleSpeechRecognition = handleToggleMic;
+
+  // Presenter Video Toggle (Camera On / Off)
+  const handleToggleVideo = async () => {
+    try {
+      await toggleCamera();
+    } catch (e) {
+      console.warn('Camera toggle error:', e);
+    }
+  };
+
   const formatSeconds = (sec: number) => {
     const m = Math.floor(sec / 60);
     const s = sec % 60;
@@ -317,61 +331,64 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   };
 
   return (
-    <div className="flex flex-col h-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
+    <div className="flex flex-col min-h-screen bg-slate-50 text-slate-800 overflow-x-hidden font-sans">
       {/* ======================================================== */}
-      {/* TOP HEADER: CLASSROOM PRESENTATION SEMINAR BANNER */}
+      {/* TOP HEADER: CLASSROOM PRESENTATION SEMINAR BANNER (LIGHT THEME) */}
       {/* ======================================================== */}
-      <header className="h-16 px-6 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0 backdrop-blur-md">
+      <header className="h-16 px-4 sm:px-6 bg-white/95 border-b border-slate-200 flex items-center justify-between gap-3 shrink-0 backdrop-blur-md shadow-xs sticky top-0 z-30">
         <div className="flex items-center gap-3">
           {onBackToDashboard && (
             <button
               type="button"
               onClick={onBackToDashboard}
-              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
+              className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-colors flex items-center gap-1.5 text-xs font-bold cursor-pointer shadow-2xs"
               title="Return to Dashboard"
             >
-              <ArrowLeft className="w-4 h-4" />
-              <span className="hidden sm:inline">Back</span>
+              <ArrowLeft className="w-3.5 h-3.5 text-slate-600" />
+              <span>Back</span>
             </button>
           )}
-          <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-600 shrink-0">
             <School className="w-5 h-5" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-sm font-bold text-white tracking-wide">
-                ERUS AI Student Presentation Activity
+              <h1 className="text-sm font-bold text-slate-900 tracking-wide">
+                Classroom Presentation Mode
               </h1>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                Classroom Seminar Mode (Strict 6 Students)
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-amber-100 text-amber-800 border border-amber-300">
+                Seminar Hall (6 Students)
               </span>
             </div>
-            <p className="text-xs text-slate-400 truncate max-w-md">
+            <p className="text-xs text-slate-500 truncate max-w-xs sm:max-w-md">
               {session.topic || 'Technical / Research / Industry-Oriented Presentations'}
             </p>
           </div>
         </div>
 
         {/* Serial Order Stepper (Student 1 to 6) */}
-        <div className="hidden md:flex items-center gap-1.5 bg-slate-950/60 p-1.5 rounded-2xl border border-slate-800">
+        <div className="hidden lg:flex items-center gap-1.5 bg-slate-100/90 p-1.5 rounded-2xl border border-slate-200">
           {[1, 2, 3, 4, 5, 6].map((num) => {
             const isCompleted = num < currentStudentNumber;
             const isCurrent = num === currentStudentNumber;
             return (
-              <div
+              <button
                 key={num}
+                type="button"
+                onClick={() => isFaculty && callStudentToPresent(num)}
                 className={`flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-semibold transition-all ${
                   isCurrent
-                    ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20'
+                    ? 'bg-amber-500 text-white font-bold shadow-md shadow-amber-500/25 ring-2 ring-amber-400/40'
                     : isCompleted
-                    ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-800/40'
-                    : 'text-slate-500 bg-slate-900/50'
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold'
+                    : 'text-slate-500 bg-white border border-slate-200 hover:bg-slate-50'
                 }`}
+                title={`Student #${num}`}
               >
                 <span>#{num}</span>
-                {isCompleted && <CheckCircle2 className="w-3.5 h-3.5" />}
-                {isCurrent && <span className="animate-pulse">● Live</span>}
-              </div>
+                {isCompleted && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />}
+                {isCurrent && <span className="animate-pulse">● Podium</span>}
+              </button>
             );
           })}
         </div>
@@ -382,14 +399,14 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
             isFaculty ? (
               <button
                 onClick={handleFacultyStartPresentation}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-700/30 transition-all hover:scale-105 active:scale-95 cursor-pointer ring-2 ring-emerald-400/50"
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-600/25 transition-all hover:scale-105 active:scale-95 cursor-pointer"
               >
                 <Play className="w-4 h-4 fill-white" />
                 <span>Start Presentation</span>
               </button>
             ) : (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700 text-xs text-amber-300">
-                <Clock className="w-3.5 h-3.5 animate-spin text-amber-400" />
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 font-medium">
+                <Clock className="w-3.5 h-3.5 animate-spin text-amber-600" />
                 <span>Waiting for faculty to start...</span>
               </div>
             )
@@ -397,7 +414,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
             isFaculty && currentStudentNumber < 6 && (
               <button
                 onClick={() => callStudentToPresent(currentStudentNumber + 1)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md transition-all cursor-pointer"
+                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition-all cursor-pointer"
               >
                 <span>Call Next Student (#{currentStudentNumber + 1})</span>
                 <ArrowRight className="w-3.5 h-3.5" />
@@ -407,10 +424,10 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
 
           <button
             onClick={() => setIsRoomAudioMuted(!isRoomAudioMuted)}
-            className={`p-2 rounded-xl border transition-colors ${
+            className={`p-2 rounded-xl border transition-colors cursor-pointer ${
               isRoomAudioMuted
-                ? 'bg-rose-950/30 border-rose-800/50 text-rose-400'
-                : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:text-white'
+                ? 'bg-rose-50 border-rose-200 text-rose-600'
+                : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700'
             }`}
             title={isRoomAudioMuted ? 'Unmute AI Instructor Voice' : 'Mute AI Instructor Voice'}
           >
@@ -419,41 +436,86 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
 
           <button
             onClick={onFinishSession}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/20 transition-all cursor-pointer"
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white shadow-xs transition-all cursor-pointer"
           >
             <LogOut className="w-4 h-4" />
-            <span>Finish Activity</span>
+            <span className="hidden sm:inline">Finish Activity</span>
           </button>
         </div>
       </header>
 
       {/* ======================================================== */}
-      {/* MAIN STAGE: PODIUM (PRESENTER) + CLASSROOM AUDIENCE DESKS */}
+      {/* MAIN CLASSROOM ENVIRONMENT (LIGHT THEME) */}
       {/* ======================================================== */}
-      {/* ======================================================== */}
-      {/* MAIN STAGE: PRESENTER IN THE MIDDLE + AUDIENCE DESKS */}
-      {/* ======================================================== */}
-      <div className="flex-1 flex flex-col items-center justify-between p-4 max-w-5xl w-full mx-auto overflow-hidden">
+      <main className="flex-1 max-w-6xl w-full mx-auto p-3 sm:p-5 flex flex-col gap-5">
         
-        {/* CENTER STAGE: THE PRESENTER IN THE MIDDLE */}
-        <div className="w-full flex flex-col items-center justify-center my-auto">
-          <div className="w-full max-w-xl bg-gradient-to-b from-slate-900/95 via-slate-900 to-amber-950/30 border-2 border-amber-500/40 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-md flex flex-col items-center text-center relative overflow-hidden">
-            
-            {/* Ambient Aura */}
-            {aiSpeaking && (
-              <div className="absolute inset-0 bg-amber-500/10 animate-pulse pointer-events-none rounded-3xl" />
-            )}
+        {/* ======================================================== */}
+        {/* STAGE & PODIUM (PRESENTER CENTERED ON LECTERN) */}
+        {/* ======================================================== */}
+        <section className="bg-white border border-slate-200 rounded-3xl p-4 sm:p-6 shadow-sm relative overflow-hidden">
+          {/* Subtle Stage Floor Highlight */}
+          <div className="absolute top-0 inset-x-0 h-2 bg-gradient-to-r from-amber-400 via-amber-500 to-amber-400" />
+          
+          {/* Whiteboard / Projector Screen Behind the Podium */}
+          <div className="max-w-3xl mx-auto bg-slate-50 border-2 border-slate-200/90 rounded-2xl p-4 shadow-2xs mb-5 text-center relative">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-2 mb-3 flex-wrap">
+              <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-700 bg-amber-100/80 px-2.5 py-0.5 rounded-full border border-amber-300 flex items-center gap-1.5">
+                <Monitor className="w-3.5 h-3.5 text-amber-600" />
+                <span>Classroom Seminar Screen</span>
+              </span>
+              
+              {/* Presentation Timer */}
+              <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-3 py-1 rounded-xl shadow-2xs">
+                <Clock className="w-3.5 h-3.5 text-indigo-600" />
+                <span className="text-xs font-mono font-bold text-slate-800">
+                  {formatSeconds(presenterSeconds)} / 08:00 Min
+                </span>
+                {phase === 'presenting' && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping inline-block" />
+                )}
+              </div>
+            </div>
 
-            {/* Large Video / Screen / Avatar Frame in the Center */}
-            <div className="relative flex flex-col items-center">
-              {isSharingScreen ? (
-                <div className="w-52 h-52 sm:w-60 sm:h-60 bg-slate-950 rounded-3xl border-4 border-amber-500/80 shadow-2xl flex flex-col items-center justify-center p-4 text-center">
-                  <Share2 className="w-12 h-12 text-amber-400 mb-2 animate-bounce" />
-                  <p className="text-sm font-bold text-white">Presentation Slides Active</p>
-                  <p className="text-xs text-slate-400">Sharing technical concepts</p>
-                </div>
-              ) : isCameraOn && currentPresenter?.isUser && videoStream ? (
-                <div className="w-52 h-52 sm:w-60 sm:h-60 rounded-3xl overflow-hidden border-4 border-amber-500/80 shadow-2xl relative bg-slate-950">
+            {/* Presentation Topic Heading */}
+            <h2 className="text-base sm:text-lg font-extrabold text-slate-900">
+              "{currentTopic}"
+            </h2>
+
+            {/* AI Facilitator Instruction / Speech Banner */}
+            <div className="mt-3 bg-amber-50/90 border border-amber-200 rounded-xl p-3 text-xs sm:text-sm text-slate-800 italic font-medium">
+              <div className="flex items-center gap-1.5 text-amber-800 font-bold text-[11px] uppercase tracking-wider mb-1 not-italic">
+                <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                <span>AI Seminar Facilitator Guidance</span>
+              </div>
+              <p>
+                "{aiSpeech || (phase === 'presenting' ? 'Presenter is delivering the scheduled topic. Audience is taking notes.' : 'Presenting to classroom audience...')}"
+              </p>
+            </div>
+          </div>
+
+          {/* ======================================================== */}
+          {/* THE PODIUM / LECTERN (PRESENTER STANDING IN THE CENTER) */}
+          {/* ======================================================== */}
+          <div className="max-w-xl mx-auto flex flex-col items-center">
+            
+            {/* Lectern Structure */}
+            <div className="w-full bg-gradient-to-b from-amber-50 via-white to-amber-100/50 border-2 border-amber-300 rounded-3xl p-5 sm:p-6 shadow-md flex flex-col items-center relative text-center">
+              
+              {/* Gooseneck Lectern Microphone attached on top */}
+              <div className="flex items-center gap-1.5 text-xs font-bold text-amber-900 bg-amber-200/70 border border-amber-300 px-3.5 py-1 rounded-full shadow-2xs -mt-8 mb-3 z-10">
+                <Mic className="w-3.5 h-3.5 text-amber-700" />
+                <span>SEMINAR LECTERN • PRESENTER PODIUM</span>
+              </div>
+
+              {/* Video / Screen Display Frame */}
+              <div className="w-64 h-48 sm:w-80 sm:h-56 rounded-2xl overflow-hidden border-4 border-amber-400 shadow-md relative bg-slate-900 flex items-center justify-center">
+                {isSharingScreen ? (
+                  <div className="w-full h-full bg-slate-950 flex flex-col items-center justify-center p-4 text-center">
+                    <Share2 className="w-12 h-12 text-amber-400 mb-2 animate-bounce" />
+                    <p className="text-sm font-bold text-white">Presentation Slides Active</p>
+                    <p className="text-xs text-slate-400">Sharing technical concepts</p>
+                  </div>
+                ) : isCameraOn && videoStream ? (
                   <video
                     autoPlay
                     playsInline
@@ -463,147 +525,282 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                     }}
                     className="w-full h-full object-cover"
                   />
-                </div>
-              ) : (
-                <div className="w-52 h-52 sm:w-60 sm:h-60 rounded-3xl overflow-hidden border-4 border-amber-500/80 shadow-2xl relative bg-slate-950 flex items-center justify-center">
-                  <img
-                    src={currentPresenter?.avatar}
-                    alt={currentPresenter?.name}
-                    className="w-full h-full object-cover p-2"
-                  />
-                </div>
-              )}
-
-              {/* Placard Badge */}
-              <div className="absolute -bottom-3 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 text-xs font-extrabold px-3.5 py-1 rounded-full shadow-lg border border-amber-300/40 whitespace-nowrap z-20 flex items-center gap-1.5">
-                <Radio className="w-3.5 h-3.5 text-slate-950 animate-pulse" />
-                <span>PRESENTER • SEAT #{currentStudentNumber}</span>
-              </div>
-            </div>
-
-            {/* Presenter Name & Role */}
-            <div className="mt-6 flex flex-col items-center">
-              <h2 className="text-xl sm:text-2xl font-bold text-white flex items-center gap-2">
-                {currentPresenter?.name}
-                {currentPresenter?.isUser && (
-                  <span className="px-2 py-0.5 rounded-full bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-semibold">
-                    You
-                  </span>
+                ) : (
+                  <div className="w-full h-full bg-gradient-to-b from-slate-800 to-slate-900 flex flex-col items-center justify-center p-4 relative">
+                    <img
+                      src={currentPresenter?.avatar}
+                      alt={currentPresenter?.name}
+                      className="w-24 h-24 rounded-full bg-slate-700 border-2 border-amber-400 shadow-md object-cover"
+                    />
+                    <span className="mt-2 text-xs font-bold text-white">
+                      {currentPresenter?.name}
+                    </span>
+                    <span className="text-[10px] text-slate-300">
+                      Camera Off • Avatar Active
+                    </span>
+                  </div>
                 )}
-              </h2>
-              
-              {/* Topic Title */}
-              <div className="mt-2 px-4 py-1.5 rounded-xl bg-amber-950/60 border border-amber-500/40 text-xs sm:text-sm font-semibold text-amber-200 max-w-md">
-                📌 Topic: "{currentTopic}"
+
+                {/* Presenter Live Status Badge */}
+                <div className="absolute bottom-2 inset-x-2 flex items-center justify-between pointer-events-none">
+                  <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-900/80 text-amber-300 border border-amber-400/30 backdrop-blur-xs">
+                    Seat #{currentStudentNumber}
+                  </span>
+                  <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold flex items-center gap-1 backdrop-blur-xs ${
+                    isMicOn ? 'bg-emerald-600/90 text-white' : 'bg-rose-600/90 text-white'
+                  }`}>
+                    {isMicOn ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
+                    <span>{isMicOn ? 'Speaking' : 'Muted'}</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Presenter Name & Department */}
+              <div className="mt-4 flex flex-col items-center">
+                <h3 className="text-lg sm:text-xl font-extrabold text-slate-900 flex items-center gap-2">
+                  <span>{currentPresenter?.name}</span>
+                  {currentPresenter?.isUser && (
+                    <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-bold">
+                      You
+                    </span>
+                  )}
+                </h3>
+                <p className="text-xs text-slate-600 font-medium">
+                  Department of Computer Science & Engineering • {currentPresenter?.college || session.collegeCode || 'Engineering Institute'}
+                </p>
+              </div>
+
+              {/* ======================================================== */}
+              {/* PRESENTER PODIUM CONTROLS (MIC UNMUTE/MUTE & VIDEO ON/OFF) */}
+              {/* ======================================================== */}
+              <div className="mt-4 w-full bg-white border border-amber-200/90 rounded-2xl p-3 shadow-2xs flex flex-wrap items-center justify-center gap-2.5">
+                
+                {/* 1. MUTE / UNMUTE MICROPHONE */}
+                <button
+                  type="button"
+                  onClick={handleToggleMic}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs ${
+                    isMicOn
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-400/40'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300'
+                  }`}
+                  title={isMicOn ? 'Click to Mute Microphone' : 'Click to Unmute Microphone'}
+                >
+                  {isMicOn ? (
+                    <>
+                      <Mic className="w-4 h-4 animate-pulse text-white" />
+                      <span>Mic: Unmuted (Active)</span>
+                    </>
+                  ) : (
+                    <>
+                      <MicOff className="w-4 h-4 text-rose-500" />
+                      <span>Mic: Muted</span>
+                    </>
+                  )}
+                </button>
+
+                {/* 2. TURN VIDEO ON / OFF */}
+                <button
+                  type="button"
+                  onClick={handleToggleVideo}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs ${
+                    isCameraOn
+                      ? 'bg-indigo-600 hover:bg-indigo-700 text-white ring-2 ring-indigo-400/40'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300'
+                  }`}
+                  title={isCameraOn ? 'Click to Turn Off Video Camera' : 'Click to Turn On Video Camera'}
+                >
+                  {isCameraOn ? (
+                    <>
+                      <Video className="w-4 h-4 text-white" />
+                      <span>Video: On</span>
+                    </>
+                  ) : (
+                    <>
+                      <VideoOff className="w-4 h-4 text-slate-500" />
+                      <span>Video: Off</span>
+                    </>
+                  )}
+                </button>
+
+                {/* 3. SHARE SLIDES / SCREEN */}
+                <button
+                  type="button"
+                  onClick={() => setIsSharingScreen(!isSharingScreen)}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer shadow-2xs border ${
+                    isSharingScreen
+                      ? 'bg-amber-600 hover:bg-amber-700 text-white border-amber-500'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
+                  }`}
+                  title={isSharingScreen ? 'Stop Sharing Slides' : 'Share Presentation Slides'}
+                >
+                  <Share2 className="w-4 h-4 text-amber-700" />
+                  <span>{isSharingScreen ? 'Stop Slides' : 'Share Slides'}</span>
+                </button>
+              </div>
+
+              {/* Stage Flow Action Buttons */}
+              <div className="mt-3 w-full flex items-center justify-center gap-2 flex-wrap">
+                {phase === 'presenting' && (
+                  <button
+                    type="button"
+                    onClick={handleCompletePresentation}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-extrabold bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-md hover:scale-105 active:scale-95 transition-all cursor-pointer"
+                  >
+                    <span>Conclude Speech & Start Q&A</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                )}
+
+                {(phase === 'peer_qa' || phase === 'ai_qa') && (
+                  <button
+                    type="button"
+                    onClick={handleAcknowledgeAnswerAndProceed}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white shadow-md hover:scale-105 active:scale-95 transition-all cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Proceed to Next Student (#{currentStudentNumber < 6 ? currentStudentNumber + 1 : 'Finish'})</span>
+                  </button>
+                )}
+              </div>
+
+            </div>
+          </div>
+        </section>
+
+        {/* ======================================================== */}
+        {/* CLASSROOM AUDIENCE (STUDENTS SEATED AT DESKS FACING PRESENTER) */}
+        {/* ======================================================== */}
+        <section className="bg-white border border-slate-200 rounded-3xl p-4 sm:p-6 shadow-sm">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-3 mb-4 flex-wrap">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center text-amber-700">
+                <School className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  Classroom Audience Desks
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Participating students seated in audience rows facing the lectern and presenter
+                </p>
               </div>
             </div>
 
-            {/* Live Speech Caption */}
-            <div className="mt-4 w-full bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-xs sm:text-sm text-slate-200 italic font-medium min-h-[44px] flex items-center justify-center">
-              <span>
-                "{aiSpeech || (phase === 'presenting' ? 'Delivering presentation on assigned topic...' : 'Presenting to classroom audience...')}"
+            <span className="text-xs font-mono font-semibold text-slate-600 bg-slate-100 px-3 py-1 rounded-full border border-slate-200">
+              5 Peers in Audience
+            </span>
+          </div>
+
+          {/* Desks Grid: 5 Other Students Sitting at Desks Facing Stage */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+            {presentationStudents
+              .filter((s) => s.seatNumber !== currentStudentNumber)
+              .map((student) => {
+                const sNum = student.seatNumber;
+                const isInvitedForQA = phase === 'peer_qa' && (currentStudentNumber < 6 ? sNum === currentStudentNumber + 1 : sNum === 1);
+                const hasAlreadyPresented = sNum < currentStudentNumber;
+
+                return (
+                  <div
+                    key={student.id}
+                    onClick={() => isFaculty && callStudentToPresent(sNum)}
+                    className={`bg-white border rounded-2xl shadow-xs overflow-hidden transition-all flex flex-col justify-between cursor-pointer hover:shadow-md ${
+                      isInvitedForQA
+                        ? 'border-amber-400 ring-2 ring-amber-400/40'
+                        : 'border-slate-200 hover:border-amber-300'
+                    }`}
+                    title={isFaculty ? `Click to call Student #${sNum} to the lectern` : student.name}
+                  >
+                    {/* Desk Top Rim (Wooden classroom desk surface) */}
+                    <div className="bg-gradient-to-r from-amber-100 via-amber-200/80 to-amber-100 border-b border-amber-300/80 px-3 py-1.5 flex items-center justify-between text-[11px] font-bold text-amber-900">
+                      <span className="flex items-center gap-1">
+                        <Laptop className="w-3.5 h-3.5 text-amber-800" />
+                        <span>Desk #{sNum}</span>
+                      </span>
+                      {isInvitedForQA ? (
+                        <span className="text-[10px] text-amber-800 bg-amber-300/80 px-1.5 py-0.5 rounded-md font-extrabold animate-pulse">
+                          Q&A Floor
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-slate-600 font-mono">
+                          Facing Stage
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Desk Seated Student */}
+                    <div className="p-3 flex flex-col items-center text-center">
+                      <div className="relative">
+                        <img
+                          src={student.avatar}
+                          alt={student.name}
+                          className="w-14 h-14 rounded-2xl bg-slate-100 object-cover border-2 border-slate-200 shadow-2xs"
+                        />
+                        {isInvitedForQA && (
+                          <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-500 border-2 border-white flex items-center justify-center text-[10px] text-white font-bold animate-bounce">
+                            !
+                          </span>
+                        )}
+                      </div>
+
+                      <h4 className="mt-2 text-xs font-bold text-slate-800 truncate max-w-[120px]">
+                        {student.name}
+                        {student.isUser && ' (You)'}
+                      </h4>
+                      <p className="text-[10px] text-slate-500 truncate max-w-[120px]">
+                        {student.course} • Batch {student.batch || '2024'}
+                      </p>
+
+                      {/* Status Tag */}
+                      <div className="mt-2.5">
+                        {isInvitedForQA ? (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1 animate-pulse">
+                            <span>🙋 Asking Question</span>
+                          </span>
+                        ) : hasAlreadyPresented ? (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3" />
+                            <span>Speech Finished</span>
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-medium bg-slate-100 text-slate-600 border border-slate-200">
+                            Attending Audience
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+
+          {/* Faculty Evaluator Observer Desk */}
+          <div className="mt-4 bg-amber-50/60 border border-amber-200 rounded-2xl p-3 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-amber-200/80 text-amber-900 flex items-center justify-center">
+                <GraduationCap className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-900">
+                  Faculty Evaluator Desk: {session.assignedFacultyName || 'Assigned Faculty Evaluator'}
+                </p>
+                <p className="text-[11px] text-slate-600">
+                  Monitoring technical delivery, presentation composure, and Q&A responsiveness
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-ping inline-block" />
+                <span>Live Observation Active</span>
               </span>
             </div>
-
-            {/* Presenter Stage Controls */}
-            <div className="mt-4 flex items-center justify-center gap-2 flex-wrap">
-              {currentPresenter?.isUser && (
-                <>
-                  <button
-                    onClick={toggleSpeechRecognition}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                      isMicOn ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-800 text-slate-300'
-                    }`}
-                  >
-                    {isMicOn ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
-                    <span>{isMicOn ? 'Mic Active' : 'Unmute'}</span>
-                  </button>
-
-                  <button
-                    onClick={toggleCamera}
-                    className={`p-2 rounded-xl border transition-colors ${
-                      isCameraOn ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-400'
-                    }`}
-                  >
-                    {isCameraOn ? <Video className="w-3.5 h-3.5" /> : <VideoOff className="w-3.5 h-3.5" />}
-                  </button>
-
-                  <button
-                    onClick={() => setIsSharingScreen(!isSharingScreen)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border ${
-                      isSharingScreen ? 'bg-amber-600 text-white border-amber-500' : 'bg-slate-800 border-slate-700 text-slate-300'
-                    }`}
-                  >
-                    <Share2 className="w-3.5 h-3.5" />
-                    <span>{isSharingScreen ? 'Stop Sharing' : 'Share'}</span>
-                  </button>
-                </>
-              )}
-
-              {phase === 'presenting' && (
-                <button
-                  onClick={handleCompletePresentation}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-lg cursor-pointer"
-                >
-                  <span>Conclude Speech & Q&A</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-              )}
-
-              {(phase === 'peer_qa' || phase === 'ai_qa') && (
-                <button
-                  onClick={handleAcknowledgeAnswerAndProceed}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg cursor-pointer"
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Next Student (#{currentStudentNumber < 6 ? currentStudentNumber + 1 : 'Finish'})</span>
-                </button>
-              )}
-            </div>
-
           </div>
-        </div>
+        </section>
 
-        {/* AUDIENCE ROW: 6 PEERS SITTING AT DESKS FACING PRESENTER */}
-        <div className="w-full max-w-4xl space-y-2 mt-4">
-          <div className="flex items-center justify-between px-2 text-xs text-slate-400 font-medium">
-            <span className="uppercase tracking-wider font-bold text-[10px] text-amber-400 flex items-center gap-1.5">
-              <School className="w-3.5 h-3.5" />
-              Classroom Audience (Facing Presenter)
-            </span>
-            <span className="text-[11px] font-mono text-slate-400">
-              6 Participating Students
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
-            {presentationStudents.map((s, idx) => {
-              const sNum = idx + 1;
-              const isPresenter = sNum === currentStudentNumber;
-              return (
-                <div
-                  key={s.id}
-                  onClick={() => callStudentToPresent(sNum)}
-                  className={`flex flex-col items-center p-2 rounded-2xl border transition-all cursor-pointer ${
-                    isPresenter
-                      ? 'bg-amber-500/20 border-amber-500/60 ring-2 ring-amber-500/30'
-                      : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
-                  }`}
-                >
-                  <img src={s.avatar} alt={s.name} className="w-12 h-12 rounded-xl bg-slate-800 object-cover" />
-                  <span className="text-[10px] font-bold text-white mt-1 truncate max-w-[80px]">
-                    {s.name.split(' ')[0]}
-                  </span>
-                  <span className="text-[9px] font-mono text-amber-400">
-                    Seat #{sNum} {isPresenter ? '• Presenter' : ''}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-      </div>
+      </main>
     </div>
   );
 };
