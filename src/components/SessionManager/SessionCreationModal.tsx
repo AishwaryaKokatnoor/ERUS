@@ -198,6 +198,7 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
           slotDate: slot.slotDate || new Date().toISOString().split('T')[0],
           maxCapacity: studentCount,
           enrolledCount: 0,
+          activityType: roomLayout === 'classroom' ? 'presentation' : 'gd',
           roomLayout: roomLayout,
           topic: topic.trim(),
           description: description.trim(),
@@ -212,7 +213,9 @@ export const SessionCreationModal: React.FC<SessionCreationModalProps> = ({
           status: 'scheduled',
           students: seatedStudents,
           currentPhase: 'intro',
-          facilitatorSpeech: `Good morning participants of ${slotNameStr}. Today's discussion topic is: "${topic.trim()}". There are ${studentCount} candidates participating in this slot scheduled for ${slotTimingStr}. Everyone will get an opportunity to speak. The floor will be open shortly.`,
+          facilitatorSpeech: roomLayout === 'classroom'
+            ? `Good morning participants of ${slotNameStr}. Today's classroom presentation topic is: "${topic.trim()}". There are ${studentCount} candidates presenting in this slot scheduled for ${slotTimingStr}. Each presenter will deliver their presentation followed by peer Q&A. The floor will be open shortly.`
+            : `Good morning participants of ${slotNameStr}. Today's discussion topic is: "${topic.trim()}". There are ${studentCount} candidates participating in this slot scheduled for ${slotTimingStr}. Everyone will get an opportunity to speak. The floor will be open shortly.`,
           facilitatorAction: `Slot scheduled for ${slotTimingStr} (${studentCount} students seated)`,
           isFacilitatorSpeaking: false,
           silenceTimerSeconds: 0,

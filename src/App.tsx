@@ -679,7 +679,10 @@ function GDAppContent() {
     // Reset timer to 0 for a fresh live discussion
     setElapsedSeconds(0);
 
-    const welcomeIntroText = `Welcome participants to today's group discussion on "${targetSlot.topic || 'the assigned topic'}". The discussion has now officially commenced. Each participant will get an opportunity to present their perspectives. Please respect others and avoid interruptions. Let us begin. Who would like to open the discussion?`;
+    const isPresentation = targetSlot.activityType === 'presentation' || targetSlot.roomLayout === 'classroom';
+    const welcomeIntroText = isPresentation
+      ? `Welcome participants to today's classroom presentation on "${targetSlot.topic || 'the assigned topic'}". The session has commenced. Each presenter will deliver their topic followed by peer Q&A. Let us begin.`
+      : `Welcome participants to today's group discussion on "${targetSlot.topic || 'the assigned topic'}". The discussion has now officially commenced. Each participant will get an opportunity to present their perspectives. Please respect others and avoid interruptions. Let us begin. Who would like to open the discussion?`;
 
     sessionQuestionTracker.clear();
 
@@ -691,6 +694,8 @@ function GDAppContent() {
 
     const activeSlot: GDSession = {
       ...(targetSlot.id === session.id ? session : targetSlot),
+      activityType: isPresentation ? 'presentation' : 'gd',
+      roomLayout: isPresentation ? 'classroom' : (targetSlot.roomLayout === 'speaker_center' ? 'speaker_center' : 'round_table'),
       status: 'active',
       silenceTimerSeconds: 0,
       currentPhase: 'intro',
@@ -713,6 +718,8 @@ function GDAppContent() {
     setAvailableSlots((prevSlots) =>
       prevSlots.map((s) => (s.id === targetSlotId ? { 
         ...s, 
+        activityType: isPresentation ? 'presentation' : 'gd',
+        roomLayout: isPresentation ? 'classroom' : (s.roomLayout === 'speaker_center' ? 'speaker_center' : 'round_table'),
         status: 'active', 
         startedAt: Date.now(),
         students: (s.students && s.students.length > 0 ? s.students : baseStudents).map((st) => ({
@@ -1471,8 +1478,11 @@ function GDAppContent() {
       ? 'completed'
       : (targetSlot.status === 'active' ? 'active' : 'waiting');
 
+    const isPresentation = targetSlot.activityType === 'presentation' || targetSlot.roomLayout === 'classroom';
     const activeSlot: GDSession = {
       ...targetSlot,
+      activityType: isPresentation ? 'presentation' : 'gd',
+      roomLayout: isPresentation ? 'classroom' : (targetSlot.roomLayout === 'speaker_center' ? 'speaker_center' : 'round_table'),
       status: targetStatus,
       maxCapacity: targetMaxCap,
       enrolledCount: newTargetEnrolledCount,
@@ -1910,7 +1920,7 @@ function GDAppContent() {
         )}
 
         {currentTab === 'room' && currentUser?.role !== 'college_admin' && currentUser?.role !== 'super_admin' && session.status !== 'completed' && !isSlotCompletedLocally(session.id) && (
-          session.activityType === 'presentation' ? (
+          (session.activityType === 'presentation' || session.roomLayout === 'classroom') ? (
             <ClassroomPresentationRoom
               session={session}
               setSession={setSession}

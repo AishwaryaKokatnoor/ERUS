@@ -538,7 +538,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {activeTopicObj.slots.map((slot, index) => {
-                  const isPresentation = slot.activityType === 'presentation';
+                  const isPresentation = slot.activityType === 'presentation' || slot.roomLayout === 'classroom';
                   const maxCap = isPresentation ? 6 : (slot.maxCapacity || 15);
                   const enrolled = isPresentation 
                     ? Math.min(slot.enrolledCount ?? slot.students?.length ?? 6, 6)
@@ -708,7 +708,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                               onClick={() => onEnterRoom(slot.id)}
                               className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                             >
-                              <span>Enter GD Room</span>
+                              <span>{isPresentation ? 'Enter Presentation Room' : 'Enter GD Room'}</span>
                               <ArrowRight className="w-3.5 h-3.5" />
                             </button>
 

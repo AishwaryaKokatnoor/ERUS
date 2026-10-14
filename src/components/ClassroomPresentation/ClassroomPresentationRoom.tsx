@@ -122,6 +122,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   // Live Speech Recognition for User
   const [liveSpeech, setLiveSpeech] = useState<string>('');
   const speechRecognitionRef = useRef<any>(null);
+  const hasStartedOpeningRef = useRef<boolean>(false);
 
   const isFaculty = currentUser?.role === 'faculty' || currentUser?.role === 'college_admin';
   const currentStudentNumber = activeStudentIndex + 1;
@@ -161,6 +162,14 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
     speakAI(script);
   };
 
+  const startOpeningSequence = () => {
+    if (hasStartedOpeningRef.current) return;
+    hasStartedOpeningRef.current = true;
+    speakAI(PRESENTATION_OPENING_SCRIPT, () => {
+      callStudentToPresent(1);
+    });
+  };
+
   const handleFacultyStartPresentation = () => {
     setSession((prev) => ({
       ...prev,
@@ -168,20 +177,15 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
       startedAt: prev.startedAt || Date.now(),
     }));
     onStartSession?.(session.id);
-    speakAI(PRESENTATION_OPENING_SCRIPT, () => {
-      callStudentToPresent(1);
-    });
+    startOpeningSequence();
   };
 
   // Start Presentation Activity (Stage 1: Opening)
   useEffect(() => {
-    if (session.status === 'active' && phase === 'opening') {
-      speakAI(PRESENTATION_OPENING_SCRIPT, () => {
-        // Automatically transition to Student Number 1 after opening script finishes
-        callStudentToPresent(1);
-      });
+    if (session.status === 'active' && phase === 'opening' && !hasStartedOpeningRef.current) {
+      startOpeningSequence();
     }
-  }, [session.status]);
+  }, [session.status, phase]);
 
   // Presenter Speaking Timer (tracks 6 to 8 minutes)
   useEffect(() => {

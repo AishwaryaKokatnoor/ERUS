@@ -556,6 +556,15 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
                             <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
                               {sl.slotName || sl.id}
                             </span>
+                            {(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                                🎓 Presentation
+                              </span>
+                            ) : (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                                👥 GD
+                              </span>
+                            )}
                             <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
                               isCompleted
                                 ? 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300'
@@ -637,10 +646,10 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
                                 }
                               }}
                               className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm transition-all flex items-center gap-1.5 cursor-pointer animate-pulse"
-                              title="Enter the live discussion room"
+                              title={(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Enter live presentation room" : "Enter live discussion room"}
                             >
                               <Radio className="w-3.5 h-3.5" />
-                              <span>Enter Room</span>
+                              <span>{(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Enter Presentation" : "Enter Room"}</span>
                             </button>
                           )}
 
@@ -650,10 +659,10 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
                                 onStartSession(sl.id);
                               }}
                               className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm transition-all flex items-center gap-1.5 cursor-pointer hover:scale-105 active:scale-95"
-                              title="Start this assigned GD slot and commence discussion"
+                              title={(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Start this presentation slot" : "Start this assigned GD slot and commence discussion"}
                             >
                               <Play className="w-3 h-3 fill-current" />
-                              <span>Start</span>
+                              <span>{(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Start Presentation" : "Start"}</span>
                             </button>
                           )}
                         </div>

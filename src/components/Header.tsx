@@ -142,7 +142,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Faculty Live GD Room Tab (Hidden once session is completed) */}
+          {/* Faculty Live Room Tab (Hidden once session is completed) */}
           {isFaculty && session?.status !== 'completed' && (
             <button
               id="tab-room-btn"
@@ -154,7 +154,19 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               <Radio className={`w-3.5 h-3.5 shrink-0 ${currentTab === 'room' ? 'text-white animate-pulse' : 'text-emerald-500 dark:text-emerald-400'}`} />
-              <span>Live GD Room</span>
+              <span>{session?.activityType === 'presentation' || session?.roomLayout === 'classroom' ? 'Live Presentation' : 'Live GD Room'}</span>
+            </button>
+          )}
+
+          {/* Student Live Room Tab (Visible when student is currently inside room) */}
+          {isStudent && currentTab === 'room' && session?.status !== 'completed' && (
+            <button
+              id="tab-room-student-btn"
+              onClick={() => setCurrentTab('room')}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all cursor-pointer bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-600/20"
+            >
+              <Radio className="w-3.5 h-3.5 shrink-0 text-white animate-pulse" />
+              <span>{session?.activityType === 'presentation' || session?.roomLayout === 'classroom' ? 'Live Presentation' : 'Live GD Room'}</span>
             </button>
           )}
 
