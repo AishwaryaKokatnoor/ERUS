@@ -4,13 +4,14 @@ import {
   HelpCircle, Sparkles, Volume2, VolumeX, LogOut, MessageSquare, 
   Share2, Shield, Eye, Award, Clock, ArrowRight, ArrowLeft, UserCheck, 
   School, Radio, Laptop, GraduationCap, Monitor, ChevronLeft, ChevronRight,
-  FileText, Send, X
+  FileText, Send, X, Users
 } from 'lucide-react';
 import { 
   GDSession, Student, TranscriptEntry, PresentationPhase, 
   PresentationAssessmentReport 
 } from '../../types/gd';
 import { AuthUser } from '../../types/auth';
+import { useWebRTCRoom } from '../../hooks/useWebRTCRoom';
 import { 
   PRESENTATION_OPENING_SCRIPT, 
   getSerialCallScript, 
@@ -109,40 +110,221 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   currentUser,
   onBackToDashboard,
 }) => {
-  // Only real enrolled students in this session (No fake AI audience)
-  const presentationStudents: Student[] = useMemo(() => {
-    const raw = (session.students || []).filter((s) => !s.isEmptySeat && !s.id?.startsWith('ai-') && !s.id?.startsWith('stu-pres-'));
-    if (raw.length > 0) {
-      return raw.map((s, idx) => ({
-        ...s,
-        seatNumber: s.seatNumber || (idx + 1),
-        name: s.isUser && currentUser?.name ? currentUser.name : (s.name || `Student ${idx + 1}`),
+  const isFaculty = currentUser?.role === 'faculty' || currentUser?.role === 'college_admin';
+
+  // User media (camera & mic)
+  const { isCameraOn, videoStream, toggleCamera } = useUserMedia();
+  const [isMicOn, setIsMicOn] = useState<boolean>(false);
+  const isMicOnRef = useRef<boolean>(false);
+  const [isRoomAudioMuted, setIsRoomAudioMuted] = useState<boolean>(voiceMuted);
+  const [isSharingScreen, setIsSharingScreen] = useState<boolean>(false);
+  const [presenterSeconds, setPresenterSeconds] = useState<number>(0);
+  const [activeStudentIndex, setActiveStudentIndex] = useState<number>(0);
+
+  // Real-Time Multi-User WebRTC & Socket signaling for Classroom Presentation
+  const {
+    connected: isSocketConnected,
+    assignedSeat: rtcAssignedSeat,
+    peers: rtcPeers,
+    peerStreams: rtcPeerStreams,
+    broadcastTranscript: rtcBroadcastTranscript,
+    broadcastFacilitatorSpeech: rtcBroadcastFacilitatorSpeech,
+  } = useWebRTCRoom({
+    slotId: session.slotId || session.id || 'slot-presentation-1',
+    currentUser,
+    videoStream,
+    isCameraOn,
+    onRoomJoined: (roomData) => {
+      if (roomData.status === 'active') {
+        setSession((prev) => ({
+          ...prev,
+          status: 'active',
+          topic: roomData.topic || prev.topic,
+        }));
+      }
+      if (roomData.transcripts && roomData.transcripts.length > 0) {
+        setTranscripts(roomData.transcripts);
+      }
+    },
+    onSessionStarted: () => {
+      setSession((prev) => ({
+        ...prev,
+        status: 'active',
+        startedAt: prev.startedAt || Date.now(),
       }));
-    }
-    // Default to the logged-in student user as the sole presenter
-    const collegeName = currentUser?.college || session.collegeCode || 'BMSIT';
-    return [
-      {
-        id: currentUser?.id || 'stu-presenter-1',
-        name: currentUser?.name || 'Vikram',
-        seatNumber: 1,
-        college: collegeName,
-        course: 'Computer Science & Engineering',
-        batch: '2024-2028',
-        avatar: currentUser?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=presenter`,
+    },
+    onNewTranscript: (entry) => {
+      setTranscripts((prev) => {
+        if (prev.some((t) => t.id === entry.id || (t.text === entry.text && t.speakerName === entry.speakerName))) {
+          return prev;
+        }
+        return [...prev, entry];
+      });
+    },
+    onFacilitatorIntervention: (intervention) => {
+      if (intervention.text) {
+        setAiSpeech(intervention.text);
+      }
+      if (intervention.targetSeatNumber) {
+        setActiveStudentIndex(intervention.targetSeatNumber - 1);
+      }
+    },
+  });
+
+  // 6 Real Presentation Slot Participants (No fake AI audience bots - similar to GD)
+  const presentationStudents: Student[] = useMemo(() => {
+    const capacity = 6;
+    const seatMap = new Map<number, Student>();
+    const usedSeats = new Set<number>();
+
+    // 1. Current logged in user (if student, placed at assigned seat)
+    const userSeat = Number(rtcAssignedSeat) || (currentUser && 'seatNumber' in currentUser ? Number((currentUser as any).seatNumber) : 1) || 1;
+    const normalizedUserSeat = userSeat >= 1 && userSeat <= capacity ? userSeat : 1;
+    
+    if (currentUser?.role === 'student' || (!isFaculty && currentUser)) {
+      usedSeats.add(normalizedUserSeat);
+      seatMap.set(normalizedUserSeat, {
+        id: currentUser.id || 'speaker-user',
+        name: currentUser.name || 'You',
+        college: currentUser.college || session.collegeCode || 'Institution',
+        course: currentUser.course || 'Computer Science & Engineering',
+        batch: currentUser.batch || '2024-2028',
+        avatar: currentUser.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(currentUser.name || 'presenter')}`,
+        seatNumber: normalizedUserSeat,
         isUser: true,
-        micActive: false,
-        isSpeaking: false,
-        hasRaisedHand: false,
-        speakingDurationSeconds: 0,
+        isRealPeer: false,
+        isEmptySeat: false,
+        micActive: isMicOn,
+        cameraActive: isCameraOn,
         speakingTurns: 0,
+        speakingDurationSeconds: presenterSeconds,
+        videoStream: videoStream,
+        isSpeaking: isMicOn,
+        hasRaisedHand: false,
         interruptionCount: 0,
         questionsAnswered: 0,
         questionsInitiated: 0,
         sentiment: 'neutral',
-      },
+      });
+    }
+
+    // 2. Real remote student peers connected via WebRTC
+    const validStudentPeers = (rtcPeers || []).filter(
+      (p) => p && p.role !== 'faculty' && p.role !== 'college_admin' && p.role !== 'super_admin'
+    );
+
+    validStudentPeers.forEach((peer) => {
+      let desiredSeat = Number(peer.seatNumber);
+      if (!desiredSeat || isNaN(desiredSeat) || desiredSeat < 1 || desiredSeat > capacity || usedSeats.has(desiredSeat)) {
+        for (let s = 1; s <= capacity; s++) {
+          if (!usedSeats.has(s)) {
+            desiredSeat = s;
+            break;
+          }
+        }
+      }
+      if (desiredSeat > capacity) return;
+      usedSeats.add(desiredSeat);
+
+      let remoteStream = rtcPeerStreams.get(peer.socketId) || (peer.userId ? rtcPeerStreams.get(peer.userId) : null) || null;
+      if (!remoteStream && rtcPeerStreams.size > 0) {
+        for (const [key, stream] of rtcPeerStreams.entries()) {
+          if (key === peer.socketId || (peer.userId && (key === peer.userId || key.includes(peer.userId)))) {
+            remoteStream = stream;
+            break;
+          }
+        }
+      }
+      if (!remoteStream && validStudentPeers.length === 1 && rtcPeerStreams.size === 1) {
+        remoteStream = Array.from(rtcPeerStreams.values())[0];
+      }
+
+      seatMap.set(desiredSeat, {
+        id: peer.userId || peer.socketId,
+        socketId: peer.socketId,
+        userId: peer.userId,
+        seatNumber: desiredSeat,
+        name: peer.name || `Student ${desiredSeat}`,
+        avatar: peer.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(peer.name || String(desiredSeat))}`,
+        college: peer.college || session.collegeCode || 'Institution',
+        course: (peer as any).course || 'Computer Science & Engineering',
+        batch: (peer as any).batch || '2024-2028',
+        isUser: false,
+        isRealPeer: true,
+        isEmptySeat: false,
+        isSpeaking: !!peer.isSpeaking,
+        micActive: !!peer.micActive,
+        cameraActive: Boolean(peer.cameraActive || remoteStream),
+        speakingTurns: peer.speakingTurns || 0,
+        speakingDurationSeconds: peer.speakingDurationSeconds || 0,
+        videoStream: remoteStream,
+        hasRaisedHand: false,
+        interruptionCount: 0,
+        questionsAnswered: 0,
+        questionsInitiated: 0,
+        sentiment: 'neutral',
+      });
+    });
+
+    // 3. Fill remaining seats up to 6 using the slot's enrolled students roster
+    const rawRoster = (session.students || []).filter(
+      (s) => !s.isEmptySeat && !s.id?.startsWith('ai-') && !s.id?.startsWith('stu-pres-')
+    );
+
+    const defaultStudentRoster = [
+      { name: 'Aarav Patel', college: session.collegeCode || 'BMSIT' },
+      { name: 'Ananya Sharma', college: session.collegeCode || 'BMSIT' },
+      { name: 'Karthik Rao', college: session.collegeCode || 'BMSIT' },
+      { name: 'Pooja Reddy', college: session.collegeCode || 'BMSIT' },
+      { name: 'Rohan Deshmukh', college: session.collegeCode || 'BMSIT' },
+      { name: 'Sneha Kulkarni', college: session.collegeCode || 'BMSIT' },
     ];
-  }, [session.students, currentUser, session.collegeCode]);
+
+    for (let s = 1; s <= capacity; s++) {
+      if (!usedSeats.has(s)) {
+        usedSeats.add(s);
+        const existing = rawRoster.find((st) => Number(st.seatNumber) === s && !st.isUser);
+        const defaultInfo = defaultStudentRoster[s - 1] || { name: `Student ${s}`, college: session.collegeCode || 'BMSIT' };
+        const studentName = existing?.name || defaultInfo.name;
+        seatMap.set(s, {
+          id: existing?.id || `slot-student-${s}`,
+          seatNumber: s,
+          name: studentName,
+          avatar: existing?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(studentName)}`,
+          college: existing?.college || defaultInfo.college,
+          course: existing?.course || 'Computer Science & Engineering',
+          batch: existing?.batch || '2024-2028',
+          isUser: false,
+          isRealPeer: false,
+          isEmptySeat: false,
+          micActive: false,
+          cameraActive: false,
+          isSpeaking: false,
+          speakingTurns: 0,
+          speakingDurationSeconds: 0,
+          hasRaisedHand: false,
+          interruptionCount: 0,
+          questionsAnswered: 0,
+          questionsInitiated: 0,
+          sentiment: 'neutral',
+        });
+      }
+    }
+
+    return Array.from(seatMap.values()).sort((a, b) => (a.seatNumber || 0) - (b.seatNumber || 0));
+  }, [
+    session.students,
+    session.collegeCode,
+    currentUser,
+    isFaculty,
+    isCameraOn,
+    isMicOn,
+    videoStream,
+    presenterSeconds,
+    rtcAssignedSeat,
+    rtcPeers,
+    rtcPeerStreams,
+  ]);
 
   // Per-student individual assigned topics
   const studentTopics = useMemo(() => {
@@ -156,8 +338,6 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
 
   // Activity Execution State (Serial Flow per PDF specification)
   const [phase, setPhase] = useState<PresentationPhase>('opening');
-  const [activeStudentIndex, setActiveStudentIndex] = useState<number>(0);
-  const [presenterSeconds, setPresenterSeconds] = useState<number>(0);
   const [aiSpeech, setAiSpeech] = useState<string>(PRESENTATION_OPENING_SCRIPT);
   const [aiSpeaking, setAiSpeaking] = useState<boolean>(false);
   const [peerQAQuestion, setPeerQAQuestion] = useState<string>('');
@@ -165,16 +345,8 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   const [isPeerQASilenceTriggered, setIsPeerQASilenceTriggered] = useState<boolean>(false);
   const [qaTimerSeconds, setQaTimerSeconds] = useState<number>(0);
 
-  // User media (camera & mic)
-  const { isCameraOn, videoStream, toggleCamera } = useUserMedia();
-  const [isMicOn, setIsMicOn] = useState<boolean>(false);
-  const isMicOnRef = useRef<boolean>(false);
-  const [isRoomAudioMuted, setIsRoomAudioMuted] = useState<boolean>(voiceMuted);
-  const [isSharingScreen, setIsSharingScreen] = useState<boolean>(false);
-
   // Real Screen Sharing & Topic Slide Deck
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
-  const screenVideoRef = useRef<HTMLVideoElement | null>(null);
   const [currentSlideIndex, setCurrentSlideIndex] = useState<number>(0);
   const [slideMode, setSlideMode] = useState<'screen' | 'deck'>('deck');
 
@@ -273,9 +445,9 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   const hasStartedOpeningRef = useRef<boolean>(false);
   const transcriptBottomRef = useRef<HTMLDivElement | null>(null);
 
-  const isFaculty = currentUser?.role === 'faculty' || currentUser?.role === 'college_admin';
   const currentStudentNumber = activeStudentIndex + 1;
   const currentPresenter = presentationStudents[activeStudentIndex] || presentationStudents[0];
+  const isUserPodiumPresenter = Boolean(currentPresenter?.isUser);
   const currentTopic = studentTopics[activeStudentIndex] || session.topic;
 
   // Append entry to live activity transcript feed
@@ -295,6 +467,9 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
       isFacilitator,
       sentiment: 'neutral',
     };
+    if (rtcBroadcastTranscript && isSocketConnected) {
+      rtcBroadcastTranscript(newEntry);
+    }
     setTranscripts((prev) => {
       if (prev.length > 0 && prev[prev.length - 1].text === clean && prev[prev.length - 1].isFacilitator === isFacilitator) {
         return prev;
@@ -335,6 +510,9 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
     const clean = String(text || '').trim();
     setAiSpeech(clean);
     addTranscriptEntry('ERUS AI Instructor', clean, true);
+    if (rtcBroadcastFacilitatorSpeech && isSocketConnected) {
+      rtcBroadcastFacilitatorSpeech(clean, 'presentation_facilitator_guidance');
+    }
     if (!clean || isRoomAudioMuted) {
       if (onEnd) setTimeout(onEnd, 1200);
       return;
@@ -815,11 +993,17 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                       </div>
                     </div>
                   )
-                ) : isCameraOn && videoStream ? (
+                ) : isUserPodiumPresenter && isCameraOn && videoStream ? (
                   <PresentationVideoStream
                     stream={videoStream}
                     className="w-full h-full object-cover transform -scale-x-100"
                     muted={true}
+                  />
+                ) : !isUserPodiumPresenter && currentPresenter?.cameraActive && currentPresenter?.videoStream ? (
+                  <PresentationVideoStream
+                    stream={currentPresenter.videoStream}
+                    className="w-full h-full object-cover"
+                    muted={false}
                   />
                 ) : (
                   <div className="w-full h-full bg-gradient-to-b from-slate-800 to-slate-900 flex flex-col items-center justify-center p-4 relative">
@@ -832,7 +1016,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                       {currentPresenter?.name}
                     </span>
                     <span className="text-[10px] text-slate-300">
-                      Camera Off • Avatar Active
+                      {currentPresenter?.cameraActive ? 'Camera Connected' : 'Camera Off • Avatar Active'}
                     </span>
                   </div>
                 )}
@@ -840,13 +1024,13 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                 {/* Presenter Live Status Badge */}
                 <div className="absolute bottom-2 inset-x-2 flex items-center justify-between pointer-events-none">
                   <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-900/80 text-amber-300 border border-amber-400/30 backdrop-blur-xs">
-                    Seat #{currentStudentNumber}
+                    Seat #{currentStudentNumber} • {isUserPodiumPresenter ? 'You (Presenter)' : currentPresenter?.name}
                   </span>
                   <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold flex items-center gap-1 backdrop-blur-xs ${
-                    isMicOn ? 'bg-emerald-600/90 text-white' : 'bg-rose-600/90 text-white'
+                    (isUserPodiumPresenter ? isMicOn : currentPresenter?.micActive) ? 'bg-emerald-600/90 text-white' : 'bg-rose-600/90 text-white'
                   }`}>
-                    {isMicOn ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
-                    <span>{isMicOn ? 'Speaking' : 'Muted'}</span>
+                    {(isUserPodiumPresenter ? isMicOn : currentPresenter?.micActive) ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
+                    <span>{(isUserPodiumPresenter ? isMicOn : currentPresenter?.micActive) ? 'Speaking' : 'Muted'}</span>
                   </span>
                 </div>
               </div>
@@ -855,9 +1039,9 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
               <div className="mt-3 flex flex-col items-center">
                 <h3 className="text-base sm:text-lg font-extrabold text-slate-900 flex items-center gap-2">
                   <span>{currentPresenter?.name}</span>
-                  {currentPresenter?.isUser && (
+                  {isUserPodiumPresenter && (
                     <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-bold">
-                      You
+                      You (Presenter)
                     </span>
                   )}
                 </h3>
@@ -866,76 +1050,88 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                 </p>
               </div>
 
-              {/* Presenter Podium Controls */}
-              <div className="mt-3 w-full bg-white border border-amber-200/90 rounded-2xl p-2.5 shadow-2xs flex flex-wrap items-center justify-center gap-2">
+              {/* Presenter Podium / Audience Controls */}
+              <div className="mt-3 w-full bg-white border border-amber-200/90 rounded-2xl p-2.5 shadow-2xs flex flex-wrap items-center justify-between gap-2">
                 
-                {/* 1. MUTE / UNMUTE MICROPHONE */}
-                <button
-                  type="button"
-                  onClick={handleToggleMic}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs ${
-                    isMicOn
-                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-400/40'
-                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300'
-                  }`}
-                  title={isMicOn ? 'Click to Mute Microphone' : 'Click to Unmute Microphone'}
-                >
-                  {isMicOn ? (
-                    <>
-                      <Mic className="w-3.5 h-3.5 animate-pulse text-white" />
-                      <span>Mic: Active</span>
-                    </>
-                  ) : (
-                    <>
-                      <MicOff className="w-3.5 h-3.5 text-rose-500" />
-                      <span>Mic: Muted</span>
-                    </>
-                  )}
-                </button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* 1. MUTE / UNMUTE MICROPHONE */}
+                  <button
+                    type="button"
+                    onClick={handleToggleMic}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs ${
+                      isMicOn
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-400/40'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300'
+                    }`}
+                    title={isMicOn ? 'Click to Mute Microphone' : 'Click to Unmute Microphone'}
+                  >
+                    {isMicOn ? (
+                      <>
+                        <Mic className="w-3.5 h-3.5 animate-pulse text-white" />
+                        <span>My Mic: Active</span>
+                      </>
+                    ) : (
+                      <>
+                        <MicOff className="w-3.5 h-3.5 text-rose-500" />
+                        <span>My Mic: Muted</span>
+                      </>
+                    )}
+                  </button>
 
-                {/* 2. TURN VIDEO ON / OFF */}
-                <button
-                  type="button"
-                  onClick={handleToggleVideo}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs ${
-                    isCameraOn
-                      ? 'bg-indigo-600 hover:bg-indigo-700 text-white ring-2 ring-indigo-400/40'
-                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300'
-                  }`}
-                  title={isCameraOn ? 'Click to Turn Off Video Camera' : 'Click to Turn On Video Camera'}
-                >
-                  {isCameraOn ? (
-                    <>
-                      <Video className="w-3.5 h-3.5 text-white" />
-                      <span>Video: On</span>
-                    </>
-                  ) : (
-                    <>
-                      <VideoOff className="w-3.5 h-3.5 text-slate-500" />
-                      <span>Video: Off</span>
-                    </>
-                  )}
-                </button>
+                  {/* 2. TURN VIDEO ON / OFF */}
+                  <button
+                    type="button"
+                    onClick={handleToggleVideo}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs ${
+                      isCameraOn
+                        ? 'bg-indigo-600 hover:bg-indigo-700 text-white ring-2 ring-indigo-400/40'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300'
+                    }`}
+                    title={isCameraOn ? 'Click to Turn Off Video Camera' : 'Click to Turn On Video Camera'}
+                  >
+                    {isCameraOn ? (
+                      <>
+                        <Video className="w-3.5 h-3.5 text-white" />
+                        <span>My Video: On</span>
+                      </>
+                    ) : (
+                      <>
+                        <VideoOff className="w-3.5 h-3.5 text-slate-500" />
+                        <span>My Video: Off</span>
+                      </>
+                    )}
+                  </button>
 
-                {/* 3. SHARE SLIDES / SCREEN */}
-                <button
-                  type="button"
-                  onClick={handleToggleScreenShare}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer shadow-2xs border ${
-                    isSharingScreen
-                      ? 'bg-amber-600 hover:bg-amber-700 text-white border-amber-500 shadow-sm'
-                      : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300'
-                  }`}
-                  title={isSharingScreen ? 'Close Slides' : 'Share Presentation Slides'}
-                >
-                  <Share2 className="w-3.5 h-3.5 text-amber-700" />
-                  <span>{isSharingScreen ? 'Hide Slides' : 'Share Slides'}</span>
-                </button>
+                  {/* 3. SHARE SLIDES / SCREEN (Only active presenter) */}
+                  {isUserPodiumPresenter && (
+                    <button
+                      type="button"
+                      onClick={handleToggleScreenShare}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer shadow-2xs border ${
+                        isSharingScreen
+                          ? 'bg-amber-600 hover:bg-amber-700 text-white border-amber-500 shadow-sm'
+                          : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300'
+                      }`}
+                      title={isSharingScreen ? 'Close Slides' : 'Share Presentation Slides'}
+                    >
+                      <Share2 className="w-3.5 h-3.5 text-amber-700" />
+                      <span>{isSharingScreen ? 'Hide Slides' : 'Share Slides'}</span>
+                    </button>
+                  )}
+                </div>
+
+                <span className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border ${
+                  isUserPodiumPresenter
+                    ? 'bg-amber-100 text-amber-900 border-amber-300'
+                    : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                }`}>
+                  {isUserPodiumPresenter ? '🎤 You are at the Podium' : `🎧 Listening to Seat #${currentStudentNumber}`}
+                </span>
               </div>
 
               {/* Stage Flow Action Buttons */}
               <div className="mt-2.5 w-full flex items-center justify-center gap-2 flex-wrap">
-                {phase === 'presenting' && (
+                {isUserPodiumPresenter && phase === 'presenting' && (
                   <button
                     type="button"
                     onClick={handleCompletePresentation}
@@ -946,7 +1142,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                   </button>
                 )}
 
-                {(phase === 'peer_qa' || phase === 'ai_qa') && (
+                {(isFaculty || isUserPodiumPresenter) && (phase === 'peer_qa' || phase === 'ai_qa') && (
                   <button
                     type="button"
                     onClick={handleAcknowledgeAnswerAndProceed}
@@ -958,6 +1154,107 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                 )}
               </div>
 
+            </div>
+
+            {/* ======================================================== */}
+            {/* ALL 6 CLASSROOM PARTICIPANTS (REAL PEERS & ENROLLED STUDENTS) */}
+            {/* ======================================================== */}
+            <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm flex flex-col gap-2.5">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+                    <Users className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                      <span>All 6 Enrolled Seminar Participants</span>
+                      <span className="px-1.5 py-0.2 rounded-full text-[9px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                        6 Seats Active
+                      </span>
+                    </h4>
+                    <p className="text-[10px] text-slate-500">
+                      Real peers and enrolled student roster for this presentation session
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+                  Active Speaker: Seat #{currentStudentNumber}
+                </span>
+              </div>
+
+              {/* 6 Participant Tiles */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+                {presentationStudents.map((student, idx) => {
+                  const isPodiumSpeaker = idx === activeStudentIndex;
+                  return (
+                    <div
+                      key={student.id || idx}
+                      onClick={() => {
+                        if (isFaculty) setActiveStudentIndex(idx);
+                      }}
+                      className={`relative rounded-2xl border p-2 flex flex-col items-center text-center transition-all cursor-pointer ${
+                        isPodiumSpeaker
+                          ? 'bg-amber-50/90 border-2 border-amber-400 ring-2 ring-amber-300/40 shadow-xs'
+                          : student.isUser
+                          ? 'bg-indigo-50/70 border-indigo-300 shadow-2xs'
+                          : 'bg-slate-50 border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      {/* Top Badges */}
+                      <div className="w-full flex items-center justify-between text-[8px] sm:text-[9px] font-bold mb-1">
+                        <span className="px-1.5 py-0.2 rounded bg-slate-200/90 text-slate-700 font-mono">
+                          #{student.seatNumber || idx + 1}
+                        </span>
+                        {isPodiumSpeaker ? (
+                          <span className="px-1.5 py-0.2 rounded bg-amber-500 text-slate-950 font-extrabold flex items-center gap-0.5 animate-pulse">
+                            Podium
+                          </span>
+                        ) : student.isUser ? (
+                          <span className="px-1.5 py-0.2 rounded bg-indigo-600 text-white font-extrabold">
+                            You
+                          </span>
+                        ) : student.isRealPeer ? (
+                          <span className="px-1.5 py-0.2 rounded bg-emerald-600 text-white font-extrabold">
+                            Live
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {/* Video / Avatar */}
+                      <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full overflow-hidden border-2 border-slate-300 relative bg-slate-900 flex items-center justify-center mb-1">
+                        {student.cameraActive && student.videoStream ? (
+                          <PresentationVideoStream
+                            stream={student.videoStream}
+                            className={`w-full h-full object-cover ${student.isUser ? 'transform -scale-x-100' : ''}`}
+                            muted={true}
+                          />
+                        ) : (
+                          <img
+                            src={student.avatar}
+                            alt={student.name}
+                            className="w-full h-full object-cover bg-slate-700"
+                          />
+                        )}
+                        <div className="absolute bottom-0 right-0 p-0.5 rounded-full bg-slate-950/80 text-white">
+                          {student.micActive ? (
+                            <Mic className="w-2.5 h-2.5 text-emerald-400" />
+                          ) : (
+                            <MicOff className="w-2.5 h-2.5 text-rose-400" />
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Name & College */}
+                      <span className="text-[10px] sm:text-[11px] font-bold text-slate-900 truncate w-full leading-tight">
+                        {student.name}
+                      </span>
+                      <span className="text-[8px] sm:text-[9px] text-slate-500 truncate w-full">
+                        {student.college || 'BMSIT'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Faculty Evaluator Status Card */}
