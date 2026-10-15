@@ -26,6 +26,7 @@ import {
 } from '../../utils/classroomPresentationEngine';
 import { useUserMedia } from '../../utils/useUserMedia';
 import { roomVoice } from '../../utils/speechSynthesis';
+import { useGDRecorder } from '../../utils/gdRecorder';
 
 export interface ClassroomPresentationRoomProps {
   session: GDSession;
@@ -113,7 +114,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   const isFaculty = currentUser?.role === 'faculty' || currentUser?.role === 'college_admin';
 
   // User media (camera & mic)
-  const { isCameraOn, videoStream, toggleCamera } = useUserMedia();
+  const { isCameraOn, videoStream, toggleCamera, audioStream } = useUserMedia();
   const [isMicOn, setIsMicOn] = useState<boolean>(false);
   const isMicOnRef = useRef<boolean>(false);
   const [isRoomAudioMuted, setIsRoomAudioMuted] = useState<boolean>(voiceMuted);
@@ -368,6 +369,42 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
       return DEFAULT_PRESENTATION_TOPICS[idx] || session.topic || `Research & Applications in Engineering`;
     });
   }, [presentationStudents, session.presentationTopics, session.topic]);
+
+  // Automated Presentation Video/Audio Recorder (Saved to Faculty Dashboard)
+  const gdRecorder = useGDRecorder({
+    slotId: session.slotId || session.id || 'slot-1',
+    isSessionActive: session.status === 'active',
+    localStream: videoStream,
+    localAudioStream: audioStream,
+    peerStreams: rtcPeerStreams,
+    recordVideo: true,
+    enabled: true,
+    topicTitle: session.topic || 'Classroom Presentation',
+    participantTiles: presentationStudents.map((st) => ({
+      id: st.id,
+      socketId: st.socketId,
+      userId: st.userId,
+      name: st.name,
+      college: st.college,
+      seatNumber: st.seatNumber,
+      isSpeaking: st.isSpeaking,
+      cameraActive: st.cameraActive,
+      videoStream: st.videoStream,
+    })),
+    autoStartOnActive: true,
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).__erusStopAndUploadRecording = () =>
+        gdRecorder.stopAndUploadRecording(session.slotId || session.id);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        delete (window as any).__erusStopAndUploadRecording;
+      }
+    };
+  }, [gdRecorder, session.slotId, session.id]);
 
   // Activity Execution State (Serial Flow per PDF specification)
   const [phase, setPhase] = useState<PresentationPhase>('opening');
@@ -648,8 +685,19 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   }, [phase, session.status, isPeerQASilenceTriggered]);
 
   // Finalize Activity & Generate Presentation Reports
-  const handleFinalizeAllPresentations = () => {
-    // Generate reports for all 6 students based on the 6 indicators
+  const handleFinalizeAllPresentations = async () => {
+    if (gdRecorder.isRecording) {
+      try {
+        const uploadResult = await gdRecorder.stopAndUploadRecording(session.slotId || session.id);
+        if (uploadResult?.recordingUrl) {
+          session.recordingUrl = uploadResult.recordingUrl;
+        }
+      } catch (err) {
+        console.warn('[Classroom Presentation] Recording upload failed:', err);
+      }
+    }
+
+    // Generate reports for all students based on the 6 indicators
     const finalReports: PresentationAssessmentReport[] = presentationStudents.map((stu, idx) => {
       const spokenSec = idx === activeStudentIndex ? presenterSeconds : (idx < activeStudentIndex ? 420 : 0);
       return calculatePresentationReport({
@@ -851,6 +899,20 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
               </button>
             )
           )}
+
+          {/* Live Recording Status Badge */}
+          {gdRecorder.isRecording ? (
+            <span className="px-3 py-1 rounded-full text-xs font-bold bg-rose-50 border border-rose-200 text-rose-700 flex items-center gap-1.5 shadow-2xs animate-pulse" title="Presentation session is being recorded and stored to ERUS server for Faculty Evaluation">
+              <span className="w-2 h-2 rounded-full bg-rose-600 animate-ping inline-block" />
+              <span className="font-mono">🔴 REC {gdRecorder.formattedDuration}</span>
+              <span className="text-[10px] text-slate-500 font-sans hidden sm:inline">(Auto-recording for Faculty)</span>
+            </span>
+          ) : session.recordingUrl ? (
+            <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center gap-1.5 shadow-2xs">
+              <Video className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Recording Saved</span>
+            </span>
+          ) : null}
 
           <button
             onClick={() => setIsRoomAudioMuted(!isRoomAudioMuted)}

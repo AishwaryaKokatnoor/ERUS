@@ -1061,11 +1061,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // Automated Live Discussion Multi-Stream Video/Audio Recorder
   // Runs on Faculty/Admin or active Student client so EVERY GD is recorded reliably
   const isRecordingClient = useMemo(() => {
-    if (isFacultyOrAdmin) return true;
-    const hasFacultyInRoom = (rtcPeers || []).some((p) => p.role === 'faculty' || p.role === 'college_admin');
-    if (hasFacultyInRoom) return false;
     return true;
-  }, [isFacultyOrAdmin, rtcPeers]);
+  }, []);
 
   const gdRecorder = useGDRecorder({
     slotId: session.slotId || session.id || 'slot-1',
@@ -2358,11 +2355,12 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 <span>Faculty: <strong>{session?.assignedFacultyName || 'Assigned Faculty Evaluator'}</strong></span>
               </span>
 
-              {/* Live Video Recording Status Indicator (Recorded strictly for Faculty/Admin portal) */}
-              {isFacultyOrAdmin && gdRecorder.isRecording ? (
-                <span className="px-3 py-1 rounded-full text-xs font-bold bg-rose-50 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 flex items-center gap-1.5 shadow-2xs animate-pulse" title="GD discussion video grid is actively being recorded and stored to ERUS server">
+              {/* Live Video Recording Status Indicator (Recorded for Faculty/Admin portal) */}
+              {gdRecorder.isRecording ? (
+                <span className="px-3 py-1 rounded-full text-xs font-bold bg-rose-50 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 flex items-center gap-1.5 shadow-2xs animate-pulse" title="GD discussion video grid is actively being recorded and stored to ERUS server for Faculty Evaluation">
                   <span className="w-2 h-2 rounded-full bg-rose-600 animate-ping inline-block" />
-                  <span className="font-mono">REC {gdRecorder.formattedDuration} (Video Grid)</span>
+                  <span className="font-mono">🔴 REC {gdRecorder.formattedDuration}</span>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400 font-sans hidden sm:inline">(Auto-recording for Faculty)</span>
                 </span>
               ) : (gdRecorder.recordingUrl || session.recordingUrl) ? (
                 <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5 shadow-2xs">
