@@ -189,7 +189,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
         college: currentUser.college || session.collegeCode || 'Institution',
         course: currentUser.course || 'Computer Science & Engineering',
         batch: currentUser.batch || '2024-2028',
-        avatar: currentUser.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(currentUser.name || 'presenter')}`,
+        avatar: currentUser.avatar || `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(currentUser.name || 'presenter')}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`,
         seatNumber: normalizedUserSeat,
         isUser: true,
         isRealPeer: false,
@@ -245,7 +245,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
         userId: peer.userId,
         seatNumber: desiredSeat,
         name: peer.name || `Student ${desiredSeat}`,
-        avatar: peer.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(peer.name || String(desiredSeat))}`,
+        avatar: peer.avatar || `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(peer.name || String(desiredSeat))}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`,
         college: peer.college || session.collegeCode || 'Institution',
         course: (peer as any).course || 'Computer Science & Engineering',
         batch: (peer as any).batch || '2024-2028',
@@ -266,52 +266,85 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
       });
     });
 
-    // 3. Fill remaining seats up to 6 using the slot's enrolled students roster
-    const rawRoster = (session.students || []).filter(
-      (s) => !s.isEmptySeat && !s.id?.startsWith('ai-') && !s.id?.startsWith('stu-pres-')
-    );
+    // 3. Keep any actual registered students from session.students who aren't already placed (strictly real registered students, never dummy/AI)
+    const existingEnrolled = Array.isArray(session.students) ? session.students : [];
+    existingEnrolled.forEach((st) => {
+      if (
+        !st ||
+        st.isEmptySeat ||
+        st.isUser ||
+        st.id?.startsWith('seat-') ||
+        st.id?.startsWith('slot-stu-') ||
+        st.id?.startsWith('slot-student-') ||
+        st.id?.startsWith('ai-') ||
+        st.id?.startsWith('stu-pres-') ||
+        st.name?.startsWith('Seat ') ||
+        (st as any).role === 'faculty' ||
+        (st as any).role === 'college_admin' ||
+        (st as any).role === 'super_admin' ||
+        (currentUser?.id && st.id === currentUser.id) ||
+        (currentUser?.name && st.name === currentUser.name)
+      ) {
+        return;
+      }
+      const alreadyPlaced = Array.from(seatMap.values()).some((p) => p.id === st.id || p.name === st.name);
+      if (alreadyPlaced) return;
 
-    const defaultStudentRoster = [
-      { name: 'Aarav Patel', college: session.collegeCode || 'BMSIT' },
-      { name: 'Ananya Sharma', college: session.collegeCode || 'BMSIT' },
-      { name: 'Karthik Rao', college: session.collegeCode || 'BMSIT' },
-      { name: 'Pooja Reddy', college: session.collegeCode || 'BMSIT' },
-      { name: 'Rohan Deshmukh', college: session.collegeCode || 'BMSIT' },
-      { name: 'Sneha Kulkarni', college: session.collegeCode || 'BMSIT' },
-    ];
-
-    for (let s = 1; s <= capacity; s++) {
-      if (!usedSeats.has(s)) {
-        usedSeats.add(s);
-        const existing = rawRoster.find((st) => Number(st.seatNumber) === s && !st.isUser);
-        const defaultInfo = defaultStudentRoster[s - 1] || { name: `Student ${s}`, college: session.collegeCode || 'BMSIT' };
-        const studentName = existing?.name || defaultInfo.name;
-        seatMap.set(s, {
-          id: existing?.id || `slot-student-${s}`,
-          seatNumber: s,
-          name: studentName,
-          avatar: existing?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(studentName)}`,
-          college: existing?.college || defaultInfo.college,
-          course: existing?.course || 'Computer Science & Engineering',
-          batch: existing?.batch || '2024-2028',
+      let targetSeat = Number(st.seatNumber);
+      if (!targetSeat || isNaN(targetSeat) || targetSeat < 1 || targetSeat > capacity || usedSeats.has(targetSeat)) {
+        for (let s = 1; s <= capacity; s++) {
+          if (!usedSeats.has(s)) {
+            targetSeat = s;
+            break;
+          }
+        }
+      }
+      if (targetSeat && !usedSeats.has(targetSeat) && targetSeat <= capacity) {
+        usedSeats.add(targetSeat);
+        seatMap.set(targetSeat, {
+          ...st,
+          seatNumber: targetSeat,
           isUser: false,
-          isRealPeer: false,
           isEmptySeat: false,
-          micActive: false,
-          cameraActive: false,
-          isSpeaking: false,
-          speakingTurns: 0,
-          speakingDurationSeconds: 0,
-          hasRaisedHand: false,
-          interruptionCount: 0,
-          questionsAnswered: 0,
-          questionsInitiated: 0,
-          sentiment: 'neutral',
+          isRealPeer: false,
+          avatar: st.avatar || `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(st.name)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`,
         });
       }
+    });
+
+    // Return strictly real participants (only current user, live peers, and verified slot enrollee students)
+    const finalRealParticipants = Array.from(seatMap.values())
+      .filter((s) => !s.isEmptySeat && !s.id?.startsWith('ai-') && !s.id?.startsWith('slot-student-') && s.college !== 'Available Desk')
+      .sort((a, b) => (a.seatNumber || 0) - (b.seatNumber || 0));
+
+    // Fallback: If empty, at least ensure currentUser is present
+    if (finalRealParticipants.length === 0 && currentUser) {
+      return [{
+        id: currentUser.id || 'speaker-user',
+        name: currentUser.name || 'You',
+        college: currentUser.college || session.collegeCode || 'Institution',
+        course: currentUser.course || 'Computer Science & Engineering',
+        batch: currentUser.batch || '2024-2028',
+        avatar: currentUser.avatar || `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(currentUser.name || 'presenter')}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`,
+        seatNumber: 1,
+        isUser: true,
+        isRealPeer: false,
+        isEmptySeat: false,
+        micActive: isMicOn,
+        cameraActive: isCameraOn,
+        speakingTurns: 0,
+        speakingDurationSeconds: presenterSeconds,
+        videoStream: videoStream,
+        isSpeaking: isMicOn,
+        hasRaisedHand: false,
+        interruptionCount: 0,
+        questionsAnswered: 0,
+        questionsInitiated: 0,
+        sentiment: 'neutral',
+      }];
     }
 
-    return Array.from(seatMap.values()).sort((a, b) => (a.seatNumber || 0) - (b.seatNumber || 0));
+    return finalRealParticipants;
   }, [
     session.students,
     session.collegeCode,
@@ -633,16 +666,16 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
       });
     });
 
-    console.log('[Classroom Presentation] Finalized reports for 6 students:', finalReports);
+    console.log('[Classroom Presentation] Finalized reports for students:', finalReports);
     onFinishSession();
   };
 
   // Answer Q&A and Transition to Next Student (Stage 4)
   const handleAcknowledgeAnswerAndProceed = () => {
     const clarification = currentAiQuestion?.clarification || 'Thank you for your response. Clear communication of technical concepts is essential.';
-    const nextNum = currentStudentNumber + 1;
+    const nextIdx = activeStudentIndex + 1;
 
-    if (nextNum > presentationStudents.length) {
+    if (nextIdx >= presentationStudents.length) {
       // Stage 5: Closing remarks
       setPhase('closing');
       speakAI(PRESENTATION_CLOSING_SCRIPT, () => {
@@ -651,9 +684,11 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
       });
     } else {
       setPhase('transition');
-      const transScript = `${clarification}\n\n${getTransitionScript(currentStudentNumber, nextNum)}`;
+      const nextStudent = presentationStudents[nextIdx];
+      const nextStudentNum = nextStudent?.seatNumber || (nextIdx + 1);
+      const transScript = `${clarification}\n\n${getTransitionScript(currentStudentNumber, nextStudentNum)}`;
       speakAI(transScript, () => {
-        callStudentToPresent(nextNum);
+        callStudentToPresent(nextStudentNum);
       });
     }
   };
@@ -1167,9 +1202,9 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                   </div>
                   <div>
                     <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                      <span>All 6 Enrolled Seminar Participants</span>
+                      <span>Seminar Participants</span>
                       <span className="px-1.5 py-0.2 rounded-full text-[9px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                        6 Seats Active
+                        {presentationStudents.length} {presentationStudents.length === 1 ? 'Participant Connected' : 'Participants Connected'}
                       </span>
                     </h4>
                     <p className="text-[10px] text-slate-500">
@@ -1182,7 +1217,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                 </span>
               </div>
 
-              {/* 6 Participant Tiles */}
+              {/* Participant Tiles */}
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
                 {presentationStudents.map((student, idx) => {
                   const isPodiumSpeaker = idx === activeStudentIndex;
