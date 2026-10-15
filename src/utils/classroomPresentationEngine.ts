@@ -13,30 +13,16 @@ export interface PresentationSlotStudent {
 // ==========================================
 // 1. OPENING SCRIPT (PDF Page 1)
 // ==========================================
+// 1. OPENING SCRIPT (PDF Page 1)
+// ==========================================
+export function getPresentationOpeningScript(topic?: string, participantCount?: number): string {
+  const cleanTopic = topic && topic.trim() ? topic.trim() : 'technical innovations and research frameworks';
+  const countStr = participantCount && participantCount > 1 ? `${participantCount} participants` : 'our candidates';
+  return `Good morning, everyone! Welcome to the ERUS Classroom Seminar on "${cleanTopic}". Today, ${countStr} will present their technical analysis followed by peer discussion and Q and A. Each presenter has 6 to 8 minutes to present. Please explain the concepts clearly with practical applications. Let us begin with our first presenter!`;
+}
+
 export const PRESENTATION_OPENING_SCRIPT = 
-`Good morning, everyone! Welcome to the ERUS Student Presentation Activity.
-
-Today, six students will present their assigned topics related to research, technology, and industry applications.
-
-The objective of this activity is to develop your technical knowledge, communication skills, presentation skills, critical thinking, and confidence.
-
-Each student will get 6 to 8 minutes to present their topic.
-
-After every presentation, I will invite the remaining students to ask questions related to the topic. This will help you develop the ability to listen carefully, understand technical concepts, think critically, and communicate effectively.
-
-Please follow these instructions:
-1. Present your topic clearly and confidently.
-2. Explain the important concepts with suitable examples.
-3. Connect your topic to real-world or industry applications wherever possible.
-4. Listen carefully to other students' presentations.
-5. Ask relevant and meaningful questions.
-6. Answer questions politely and confidently.
-
-Remember, this is a learning activity. Do not hesitate to speak, ask questions, or express your ideas.
-
-I will now begin the presentations by calling the students in serial order, from Student Number 1 to Student Number 6.
-
-Let us begin with Student Number 1!`;
+`Good morning, everyone! Welcome to the ERUS Classroom Presentation Activity. Today, participants will present their assigned topics on research, technology, and industry applications. Each presenter has 6 to 8 minutes, followed by Peer Q and A. Please present your concepts clearly with practical examples and engage actively. Let us begin with our first presenter!`;
 
 // ==========================================
 // 2. CALLING STUDENTS IN SERIAL ORDER (PDF Page 2)
@@ -59,7 +45,7 @@ export function getSerialCallScript(serialNumber: number, studentName?: string, 
     case 6:
       return `Excellent. We have reached our final presentation. Student Number 6${nameSuffix}, please begin your presentation${topicSuffix}. All the best!`;
     default:
-      return `Student Number ${serialNumber}${nameSuffix}, please begin your presentation. You have 6 to 8 minutes. All the best!`;
+      return `Student Number ${serialNumber}${nameSuffix}, please begin your presentation${topicSuffix}. You have 6 to 8 minutes. All the best!`;
   }
 }
 
@@ -67,23 +53,11 @@ export function getSerialCallScript(serialNumber: number, studentName?: string, 
 // 3. PEER Q&A INVITATION & SILENCE SCRIPTS (PDF Page 3)
 // ==========================================
 export function getPeerQAInvitationScript(presenterNum: number, nextStudentNum: number): string {
-  return `Thank you for your presentation.
-
-Now, let us have a short question-and-answer session.
-
-The other students should ask questions related to the topic presented. Please think about the concepts you have heard and identify anything you would like to understand better.
-
-Would Student Number ${nextStudentNum} like to ask the first question?`;
+  return `Thank you for your presentation. Now, let us have a short question-and-answer session. The floor is open for peer questions on this topic. Would Student Number ${nextStudentNum} like to ask the first question?`;
 }
 
 export const PEER_QA_SILENCE_SCRIPT = 
-`Come on, everyone! This is an opportunity to learn from one another.
-
-You may ask about a concept you did not understand, a practical application, a technical challenge, or a real-world example.
-
-Let me give you a few seconds to think...
-
-Since no one has asked a question, I will ask one.`;
+`Since no questions have been raised by peers yet, I will ask a technical question on this topic.`;
 
 // ==========================================
 // 4. AI TOPIC-GROUNDED QUESTION GENERATOR (PDF Page 4)
@@ -102,36 +76,18 @@ export interface PresentationAIQuestion {
   clarification: string;
 }
 
-export function generateAIQuestionForTopic(topic: string, questionType?: PresentationQuestionType): PresentationAIQuestion {
-  const t = topic.trim() || 'this technology';
+export function generateAIQuestionForTopic(
+  topic: string, 
+  transcriptText?: string, 
+  questionType?: PresentationQuestionType
+): PresentationAIQuestion {
+  const cleanTopic = String(topic || 'the assigned technology')
+    .replace(/\s*\(Part\s*\d+\)/gi, '')
+    .replace(/\s*\(Perspective\s*\d+\)/gi, '')
+    .replace(/^Topic:\s*/i, '')
+    .trim() || 'the assigned technology';
 
-  const bank: Record<PresentationQuestionType, { question: string; clarification: string }> = {
-    conceptual: {
-      question: `What is the primary underlying principle that makes ${t} effective, and how would you explain it to a non-technical audience?`,
-      clarification: `The key point to remember is that conceptual clarity requires distinguishing the core mechanism from secondary features.`,
-    },
-    application: {
-      question: `How can the concepts discussed in ${t} be deployed in real-world Indian industry or enterprise workflows to solve a practical problem?`,
-      clarification: `The key point to remember is connecting theoretical architecture with industry constraints, cost parameters, and scalability.`,
-    },
-    analytical: {
-      question: `What are the major performance limitations, security concerns, or operational trade-offs associated with ${t}?`,
-      clarification: `The key point to remember is that every engineering framework balances performance efficiency against complexity and security overhead.`,
-    },
-    research: {
-      question: `What fundamental open problem or gap in existing research does ${t} attempt to address?`,
-      clarification: `The key point to remember is clearly identifying the problem boundary before proposing technical solutions.`,
-    },
-    critical_thinking: {
-      question: `What would happen to the reliability of ${t} if one of its core underlying assumptions or resource conditions failed?`,
-      clarification: `The key point to remember is stress-testing system assumptions against real-world edge cases and unpredictable failure modes.`,
-    },
-    future_oriented: {
-      question: `Projecting five to seven years ahead: how might ${t} evolve, and what new multidisciplinary skills will professionals need?`,
-      clarification: `The key point to remember is preparing for rapid technological convergence and continuous skill adaptability.`,
-    },
-  };
-
+  const lower = cleanTopic.toLowerCase();
   const types: PresentationQuestionType[] = [
     'conceptual',
     'application',
@@ -140,12 +96,199 @@ export function generateAIQuestionForTopic(topic: string, questionType?: Present
     'critical_thinking',
     'future_oriented',
   ];
-
   const chosenType = questionType || types[Math.floor(Math.random() * types.length)];
+
+  // Domain categorization
+  const isAI = /ai|intelligence|machine learning|deep learning|neural|llm|nlp|vision|data science|algorithm/i.test(lower);
+  const isSecurity = /security|cyber|hack|crypto|blockchain|privacy|zero trust|threat|auth/i.test(lower);
+  const isCloudOrIoT = /cloud|distributed|iot|sensor|embedded|network|microservice|kubernetes|serverless/i.test(lower);
+  const isHardwareOrEnergy = /energy|battery|solar|electric vehicle|ev|power|mechanical|robot|hardware|semiconductor/i.test(lower);
+  const isBiotechOrHealth = /health|medical|biomed|patient|clinical|pharma|bio/i.test(lower);
+
+  let question = '';
+  let clarification = '';
+
+  if (isAI) {
+    const aiQuestions: Record<PresentationQuestionType, { q: string; c: string }> = {
+      conceptual: {
+        q: `In your presentation on "${cleanTopic}", how does the system validate model generalization to prevent overfitting and bias on unseen data?`,
+        c: `The fundamental point is ensuring models generalize beyond training benchmarks and address statistical data drift in production.`,
+      },
+      application: {
+        q: `When deploying "${cleanTopic}" into enterprise production, what are the primary inference latency, compute budget, and scaling trade-offs?`,
+        c: `Real-world engineering requires balancing algorithmic precision against infrastructure cost and operational throughput.`,
+      },
+      analytical: {
+        q: `What critical failure modes or accuracy degradation risks emerge in "${cleanTopic}" when input distributions shift unexpectedly?`,
+        c: `Robust machine learning frameworks must implement active monitoring and fallback thresholds for distribution shift.`,
+      },
+      research: {
+        q: `What open mathematical or architectural limitation in "${cleanTopic}" still requires novel research breakthroughs?`,
+        c: `Advancing AI systems requires addressing fundamental bottlenecks like memory bandwidth, interpretability, and sample complexity.`,
+      },
+      critical_thinking: {
+        q: `If the training dataset or feedback loop in "${cleanTopic}" is corrupted by adversarial noise, how resilient is the pipeline?`,
+        c: `High-stakes AI architectures must incorporate adversarial verification and data sanitization checkpoints.`,
+      },
+      future_oriented: {
+        q: `Over the next five years, how will edge hardware acceleration and multimodal integration reshape "${cleanTopic}"?`,
+        c: `Preparing for future deployments requires understanding model quantization, local inference, and multimodal convergence.`,
+      },
+    };
+    question = aiQuestions[chosenType].q;
+    clarification = aiQuestions[chosenType].c;
+  } else if (isSecurity) {
+    const secQuestions: Record<PresentationQuestionType, { q: string; c: string }> = {
+      conceptual: {
+        q: `In "${cleanTopic}", what is the primary threat model, and what zero-trust principles are implemented to safeguard data confidentiality?`,
+        c: `Effective security architecture assumes perimeter compromise and relies on end-to-end cryptographic verification.`,
+      },
+      application: {
+        q: `How does an enterprise implement "${cleanTopic}" without creating unacceptable performance bottlenecks or user friction?`,
+        c: `Production security demands balancing defense-in-depth overhead against user latency and developer velocity.`,
+      },
+      analytical: {
+        q: `What are the most vulnerable attack vectors or side-channel risks associated with "${cleanTopic}"?`,
+        c: `Comprehensive threat mitigation requires analyzing side channels, misconfigurations, and supply-chain dependencies.`,
+      },
+      research: {
+        q: `How will post-quantum cryptography or decentralized protocols challenge the core assumptions of "${cleanTopic}"?`,
+        c: `Next-generation security models must anticipate asymmetric cryptanalysis and quantum algorithmic speedups.`,
+      },
+      critical_thinking: {
+        q: `In the event of a compromised root credential or insider threat, how does "${cleanTopic}" limit the blast radius?`,
+        c: `Resilient systems partition trust boundaries and enforce automated least-privilege revocation.`,
+      },
+      future_oriented: {
+        q: `How will autonomous AI-driven cyber threats impact the defensive posture of "${cleanTopic}" over the coming decade?`,
+        c: `Future cyber defense shifts from reactive signature matching to autonomous real-time behavioral anomaly detection.`,
+      },
+    };
+    question = secQuestions[chosenType].q;
+    clarification = secQuestions[chosenType].c;
+  } else if (isCloudOrIoT) {
+    const cloudQuestions: Record<PresentationQuestionType, { q: string; c: string }> = {
+      conceptual: {
+        q: `In "${cleanTopic}", how does the system maintain state consistency and fault tolerance across distributed nodes during network partitions?`,
+        c: `Distributed architecture is governed by the CAP theorem, requiring deliberate choices between strict consistency and high availability.`,
+      },
+      application: {
+        q: `What practical deployment strategies in "${cleanTopic}" optimize operational cost while meeting strict SLAs for high-throughput traffic?`,
+        c: `Scalable cloud systems leverage autoscaling, localized caching, and decoupled asynchronous messaging.`,
+      },
+      analytical: {
+        q: `What are the critical telemetry and observability signals needed to diagnose transient failures in "${cleanTopic}"?`,
+        c: `Effective site reliability engineering combines distributed tracing, tail latency analysis, and automated circuit breaking.`,
+      },
+      research: {
+        q: `What emerging paradigms in serverless orchestration or edge mesh computing will most significantly improve "${cleanTopic}"?`,
+        c: `Modern infrastructure research focuses on cold-start elimination, decentralized scheduling, and edge state locality.`,
+      },
+      critical_thinking: {
+        q: `If network bandwidth drops by 80% or packet latency spikes tenfold, how gracefully does "${cleanTopic}" degrade?`,
+        c: `Resilient architectures design graceful degradation paths, offline queues, and essential-service prioritization.`,
+      },
+      future_oriented: {
+        q: `How will 5G and 6G edge convergence alter the architectural trade-offs of "${cleanTopic}" over the next five years?`,
+        c: `Ultra-reliable low-latency networks enable pushing compute-intensive decision loops directly to boundary nodes.`,
+      },
+    };
+    question = cloudQuestions[chosenType].q;
+    clarification = cloudQuestions[chosenType].c;
+  } else if (isHardwareOrEnergy) {
+    const hwQuestions: Record<PresentationQuestionType, { q: string; c: string }> = {
+      conceptual: {
+        q: `Regarding "${cleanTopic}", what are the fundamental efficiency, thermal, or energy-conversion constraints that dictate system design?`,
+        c: `Hardware engineering requires balancing thermodynamic limits against material lifecycle and volumetric power density.`,
+      },
+      application: {
+        q: `In manufacturing and deploying "${cleanTopic}", what are the biggest economic obstacles to achieving economies of scale?`,
+        c: `Commercial viability depends on component standardization, robust supply chains, and automated quality control.`,
+      },
+      analytical: {
+        q: `What accelerated lifecycle stress tests or degradation failure modes are most critical for "${cleanTopic}"?`,
+        c: `Ensuring multi-year reliability requires rigorous thermal cycling, vibrational analysis, and failure mode analysis.`,
+      },
+      research: {
+        q: `What novel material science or solid-state innovation holds the greatest potential to advance "${cleanTopic}"?`,
+        c: `Transformative hardware progress is driven by advanced semiconductor substrates, nanomaterials, and novel chemistries.`,
+      },
+      critical_thinking: {
+        q: `If ambient operating temperatures exceed design specifications by 25 degrees, how does "${cleanTopic}" maintain fail-safe operation?`,
+        c: `Mission-critical systems must integrate active thermal management, load derating, and redundant hardware interlocks.`,
+      },
+      future_oriented: {
+        q: `How will global sustainability mandates and circular economy requirements influence the next generation of "${cleanTopic}"?`,
+        c: `Future mechanical and energy designs must prioritize recyclability, non-toxic components, and minimal carbon footprints.`,
+      },
+    };
+    question = hwQuestions[chosenType].q;
+    clarification = hwQuestions[chosenType].c;
+  } else if (isBiotechOrHealth) {
+    const bioQuestions: Record<PresentationQuestionType, { q: string; c: string }> = {
+      conceptual: {
+        q: `In "${cleanTopic}", how is clinical efficacy established, and how do researchers control for confounding biological variables?`,
+        c: `Biomedical validation requires double-blind methodologies, statistically powered cohorts, and rigorous baseline controls.`,
+      },
+      application: {
+        q: `What regulatory hurdles, patient privacy protections, and workflow integration challenges affect the adoption of "${cleanTopic}"?`,
+        c: `Healthcare translation demands compliance with regulatory frameworks, HIPAA, and seamless EHR integration.`,
+      },
+      analytical: {
+        q: `What is the risk profile associated with false-positive versus false-negative outcomes in "${cleanTopic}"?`,
+        c: `Clinical decision support systems must tune sensitivity and specificity to minimize diagnostic misclassification.`,
+      },
+      research: {
+        q: `What unsolved biological mechanism or data scarcity issue represents the primary bottleneck in "${cleanTopic}"?`,
+        c: `Translational research requires high-fidelity longitudinal data and multi-omics molecular characterization.`,
+      },
+      critical_thinking: {
+        q: `How does "${cleanTopic}" safeguard equitable diagnostic performance across diverse demographic and socioeconomic groups?`,
+        c: `Inclusive medical technology demands diverse training validation to mitigate systemic algorithmic bias.`,
+      },
+      future_oriented: {
+        q: `Looking ahead, how will personalized medicine and real-time biometric sensors transform the standard of care in "${cleanTopic}"?`,
+        c: `The future of health tech converges around predictive analytics, continuous monitoring, and tailored therapies.`,
+      },
+    };
+    question = bioQuestions[chosenType].q;
+    clarification = bioQuestions[chosenType].c;
+  } else {
+    // General Engineering & Technology topic
+    const genQuestions: Record<PresentationQuestionType, { q: string; c: string }> = {
+      conceptual: {
+        q: `In your presentation on "${cleanTopic}", what is the core architectural principle that distinguishes this approach from traditional baseline methods?`,
+        c: `Conceptual clarity requires isolating the foundational technological differentiator from peripheral features.`,
+      },
+      application: {
+        q: `Regarding "${cleanTopic}", what is the biggest practical bottleneck engineers encounter when transitioning from prototype to full-scale deployment?`,
+        c: `Bridging the gap between theory and industry implementation demands addressing real-world integration costs and operational constraints.`,
+      },
+      analytical: {
+        q: `What are the critical performance limitations, operational costs, or architectural trade-offs associated with "${cleanTopic}"?`,
+        c: `Every engineering solution balances system throughput and accuracy against resource consumption and complexity.`,
+      },
+      research: {
+        q: `What open technological challenge or gap in current research must be solved before "${cleanTopic}" achieves universal adoption?`,
+        c: `Engineering progress requires defining precise problem boundaries before proposing scalable technical solutions.`,
+      },
+      critical_thinking: {
+        q: `If one of the core dependencies or resource conditions in "${cleanTopic}" fails unexpectedly, how does the system recover?`,
+        c: `Resilient engineering requires stress-testing assumptions against unexpected edge cases and cascading failure modes.`,
+      },
+      future_oriented: {
+        q: `Looking ahead five to seven years, what major technological trend or industry shift will most fundamentally reshape "${cleanTopic}"?`,
+        c: `Long-term technical success requires anticipating cross-disciplinary convergence and continuous technological adaptation.`,
+      },
+    };
+    question = genQuestions[chosenType].q;
+    clarification = genQuestions[chosenType].c;
+  }
+
   return {
     type: chosenType,
-    question: bank[chosenType].question,
-    clarification: bank[chosenType].clarification,
+    question,
+    clarification,
   };
 }
 

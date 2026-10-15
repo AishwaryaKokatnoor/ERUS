@@ -14,6 +14,7 @@ import { AuthUser } from '../../types/auth';
 import { useWebRTCRoom } from '../../hooks/useWebRTCRoom';
 import { 
   PRESENTATION_OPENING_SCRIPT, 
+  getPresentationOpeningScript,
   getSerialCallScript, 
   getPeerQAInvitationScript, 
   PEER_QA_SILENCE_SCRIPT, 
@@ -362,11 +363,17 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
 
   // Per-student individual assigned topics
   const studentTopics = useMemo(() => {
+    const mainTopic = (session.topic || '').trim();
     return presentationStudents.map((s, idx) => {
-      if (session.presentationTopics && session.presentationTopics[idx]) {
-        return session.presentationTopics[idx];
+      if (session.presentationTopics && session.presentationTopics[idx]?.trim()) {
+        return session.presentationTopics[idx].trim();
       }
-      return DEFAULT_PRESENTATION_TOPICS[idx] || session.topic || `Research & Applications in Engineering`;
+      if (mainTopic) {
+        return presentationStudents.length <= 1 || idx === 0 
+          ? mainTopic 
+          : `${mainTopic} (Part ${idx + 1})`;
+      }
+      return DEFAULT_PRESENTATION_TOPICS[idx] || 'Technical Presentation & Research Analysis';
     });
   }, [presentationStudents, session.presentationTopics, session.topic]);
 
@@ -408,7 +415,9 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
 
   // Activity Execution State (Serial Flow per PDF specification)
   const [phase, setPhase] = useState<PresentationPhase>('opening');
-  const [aiSpeech, setAiSpeech] = useState<string>(PRESENTATION_OPENING_SCRIPT);
+  const [aiSpeech, setAiSpeech] = useState<string>(() =>
+    getPresentationOpeningScript(session.topic, presentationStudents.length)
+  );
   const [aiSpeaking, setAiSpeaking] = useState<boolean>(false);
   const [peerQAQuestion, setPeerQAQuestion] = useState<string>('');
   const [currentAiQuestion, setCurrentAiQuestion] = useState<PresentationAIQuestion | null>(null);
@@ -615,7 +624,8 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   const startOpeningSequence = () => {
     if (hasStartedOpeningRef.current) return;
     hasStartedOpeningRef.current = true;
-    speakAI(PRESENTATION_OPENING_SCRIPT, () => {
+    const openingScript = getPresentationOpeningScript(session.topic, presentationStudents.length);
+    speakAI(openingScript, () => {
       callStudentToPresent(1);
     });
   };
