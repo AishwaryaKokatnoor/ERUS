@@ -2321,7 +2321,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   ];
 
   return (
-    <div className="max-w-7xl mx-auto p-3 sm:p-6 space-y-5">
+    <div className="max-w-7xl mx-auto p-3 sm:p-6 space-y-5 [overflow-anchor:none]">
       
       {/* Session Title & Facilitator Broadcast Banner */}
       <div className="bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-sm dark:shadow-xl relative overflow-hidden backdrop-blur-md transition-colors duration-200">
@@ -2894,12 +2894,12 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               // so participant video pods dominate the screen clearly.
               const containerClass = 
                 count <= 4 
-                  ? 'w-[520px] sm:w-[600px] md:w-[680px]' 
+                  ? 'w-[480px] sm:w-[540px] md:w-[600px] max-w-full' 
                   : count <= 8 
-                  ? 'w-[640px] sm:w-[740px] md:w-[820px]' 
+                  ? 'w-[540px] sm:w-[620px] md:w-[700px] max-w-full' 
                   : count <= 12 
-                  ? 'w-[740px] sm:w-[840px] md:w-[920px]' 
-                  : 'w-[840px] sm:w-[940px] md:w-[1020px]';
+                  ? 'w-[620px] sm:w-[720px] md:w-[800px] max-w-full' 
+                  : 'w-[700px] sm:w-[800px] md:w-[880px] max-w-full';
 
               // Inner table inset: generous inset keeps the table circle small and compact
               const innerTableInset = 
@@ -2910,11 +2910,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   : 'inset-40 sm:inset-56';
 
               return (
-                <div className="relative z-10 my-4 flex-1 flex items-center justify-center overflow-x-auto py-12 sm:py-16 px-4 sm:px-8 scrollbar-thin scroll-smooth">
-                  <div className={`relative flex items-center justify-center transition-all duration-500 mx-auto aspect-square ${containerClass} max-w-none`}>
+                <div className="relative z-10 my-2 flex-1 flex items-center justify-center overflow-x-auto overflow-y-hidden py-4 sm:py-6 px-2 sm:px-4 scrollbar-thin">
+                  <div className={`relative flex items-center justify-center mx-auto aspect-square ${containerClass} max-w-full`}>
                     
                     {/* Central Compact Circular Conference Table */}
-                    <div className={`absolute ${innerTableInset} rounded-full bg-gradient-to-b from-slate-100 via-slate-200 to-slate-300 dark:from-slate-800/90 dark:via-slate-850 dark:to-slate-900 border-4 border-slate-300 dark:border-slate-700/80 shadow-2xl flex flex-col items-center justify-center p-3 sm:p-4 transition-all duration-500`}>
+                    <div className={`absolute ${innerTableInset} rounded-full bg-gradient-to-b from-slate-100 via-slate-200 to-slate-300 dark:from-slate-800/90 dark:via-slate-850 dark:to-slate-900 border-4 border-slate-300 dark:border-slate-700/80 shadow-2xl flex flex-col items-center justify-center p-3 sm:p-4 transition-all duration-300`}>
                       <div className="w-full h-full rounded-full bg-white/85 dark:bg-slate-950/70 border border-slate-300/80 dark:border-slate-700/50 flex flex-col items-center justify-center p-3 sm:p-4 relative overflow-hidden shadow-inner text-center">
                         <span className="text-[9px] sm:text-[11px] uppercase font-mono tracking-widest text-slate-500 dark:text-slate-400 font-semibold">
                           Round Table ({filledStudents.length} {filledStudents.length === 1 ? 'Participant' : 'Participants'})
@@ -2940,14 +2940,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
                     {/* Seating Perimeter: Dynamic Filled Seats on True Circular Perimeter with Speaker-Centric Zoom */}
                     {roundTablePositionedStudents.map(({ student, angle, zoomLevel }) => {
-                      const R = count > 12 ? 38 : count > 8 ? 37 : 36; // Flexible circular radius % for compact circle and clear video cards
+                      const R = count > 12 ? 37 : count > 8 ? 35 : 34; // Flexible circular radius % for compact circle and clear video cards
                       const leftPct = 50 + R * Math.cos(angle);
                       const topPct = 50 + R * Math.sin(angle);
 
                       return (
                         <div
                           key={student.id}
-                          className="absolute transition-all duration-500 ease-out"
+                          className="absolute transition-all duration-300 ease-out"
                           style={{
                             left: `${leftPct}%`,
                             top: `${topPct}%`,
@@ -2979,7 +2979,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
             {/* 2. SPEAKER IN MIDDLE OF ROUND TABLE LAYOUT */}
             {currentLayout === 'speaker_center' && (
-              <div className="relative z-10 my-4 flex-1 flex items-center justify-start lg:justify-center overflow-x-auto py-16 sm:py-20 px-4 sm:px-8 scrollbar-thin scroll-smooth">
+              <div className="relative z-10 my-2 flex-1 flex items-center justify-start lg:justify-center overflow-x-auto overflow-y-hidden py-8 sm:py-10 px-4 sm:px-8 scrollbar-thin">
                 <div className={`min-h-[320px] sm:min-h-[360px] rounded-[56px] sm:rounded-[72px] bg-gradient-to-b from-slate-100 via-slate-200 to-slate-300 dark:from-slate-800/90 dark:via-slate-850 dark:to-slate-900 border-4 border-slate-300 dark:border-slate-700/80 shadow-xl dark:shadow-2xl relative flex items-center justify-center p-4 transition-all duration-300 mx-auto ${
                   session.students.length > 8 ? 'w-full min-w-[720px] max-w-5xl' : 'w-full max-w-2xl'
                 }`}>
@@ -3000,7 +3000,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                       {/* Animated Soundwave Aura for Active Speaker */}
                       <div className="relative">
                         {isSpeakingLive && (
-                          <div className="absolute -inset-3 rounded-full bg-indigo-500/25 animate-ping pointer-events-none" />
+                          <div className="absolute -inset-2 rounded-full bg-indigo-500/25 animate-pulse pointer-events-none" />
                         )}
                         <div className="w-18 h-18 sm:w-22 sm:h-22 rounded-2xl overflow-hidden border-3 border-indigo-500 dark:border-indigo-400 ring-4 ring-indigo-500/30 shadow-xl relative bg-slate-900">
                           <StudentVideoFrame
@@ -4594,23 +4594,23 @@ export const StudentPodCard: React.FC<{
     <div 
       onDoubleClick={() => !student.isEmptySeat && onEnlarge?.(student)}
       title={student.isEmptySeat ? 'Open Desk' : `${student.name} • Double-click to enlarge spotlight`}
-      className={`flex flex-col items-center group transition-all duration-500 ease-out ${
+      className={`flex flex-col items-center group transition-transform duration-300 ease-out ${
         student.isEmptySeat ? '' : 'cursor-pointer'
       } ${
         zoomLevel === 'zoomed'
-          ? 'scale-110 sm:scale-120 z-40 opacity-100 drop-shadow-2xl'
+          ? 'scale-105 sm:scale-110 z-40 opacity-100 drop-shadow-xl'
           : zoomLevel === 'neighbor'
-          ? 'scale-100 sm:scale-105 z-25 opacity-100 drop-shadow-md'
+          ? 'scale-100 sm:scale-102 z-25 opacity-100 drop-shadow-md'
           : zoomLevel === 'dimmed'
-          ? 'scale-80 sm:scale-85 z-10 opacity-45 blur-[0.2px] hover:opacity-95 hover:scale-95 hover:blur-none'
+          ? 'scale-85 sm:scale-90 z-10 opacity-60 hover:opacity-95 hover:scale-95'
           : isCurrentSpeaker
-          ? 'scale-110 z-30 opacity-100 drop-shadow-lg'
+          ? 'scale-105 z-30 opacity-100 drop-shadow-lg'
           : 'scale-95 sm:scale-100 z-15 opacity-100'
       }`}
     >
       
       {/* 1. Realistic Numbered Seat Placard (Pinned cleanly at top, in natural flex flow) */}
-      <div className={`mb-1.5 whitespace-nowrap px-2.5 py-0.5 rounded-lg text-[10px] sm:text-xs font-bold font-mono shadow-xs uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
+      <div className={`mb-1 whitespace-nowrap px-2.5 py-0.5 rounded-lg text-[10px] sm:text-xs font-bold font-mono shadow-xs uppercase tracking-wider transition-colors flex items-center gap-1.5 ${
         isZoomedSpeaker
           ? 'bg-emerald-600 text-white border-2 border-emerald-300 shadow-emerald-500/40 ring-2 ring-emerald-400'
           : isUser 
@@ -4647,15 +4647,15 @@ export const StudentPodCard: React.FC<{
       <div className="relative">
         {/* Speaking Voice Waves Aura */}
         {(isCurrentSpeaker || isZoomedSpeaker) && (
-          <div className="absolute -inset-3.5 rounded-3xl bg-emerald-500/35 animate-ping pointer-events-none" />
+          <div className="absolute -inset-2 rounded-3xl bg-emerald-500/25 animate-pulse pointer-events-none" />
         )}
 
         <div className={`rounded-2xl sm:rounded-3xl overflow-hidden border-2 transition-all shadow-lg relative bg-slate-900 ${
           isZoomedSpeaker
-            ? 'w-36 h-36 sm:w-48 sm:h-48 md:w-56 md:h-56 border-emerald-500 dark:border-emerald-400 ring-4 ring-emerald-500/60 shadow-emerald-500/50 shadow-2xl'
+            ? 'w-28 h-28 sm:w-36 sm:h-36 md:w-44 md:h-44 border-emerald-500 dark:border-emerald-400 ring-4 ring-emerald-500/60 shadow-emerald-500/50 shadow-xl'
             : zoomLevel === 'neighbor'
-            ? 'w-26 h-26 sm:w-34 sm:h-34 md:w-40 md:h-40 border-slate-300 dark:border-slate-700 ring-2 ring-indigo-400/40'
-            : 'w-22 h-22 sm:w-28 sm:h-28 md:w-32 md:h-32 border-slate-300 dark:border-slate-700'
+            ? 'w-24 h-24 sm:w-30 sm:h-30 md:w-36 md:h-36 border-slate-300 dark:border-slate-700 ring-2 ring-indigo-400/40'
+            : 'w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 border-slate-300 dark:border-slate-700'
         } ${
           student.isEmptySeat
             ? 'border-dashed border-slate-300 dark:border-slate-700 bg-slate-100/60 dark:bg-slate-900/60 shadow-none'
@@ -4693,7 +4693,7 @@ export const StudentPodCard: React.FC<{
       </div>
 
       {/* 3. Student Name & Turns (Positioned cleanly below avatar with zero overlap) */}
-      <div className={`text-center mt-1.5 ${isZoomedSpeaker ? 'max-w-[140px] sm:max-w-[160px]' : 'max-w-[100px] sm:max-w-[120px]'}`}>
+      <div className={`text-center mt-1 ${isZoomedSpeaker ? 'max-w-[130px] sm:max-w-[150px]' : 'max-w-[90px] sm:max-w-[110px]'}`}>
         <p className={`font-semibold truncate leading-tight ${
           isZoomedSpeaker
             ? 'text-xs sm:text-sm text-emerald-800 dark:text-emerald-300 font-bold'
