@@ -202,18 +202,85 @@ export function useWebRTCRoom({
       (t) => t.receiver?.track?.kind === 'video' || t.sender?.track?.kind === 'video'
     );
 
-    for (const at of audioTransceivers) {
-      try { at.direction = 'sendrecv'; } catch {}
-      if (audioTrack) {
-        try { await at.sender.replaceTrack(audioTrack); } catch {}
+    if (audioTransceivers.length === 0) {
+      try {
+        if (audioTrack) {
+          pc.addTransceiver(audioTrack, { direction: 'sendrecv' });
+        } else {
+          pc.addTransceiver('audio', { direction: 'sendrecv' });
+        }
+      } catch {}
+    } else {
+      for (const at of audioTransceivers) {
+        try { at.direction = 'sendrecv'; } catch {}
+        if (audioTrack) {
+          try { await at.sender.replaceTrack(audioTrack); } catch {}
+        }
       }
     }
 
-    for (const vt of videoTransceivers) {
-      try { vt.direction = 'sendrecv'; } catch {}
-      try { await vt.sender.replaceTrack(videoTrack); } catch {}
+    if (videoTransceivers.length === 0) {
+      try {
+        if (videoTrack) {
+          pc.addTransceiver(videoTrack, { direction: 'sendrecv' });
+        } else {
+          pc.addTransceiver('video', { direction: 'sendrecv' });
+        }
+      } catch {}
+    } else {
+      for (const vt of videoTransceivers) {
+        try { vt.direction = 'sendrecv'; } catch {}
+        try { await vt.sender.replaceTrack(videoTrack); } catch {}
+      }
     }
   }, []);
+
+  // Helper: Update peerStreams directly from RTCPeerConnection receivers
+  const updatePeerStreamFromReceivers = useCallback((peerSocketId: string, pc: RTCPeerConnection) => {
+    try {
+      const receivers = pc.getReceivers();
+      const liveTracks = receivers
+        .map((r) => r.track)
+        .filter((t): t is MediaStreamTrack => Boolean(t && t.readyState !== 'ended'));
+
+      if (liveTracks.length === 0) return;
+
+      const existingStream = peerStreamsRef.current.get(peerSocketId);
+      const trackMap = new Map<string, MediaStreamTrack>();
+
+      if (existingStream) {
+        existingStream.getTracks().forEach((t) => {
+          if (t.readyState !== 'ended') trackMap.set(t.id, t);
+        });
+      }
+      liveTracks.forEach((t) => {
+        trackMap.set(t.id, t);
+      });
+
+      const allTracks = Array.from(trackMap.values());
+      const updatedStream = new MediaStream(allTracks);
+      peerStreamsRef.current.set(peerSocketId, updatedStream);
+      setPeerStreams(new Map(peerStreamsRef.current));
+
+      const audioTracks = allTracks.filter((t) => t.kind === 'audio');
+      if (audioTracks.length > 0) {
+        attachRemoteAudio(peerSocketId, new MediaStream(audioTracks));
+      }
+
+      allTracks.forEach((track) => {
+        track.onunmute = () => {
+          const refreshed = new MediaStream(allTracks);
+          peerStreamsRef.current.set(peerSocketId, refreshed);
+          setPeerStreams(new Map(peerStreamsRef.current));
+          if (track.kind === 'audio') {
+            attachRemoteAudio(peerSocketId, new MediaStream([track]));
+          }
+        };
+      });
+    } catch (e) {
+      console.warn('[WebRTC updatePeerStreamFromReceivers warning]:', e);
+    }
+  }, [attachRemoteAudio]);
 
   // Helper: Ensure audio & video transceivers exist BEFORE creating an SDP Offer
   const ensureTransceiversForOffer = useCallback((pc: RTCPeerConnection) => {
@@ -293,47 +360,7 @@ export function useWebRTCRoom({
     // When remote track (audio or video) is received from peer
     pc.ontrack = (event) => {
       console.log(`[WebRTC Peer ${peerSocketId}] Received remote track:`, event.track.kind);
-      const incomingStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
-      
-      let peerStream = peerStreamsRef.current.get(peerSocketId);
-      const existingTracks = peerStream ? peerStream.getTracks() : [];
-      const newTracks = incomingStream.getTracks();
-      
-      const combinedTracks = [...existingTracks];
-      newTracks.forEach((t) => {
-        if (!combinedTracks.some((ct) => ct.id === t.id)) {
-          combinedTracks.push(t);
-        }
-      });
-      if (!combinedTracks.some((ct) => ct.id === event.track.id)) {
-        combinedTracks.push(event.track);
-      }
-
-      // Fresh MediaStream instance guarantees React re-render
-      const updatedStream = new MediaStream(combinedTracks);
-      peerStreamsRef.current.set(peerSocketId, updatedStream);
-      setPeerStreams(new Map(peerStreamsRef.current));
-
-      combinedTracks.forEach((track) => {
-        track.onunmute = () => {
-          const refreshed = new MediaStream(peerStreamsRef.current.get(peerSocketId)?.getTracks() || combinedTracks);
-          peerStreamsRef.current.set(peerSocketId, refreshed);
-          setPeerStreams(new Map(peerStreamsRef.current));
-          if (track.kind === 'audio') {
-            attachRemoteAudio(peerSocketId, new MediaStream([track]));
-          }
-        };
-      });
-
-      // Stream audio track to browser speakers
-      if (event.track.kind === 'audio') {
-        attachRemoteAudio(peerSocketId, new MediaStream([event.track]));
-      } else {
-        const remoteAudioTracks = updatedStream.getAudioTracks();
-        if (remoteAudioTracks.length > 0) {
-          attachRemoteAudio(peerSocketId, new MediaStream(remoteAudioTracks));
-        }
-      }
+      updatePeerStreamFromReceivers(peerSocketId, pc);
     };
 
     pc.onconnectionstatechange = () => {
@@ -372,6 +399,8 @@ export function useWebRTCRoom({
   ensureTransceiversForOfferRef.current = ensureTransceiversForOffer;
   const syncTracksToPeerConnectionRef = useRef(syncTracksToPeerConnection);
   syncTracksToPeerConnectionRef.current = syncTracksToPeerConnection;
+  const updatePeerStreamFromReceiversRef = useRef(updatePeerStreamFromReceivers);
+  updatePeerStreamFromReceiversRef.current = updatePeerStreamFromReceivers;
   const renegotiatePeerRef = useRef(renegotiatePeer);
   renegotiatePeerRef.current = renegotiatePeer;
 
@@ -660,6 +689,7 @@ export function useWebRTCRoom({
 
             // Attach BOTH audio and video tracks to the exact transceivers created by setRemoteDescription(offer)
             await syncTracksToPeerConnectionRef.current(pc);
+            updatePeerStreamFromReceiversRef.current(from, pc);
 
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
@@ -681,6 +711,7 @@ export function useWebRTCRoom({
               iceCandidateQueueRef.current.delete(from);
 
               await syncTracksToPeerConnectionRef.current(pc);
+              updatePeerStreamFromReceiversRef.current(from, pc);
             }
           }
         } else if (signal.candidate) {
@@ -702,6 +733,10 @@ export function useWebRTCRoom({
     // A peer updated speaking/mic/camera state
     socket.on('peer-speaking-updated', ({ socketId: peerSockId, isSpeaking, micActive, cameraActive, volumeLevel: peerVol }) => {
       if (!active) return;
+      const pc = peerConnectionsRef.current.get(peerSockId);
+      if (pc) {
+        updatePeerStreamFromReceiversRef.current(peerSockId, pc);
+      }
       if ((isSpeaking || micActive) && audioElementsRef.current.has(peerSockId)) {
         const audioEl = audioElementsRef.current.get(peerSockId);
         if (audioEl) {

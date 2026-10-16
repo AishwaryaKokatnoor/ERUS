@@ -8202,6 +8202,7 @@ interface LiveGDRoomState {
   currentSpeakerId: string | null;
   currentSpeakerSocketId: string | null;
   silenceTimerSeconds: number;
+  silenceStage: number; // 0: initial, 1: instruction1 given, 2: instruction2 given, 3: question asked
   status: 'active' | 'paused' | 'completed' | 'waiting' | 'scheduled';
   topic: string;
   transcripts: BackendTranscript[];
@@ -8321,6 +8322,7 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
       currentSpeakerId: null,
       currentSpeakerSocketId: null,
       silenceTimerSeconds: 0,
+      silenceStage: 0,
       status: 'waiting',
       topic: resolvedTopic,
       transcripts: liveTranscripts.filter((t) => t.sessionId === slotId),
@@ -8334,10 +8336,11 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
       facilitatorSpeakingUntil: 0,
     };
 
-    // Central 15-Second Silence Deadlock Watchdog (PDF Page 4, Section F)
+    // Central Silence Turn Arbitration Watchdog
     room.silenceInterval = setInterval(async () => {
       if (room.status !== 'active') {
         room.silenceTimerSeconds = 0;
+        room.silenceStage = 0;
         return;
       }
 
@@ -8349,9 +8352,8 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
         }
       }
 
-      // Do not increment silence countdown while the AI Facilitator is actively speaking
+      // Pause silence countdown while the AI Facilitator is actively speaking (do not reset to 0!)
       if (room.facilitatorSpeakingUntil && checkNow < room.facilitatorSpeakingUntil) {
-        room.silenceTimerSeconds = 0;
         return;
       }
 
@@ -8375,12 +8377,13 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
         // Broadcast current silence countdown tick to all peers (turn arbitration: 3s intervals up to 9s max)
         io.to(`room-${slotId}`).emit('silence-timer-tick', {
           silenceTimerSeconds: room.silenceTimerSeconds,
+          silenceStage: room.silenceStage,
           maxSilence: 9,
         });
 
         // Strict 3-Second Turn Arbitration:
-        // Stage 1: At 3s silence, AI gives Instruction 1 that others can talk
-        if (room.silenceTimerSeconds === 3) {
+        // Stage 0: First 3s silence gap -> AI gives Instruction 1 (open floor)
+        if (room.silenceStage === 0 && room.silenceTimerSeconds >= 3) {
           const instruction1 = "The floor is open — who would like to build on that point or share an alternative perspective?";
           const interventionTx: BackendTranscript = {
             id: `t-facilitator-silence1-${Date.now()}`,
@@ -8397,15 +8400,17 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
           };
           room.transcripts.push(interventionTx);
           persistTranscriptToMongoDB(interventionTx);
-          room.facilitatorSpeakingUntil = Date.now() + 3500;
+          room.silenceStage = 1;
+          room.silenceTimerSeconds = 0;
+          room.facilitatorSpeakingUntil = Date.now() + 4500;
           io.to(`room-${slotId}`).emit('facilitator-intervention', {
             text: instruction1,
             action: 'silence_instruction_1',
             transcript: interventionTx,
           });
         }
-        // Stage 2: At 6s silence (after another 3s interval), AI gives Instruction 2 (reminds twice)
-        else if (room.silenceTimerSeconds === 6) {
+        // Stage 1: Again after 3s silence gap (from when instruction 1 finished) -> AI gives Instruction 2
+        else if (room.silenceStage === 1 && room.silenceTimerSeconds >= 3) {
           const instruction2 = "Let's keep the discussion moving — feel free to jump in with your thoughts or counter-arguments.";
           const interventionTx: BackendTranscript = {
             id: `t-facilitator-silence2-${Date.now()}`,
@@ -8422,31 +8427,42 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
           };
           room.transcripts.push(interventionTx);
           persistTranscriptToMongoDB(interventionTx);
-          room.facilitatorSpeakingUntil = Date.now() + 3500;
+          room.silenceStage = 2;
+          room.silenceTimerSeconds = 0;
+          room.facilitatorSpeakingUntil = Date.now() + 4500;
           io.to(`room-${slotId}`).emit('facilitator-intervention', {
             text: instruction2,
             action: 'silence_instruction_2',
             transcript: interventionTx,
           });
         }
-        // Stage 3: At 9s silence (after another 3s and no one started), point out the candidate who spoke less or not yet started and ask them the question!
-        else if (room.silenceTimerSeconds >= 9) {
+        // Stage 2: After another 3s silence gap (after instruction 2 and no one responds) -> AI asks contextual question to least spoken person!
+        else if (room.silenceStage === 2 && room.silenceTimerSeconds >= 3) {
+          room.silenceStage = 3;
           room.silenceTimerSeconds = 0;
           room.lastDeadlockAt = Date.now();
           room.deadlockCount += 1;
           room.waitingForParticipantId = undefined;
           await triggerDeadlockIntervention(room);
         }
+        // Stage 3: Question was asked; if after 18 seconds still nobody responds, re-trigger for next quiet candidate
+        else if (room.silenceStage === 3 && room.silenceTimerSeconds >= 18) {
+          room.silenceStage = 2;
+          room.silenceTimerSeconds = 3;
+        }
       } else {
-        // Someone is actively speaking -> floor is active, reset silence immediately!
+        // Someone is actively speaking -> floor is active, reset silence and stage immediately!
         room.silenceTimerSeconds = 0;
+        room.silenceStage = 0;
+        room.waitingForParticipantId = undefined;
 
         // Broadcast active floor tick
         io.to(`room-${slotId}`).emit('silence-timer-tick', {
           silenceTimerSeconds: 0,
+          silenceStage: 0,
           maxSilence: 9,
         });
-        
+
         // Track current speaker's continuous speaking time (no mid-speech interruptions)
         if (room.currentSpeakerSocketId) {
           const spkPeer = room.peers.get(room.currentSpeakerSocketId);
@@ -9368,16 +9384,23 @@ async function triggerDeadlockIntervention(room: LiveGDRoomState) {
     .filter((p) => p.userId !== room.lastDeadlockTargetId)
     .sort((a, b) =>
       (a.speakingTurns || 0) - (b.speakingTurns || 0) ||
+      (a.speakingDurationSeconds || 0) - (b.speakingDurationSeconds || 0) ||
       (a.lastSpokeAt || 0) - (b.lastSpokeAt || 0)
     );
   const quietPeer = candidates[0] || realStudents.sort(
-    (a, b) => (a.speakingTurns || 0) - (b.speakingTurns || 0) || (a.lastSpokeAt || 0) - (b.lastSpokeAt || 0)
+    (a, b) =>
+      (a.speakingTurns || 0) - (b.speakingTurns || 0) ||
+      (a.speakingDurationSeconds || 0) - (b.speakingDurationSeconds || 0) ||
+      (a.lastSpokeAt || 0) - (b.lastSpokeAt || 0)
   )[0];
 
   const candidateName = quietPeer?.name || 'participants';
   const seatStr = quietPeer?.seatNumber ? `from Seat ${quietPeer.seatNumber}` : '';
   const firstName = candidateName.split(' ')[0];
-  if (quietPeer) room.lastDeadlockTargetId = quietPeer.userId;
+  if (quietPeer) {
+    room.lastDeadlockTargetId = quietPeer.userId;
+    room.waitingForParticipantId = quietPeer.userId;
+  }
 
   const recentHistory = room.transcripts
     .filter((t) => !t.isFacilitator)
@@ -9892,6 +9915,7 @@ io.on('connection', (socket) => {
       room.currentSpeakerId = peer.userId;
       room.currentSpeakerSocketId = socket.id;
       room.silenceTimerSeconds = 0;
+      room.silenceStage = 0;
       peer.lastSpokeAt = Date.now();
       peer.floorTurnCounted = false;
       room.floorVersion += 1;
@@ -9975,6 +9999,7 @@ io.on('connection', (socket) => {
       room.currentSpeakerSocketId = socket.id;
       room.waitingForParticipantId = undefined;
       room.silenceTimerSeconds = 0;
+      room.silenceStage = 0;
       room.floorVersion += 1;
       io.to(`room-${safeSlotId}`).emit('floor-state', {
         speakerId: peer.userId,
@@ -9989,6 +10014,7 @@ io.on('connection', (socket) => {
     }
     peer.lastSpokeAt = Date.now();
     room.silenceTimerSeconds = 0;
+    room.silenceStage = 0;
 
     const mins = Math.floor((elapsedSeconds || 0) / 60).toString().padStart(2, '0');
     const secs = ((elapsedSeconds || 0) % 60).toString().padStart(2, '0');

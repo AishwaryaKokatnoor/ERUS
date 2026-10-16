@@ -60,26 +60,37 @@ const PresentationVideoStream = React.memo<{
     if (video.srcObject !== stream) {
       video.srcObject = stream;
     }
-    video.play().catch(() => {});
+    const playVideo = () => {
+      if (video) {
+        const p = video.play();
+        if (p !== undefined) {
+          p.catch(() => {});
+        }
+      }
+    };
+    playVideo();
 
-    const handlePlay = () => {
-      if (video.srcObject !== stream) {
+    video.onloadedmetadata = playVideo;
+    video.oncanplay = playVideo;
+
+    const handleTrackChange = () => {
+      if (video && video.srcObject !== stream) {
         video.srcObject = stream;
       }
-      video.play().catch(() => {});
+      playVideo();
     };
 
-    stream.addEventListener('addtrack', handlePlay);
-    stream.addEventListener('removetrack', handlePlay);
+    stream.addEventListener('addtrack', handleTrackChange);
+    stream.addEventListener('removetrack', handleTrackChange);
     stream.getVideoTracks().forEach((track) => {
-      track.addEventListener('unmute', handlePlay);
+      track.addEventListener('unmute', handleTrackChange);
     });
 
     return () => {
-      stream.removeEventListener('addtrack', handlePlay);
-      stream.removeEventListener('removetrack', handlePlay);
+      stream.removeEventListener('addtrack', handleTrackChange);
+      stream.removeEventListener('removetrack', handleTrackChange);
       stream.getVideoTracks().forEach((track) => {
-        track.removeEventListener('unmute', handlePlay);
+        track.removeEventListener('unmute', handleTrackChange);
       });
     };
   }, [stream]);
@@ -231,15 +242,28 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
       let remoteStream = rtcPeerStreams.get(peer.socketId) || (peer.userId ? rtcPeerStreams.get(peer.userId) : null) || null;
       if (!remoteStream && rtcPeerStreams.size > 0) {
         for (const [key, stream] of rtcPeerStreams.entries()) {
-          if (key === peer.socketId || (peer.userId && (key === peer.userId || key.includes(peer.userId)))) {
+          if (key === peer.socketId || (peer.userId && (key === peer.userId || key.includes(peer.userId) || peer.userId.includes(key)))) {
             remoteStream = stream;
             break;
           }
         }
       }
-      if (!remoteStream && validStudentPeers.length === 1 && rtcPeerStreams.size === 1) {
-        remoteStream = Array.from(rtcPeerStreams.values())[0];
+      if (!remoteStream && rtcPeerStreams.size > 0) {
+        if (validStudentPeers.length === 1) {
+          remoteStream = Array.from(rtcPeerStreams.values())[0];
+        } else {
+          const videoStreams = Array.from(rtcPeerStreams.values()).filter(
+            (s: any): s is MediaStream => Boolean(s && typeof s.getVideoTracks === 'function' && s.getVideoTracks().some((t: any) => t.readyState === 'live' || t.enabled))
+          );
+          if (videoStreams.length > 0) {
+            remoteStream = videoStreams[0];
+          }
+        }
       }
+      const hasActiveRemoteVideo = Boolean(
+        remoteStream &&
+        remoteStream.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)
+      );
 
       seatMap.set(desiredSeat, {
         id: peer.userId || peer.socketId,
@@ -256,7 +280,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
         isEmptySeat: false,
         isSpeaking: !!peer.isSpeaking,
         micActive: !!peer.micActive,
-        cameraActive: Boolean(peer.cameraActive || remoteStream),
+        cameraActive: Boolean(peer.cameraActive || hasActiveRemoteVideo),
         speakingTurns: peer.speakingTurns || 0,
         speakingDurationSeconds: peer.speakingDurationSeconds || 0,
         videoStream: remoteStream,
@@ -1110,7 +1134,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                   <PresentationVideoStream
                     stream={currentPresenter.videoStream}
                     className="w-full h-full object-cover"
-                    muted={false}
+                    muted={true}
                   />
                 ) : (
                   <div className="w-full h-full bg-gradient-to-b from-slate-800 to-slate-900 flex flex-col items-center justify-center p-4 relative">

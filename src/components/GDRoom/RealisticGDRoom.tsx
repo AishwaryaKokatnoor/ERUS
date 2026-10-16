@@ -137,6 +137,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   const isTransitioningTurnRef = useRef<boolean>(false);
   const lastFacilitatorInterventionTimeRef = useRef<number>(0);
   const lastFacilitatorInterventionTextRef = useRef<string>('');
+  const clientSilenceStageRef = useRef<number>(0);
 
   const isFaculty = currentUser?.role === 'faculty';
   const isFacultyOrAdmin = currentUser?.role === 'faculty' || currentUser?.role === 'college_admin' || currentUser?.role === 'super_admin';
@@ -538,6 +539,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
       if (isAnyActive) {
         setLocalSilenceSeconds(0);
+        clientSilenceStageRef.current = 0;
       } else {
         setLocalSilenceSeconds((prev) => prev + 1);
       }
@@ -2177,7 +2179,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   const handleFacilitatorTargetedProbe = () => {
     if (rtcSimulationMode) return;
     if (!isSessionActive || session.isFacilitatorSpeaking || rtcIsSpeakingLive || isTransitioningTurnRef.current) return;
-    if (Date.now() - lastFacilitatorInterventionTimeRef.current < 20000) return;
+    if (Date.now() - lastFacilitatorInterventionTimeRef.current < 3000) return;
 
     lastFacilitatorInterventionTimeRef.current = Date.now();
 
@@ -2240,17 +2242,22 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       !liveSpeechTranscript
     ) {
       if (!isSocketConnected) {
-        if (currentSilence >= 3 && currentSilence < 6 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 4000) {
+        if (clientSilenceStageRef.current === 0 && currentSilence >= 3 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
+          clientSilenceStageRef.current = 1;
+          setLocalSilenceSeconds(0);
           lastFacilitatorInterventionTimeRef.current = Date.now();
           const instruction1 = "The floor is open — who would like to build on that point or share an alternative perspective?";
           speakFacilitator(instruction1, 'silence_instruction_1', 'turn_transition');
-        } else if (currentSilence >= 6 && currentSilence < 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 4000) {
+        } else if (clientSilenceStageRef.current === 1 && currentSilence >= 3 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
+          clientSilenceStageRef.current = 2;
+          setLocalSilenceSeconds(0);
           lastFacilitatorInterventionTimeRef.current = Date.now();
           const instruction2 = "Let's keep the discussion moving — feel free to jump in with your thoughts or counter-arguments.";
           speakFacilitator(instruction2, 'silence_instruction_2', 'turn_transition');
-        } else if (currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 4000) {
-          lastFacilitatorInterventionTimeRef.current = Date.now();
+        } else if (clientSilenceStageRef.current === 2 && currentSilence >= 3 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
+          clientSilenceStageRef.current = 3;
           setLocalSilenceSeconds(0);
+          lastFacilitatorInterventionTimeRef.current = Date.now();
           handleFacilitatorTargetedProbe();
         }
       } else if (currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 12000) {

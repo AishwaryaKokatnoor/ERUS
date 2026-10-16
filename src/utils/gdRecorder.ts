@@ -262,6 +262,7 @@ export function useGDRecorder({
   const participantTilesRef = useRef<GDParticipantTile[]>(participantTiles);
   const topicTitleRef = useRef<string>(topicTitle);
   const peerStreamsRef = useRef<Map<string, MediaStream> | undefined>(peerStreams);
+  const localStreamRef = useRef<MediaStream | null | undefined>(localStream);
 
   // Keep refs in sync with latest props
   useEffect(() => {
@@ -279,6 +280,10 @@ export function useGDRecorder({
   useEffect(() => {
     peerStreamsRef.current = peerStreams;
   }, [peerStreams]);
+
+  useEffect(() => {
+    localStreamRef.current = localStream;
+  }, [localStream]);
 
   // Format seconds to mm:ss
   const formattedDuration = `${Math.floor(recordingDurationSeconds / 60)
@@ -425,39 +430,59 @@ export function useGDRecorder({
         // Tile base background
         drawRoundedRect(ctx, x, y, tileW, tileH, 12, '#1e293b');
 
-        // Resolve stream for this tile: first from tile.videoStream, or fallback to peerStreams matching tile.socketId / tile.id
+        // Resolve stream for this tile: first from tile.videoStream, or fallback to localStream/peerStreams
         let resolvedStream = tile.videoStream;
         if (!resolvedStream || resolvedStream.getVideoTracks().length === 0) {
-          const peers = peerStreamsRef.current;
-          if (peers && peers.size > 0) {
-            if (tile.socketId && peers.has(tile.socketId)) {
-              resolvedStream = peers.get(tile.socketId);
-            } else if (tile.id && peers.has(tile.id)) {
-              resolvedStream = peers.get(tile.id);
-            } else if (tile.userId && peers.has(tile.userId)) {
-              resolvedStream = peers.get(tile.userId);
-            } else {
-              for (const [peerKey, stream] of peers.entries()) {
-                if (
-                  (tile.id && (peerKey.includes(tile.id) || tile.id.includes(peerKey))) ||
-                  (tile.socketId && (peerKey.includes(tile.socketId) || tile.socketId.includes(peerKey))) ||
-                  (tile.userId && (peerKey.includes(tile.userId) || tile.userId.includes(peerKey)))
-                ) {
-                  resolvedStream = stream;
-                  break;
+          // Check localStream for user
+          if (tile.id?.includes('user') || tile.name === 'You' || tile.id === 'speaker-user') {
+            if (localStreamRef.current && localStreamRef.current.getVideoTracks().length > 0) {
+              resolvedStream = localStreamRef.current;
+            }
+          }
+          if (!resolvedStream && tiles.length === 1 && localStreamRef.current && localStreamRef.current.getVideoTracks().length > 0) {
+            resolvedStream = localStreamRef.current;
+          }
+          if (!resolvedStream || resolvedStream.getVideoTracks().length === 0) {
+            const peers = peerStreamsRef.current;
+            if (peers && peers.size > 0) {
+              if (tile.socketId && peers.has(tile.socketId)) {
+                resolvedStream = peers.get(tile.socketId);
+              } else if (tile.id && peers.has(tile.id)) {
+                resolvedStream = peers.get(tile.id);
+              } else if (tile.userId && peers.has(tile.userId)) {
+                resolvedStream = peers.get(tile.userId);
+              } else {
+                for (const [peerKey, stream] of peers.entries()) {
+                  if (
+                    (tile.id && (peerKey.includes(tile.id) || tile.id.includes(peerKey))) ||
+                    (tile.socketId && (peerKey.includes(tile.socketId) || tile.socketId.includes(peerKey))) ||
+                    (tile.userId && (peerKey.includes(tile.userId) || tile.userId.includes(peerKey)))
+                  ) {
+                    resolvedStream = stream;
+                    break;
+                  }
+                }
+              }
+              // Fallback for real peer participants (not user themselves and not empty seat)
+              if (!resolvedStream && !tile.id.includes('empty') && !tile.id.includes('user')) {
+                const livePeerStreams = Array.from(peers.values()).filter(
+                  (s: any) => s && typeof s.getVideoTracks === 'function' && s.getVideoTracks().some((t: any) => t.readyState === 'live' || t.enabled)
+                );
+                if (livePeerStreams.length > 0) {
+                  resolvedStream = livePeerStreams[0] as MediaStream;
                 }
               }
             }
-            // Fallback for real peer participants (not user themselves and not empty seat)
-            if (!resolvedStream && !tile.id.includes('empty') && !tile.id.includes('user')) {
-              const livePeerStreams = Array.from(peers.values()).filter(
-                (s: any) => s && typeof s.getVideoTracks === 'function' && s.getVideoTracks().some((t: any) => t.readyState === 'live' || t.enabled)
-              );
-              if (livePeerStreams.length > 0) {
-                resolvedStream = livePeerStreams[0] as MediaStream;
-              }
-            }
           }
+        }
+
+        // Check if an existing <video> in DOM is actively rendering this stream
+        let domVideo: HTMLVideoElement | null = null;
+        if (typeof document !== 'undefined' && resolvedStream) {
+          const allDomVideos = Array.from(document.querySelectorAll('video'));
+          domVideo = allDomVideos.find(
+            (v) => v.srcObject === resolvedStream && v.readyState >= 1 && (v.videoWidth > 0 || (v.srcObject as MediaStream).getVideoTracks().some(t => t.readyState === 'live' || t.enabled))
+          ) || null;
         }
 
         // Look up video element for this stream
@@ -466,7 +491,7 @@ export function useGDRecorder({
           resolvedStream && resolvedStream.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)
         );
 
-        if (resolvedStream && hasVideoTracks) {
+        if (resolvedStream && hasVideoTracks && !domVideo) {
           if (!videoEl) {
             videoEl = document.createElement('video');
             videoEl.muted = true;
@@ -478,22 +503,23 @@ export function useGDRecorder({
             videoEl.setAttribute('playsinline', 'true');
             videoEl.setAttribute('muted', 'true');
             videoEl.style.position = 'fixed';
-            videoEl.style.top = '-9999px';
-            videoEl.style.left = '-9999px';
-            videoEl.style.width = '320px';
-            videoEl.style.height = '240px';
-            videoEl.style.opacity = '0';
+            videoEl.style.bottom = '0px';
+            videoEl.style.right = '0px';
+            videoEl.style.width = '2px';
+            videoEl.style.height = '2px';
+            videoEl.style.opacity = '0.01';
             videoEl.style.pointerEvents = 'none';
+            videoEl.style.zIndex = '-9999';
 
             if (!hiddenVideoContainerRef.current && typeof document !== 'undefined') {
               const container = document.createElement('div');
               container.id = 'erus-gd-recorder-hidden-pool';
               container.style.position = 'fixed';
-              container.style.top = '-9999px';
-              container.style.left = '-9999px';
-              container.style.width = '320px';
-              container.style.height = '240px';
-              container.style.opacity = '0';
+              container.style.bottom = '0px';
+              container.style.right = '0px';
+              container.style.width = '2px';
+              container.style.height = '2px';
+              container.style.opacity = '0.01';
               container.style.pointerEvents = 'none';
               container.style.zIndex = '-9999';
               document.body.appendChild(container);
@@ -526,25 +552,25 @@ export function useGDRecorder({
           }
         }
 
+        const activeVideoElement = domVideo || videoEl;
         const hasWorkingCamera = Boolean(
-          videoEl &&
+          activeVideoElement &&
           hasVideoTracks &&
-          ((videoEl.videoWidth > 0 && videoEl.videoHeight > 0) || videoEl.readyState >= 1) &&
-          (tile.cameraActive !== false || (videoEl.videoWidth > 0 && videoEl.videoHeight > 0))
+          ((activeVideoElement.videoWidth > 0 && activeVideoElement.videoHeight > 0) || activeVideoElement.readyState >= 1)
         );
 
-        if (hasWorkingCamera) {
+        if (hasWorkingCamera && activeVideoElement) {
           // Draw video element with aspect-cover inside rounded rect
           ctx.save();
           clipRoundedRect(ctx, x, y, tileW, tileH, 12);
-          const vw = videoEl.videoWidth || 640;
-          const vh = videoEl.videoHeight || 480;
+          const vw = activeVideoElement.videoWidth || 640;
+          const vh = activeVideoElement.videoHeight || 480;
           const scale = Math.max(tileW / vw, tileH / vh);
           const sw = vw * scale;
           const sh = vh * scale;
           const sx = x + (tileW - sw) / 2;
           const sy = y + (tileH - sh) / 2;
-          ctx.drawImage(videoEl, sx, sy, sw, sh);
+          ctx.drawImage(activeVideoElement, sx, sy, sw, sh);
           ctx.restore();
         } else {
           // Draw elegant avatar tile
