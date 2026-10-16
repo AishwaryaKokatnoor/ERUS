@@ -1084,7 +1084,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       seatNumber: st.seatNumber,
       isSpeaking: st.isSpeaking,
       cameraActive: st.cameraActive,
-      videoStream: st.videoStream,
+      isUser: st.isUser,
+      videoStream: st.isUser ? (videoStream || st.videoStream) : st.videoStream,
     })),
     autoStartOnActive: true,
   });
@@ -4333,7 +4334,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 };
 
 // Sub-Component: HTML5 Video Stream Player for Live Webcam Feed
-const VideoStreamPlayer: React.FC<{ stream: MediaStream; className?: string; muted?: boolean }> = ({ stream, className, muted = true }) => {
+const VideoStreamPlayer: React.FC<{
+  stream: MediaStream;
+  className?: string;
+  muted?: boolean;
+  participantId?: string;
+  seatNumber?: number;
+  isUser?: boolean;
+}> = ({ stream, className, muted = true, participantId, seatNumber, isUser }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -4383,6 +4391,10 @@ const VideoStreamPlayer: React.FC<{ stream: MediaStream; className?: string; mut
       autoPlay
       playsInline
       muted={muted}
+      data-participant-id={participantId || ''}
+      data-seat-number={seatNumber !== undefined ? String(seatNumber) : ''}
+      data-is-user={isUser ? 'true' : 'false'}
+      data-stream-id={stream?.id || ''}
       className={className || "w-full h-full object-cover"}
     />
   );
@@ -4439,6 +4451,9 @@ export const StudentVideoFrame: React.FC<{
         <VideoStreamPlayer 
           stream={effectiveStream} 
           muted={true}
+          participantId={student.id}
+          seatNumber={student.seatNumber}
+          isUser={isUser}
           className={`w-full h-full object-cover ${isUser ? 'transform -scale-x-100' : ''}`} 
         />
       ) : isCameraEnabled ? (

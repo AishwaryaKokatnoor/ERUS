@@ -103,6 +103,7 @@ const PresentationVideoStream = React.memo<{
       autoPlay
       playsInline
       muted={muted}
+      data-stream-id={stream?.id || ''}
       className={className || 'w-full h-full object-cover'}
     />
   );
@@ -420,7 +421,8 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
       seatNumber: st.seatNumber,
       isSpeaking: st.isSpeaking,
       cameraActive: st.cameraActive,
-      videoStream: st.videoStream,
+      isUser: st.isUser,
+      videoStream: st.isUser ? (videoStream || st.videoStream) : st.videoStream,
     })),
     autoStartOnActive: true,
   });

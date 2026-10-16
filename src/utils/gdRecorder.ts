@@ -114,6 +114,7 @@ export interface GDParticipantTile {
   seatNumber?: number;
   isSpeaking?: boolean;
   cameraActive?: boolean;
+  isUser?: boolean;
   videoStream?: MediaStream | null;
 }
 
@@ -430,68 +431,92 @@ export function useGDRecorder({
         // Tile base background
         drawRoundedRect(ctx, x, y, tileW, tileH, 12, '#1e293b');
 
-        // Resolve stream for this tile: first from tile.videoStream, or fallback to localStream/peerStreams
-        let resolvedStream = tile.videoStream;
-        if (!resolvedStream || resolvedStream.getVideoTracks().length === 0) {
-          // Check localStream for user
-          if (tile.id?.includes('user') || tile.name === 'You' || tile.id === 'speaker-user') {
-            if (localStreamRef.current && localStreamRef.current.getVideoTracks().length > 0) {
-              resolvedStream = localStreamRef.current;
-            }
-          }
-          if (!resolvedStream && tiles.length === 1 && localStreamRef.current && localStreamRef.current.getVideoTracks().length > 0) {
-            resolvedStream = localStreamRef.current;
-          }
-          if (!resolvedStream || resolvedStream.getVideoTracks().length === 0) {
-            const peers = peerStreamsRef.current;
-            if (peers && peers.size > 0) {
-              if (tile.socketId && peers.has(tile.socketId)) {
-                resolvedStream = peers.get(tile.socketId);
-              } else if (tile.id && peers.has(tile.id)) {
-                resolvedStream = peers.get(tile.id);
-              } else if (tile.userId && peers.has(tile.userId)) {
-                resolvedStream = peers.get(tile.userId);
-              } else {
-                for (const [peerKey, stream] of peers.entries()) {
-                  if (
-                    (tile.id && (peerKey.includes(tile.id) || tile.id.includes(peerKey))) ||
-                    (tile.socketId && (peerKey.includes(tile.socketId) || tile.socketId.includes(peerKey))) ||
-                    (tile.userId && (peerKey.includes(tile.userId) || tile.userId.includes(peerKey)))
-                  ) {
-                    resolvedStream = stream;
-                    break;
-                  }
-                }
-              }
-              // Fallback for real peer participants (not user themselves and not empty seat)
-              if (!resolvedStream && !tile.id.includes('empty') && !tile.id.includes('user')) {
-                const livePeerStreams = Array.from(peers.values()).filter(
-                  (s: any) => s && typeof s.getVideoTracks === 'function' && s.getVideoTracks().some((t: any) => t.readyState === 'live' || t.enabled)
-                );
-                if (livePeerStreams.length > 0) {
-                  resolvedStream = livePeerStreams[0] as MediaStream;
-                }
-              }
-            }
-          }
-        }
-
-        // Check if an existing <video> in DOM is actively rendering this stream
-        let domVideo: HTMLVideoElement | null = null;
-        if (typeof document !== 'undefined' && resolvedStream) {
-          const allDomVideos = Array.from(document.querySelectorAll('video'));
-          domVideo = allDomVideos.find(
-            (v) => v.srcObject === resolvedStream && v.readyState >= 1 && (v.videoWidth > 0 || (v.srcObject as MediaStream).getVideoTracks().some(t => t.readyState === 'live' || t.enabled))
-          ) || null;
-        }
-
-        // Look up video element for this stream
-        let videoEl = videoPoolRef.current.get(tile.id);
-        const hasVideoTracks = Boolean(
-          resolvedStream && resolvedStream.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)
+        // Resolve stream for this tile:
+        const isThisUser = Boolean(
+          tile.isUser ||
+          tile.name === 'You' ||
+          tile.id?.includes('user') ||
+          tile.id === 'speaker-user' ||
+          (tiles.length === 1 && !tile.id?.startsWith('peer-'))
         );
 
-        if (resolvedStream && hasVideoTracks && !domVideo) {
+        let resolvedStream = tile.videoStream;
+        if (isThisUser && localStreamRef.current && localStreamRef.current.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)) {
+          resolvedStream = localStreamRef.current;
+        }
+        if (!resolvedStream && isThisUser && localStreamRef.current) {
+          resolvedStream = localStreamRef.current;
+        }
+
+        if (!resolvedStream || resolvedStream.getVideoTracks().length === 0) {
+          const peers = peerStreamsRef.current;
+          if (peers && peers.size > 0) {
+            if (tile.socketId && peers.has(tile.socketId)) {
+              resolvedStream = peers.get(tile.socketId);
+            } else if (tile.id && peers.has(tile.id)) {
+              resolvedStream = peers.get(tile.id);
+            } else if (tile.userId && peers.has(tile.userId)) {
+              resolvedStream = peers.get(tile.userId);
+            } else {
+              for (const [peerKey, stream] of peers.entries()) {
+                if (
+                  (tile.id && (peerKey.includes(tile.id) || tile.id.includes(peerKey))) ||
+                  (tile.socketId && (peerKey.includes(tile.socketId) || tile.socketId.includes(peerKey))) ||
+                  (tile.userId && (peerKey.includes(tile.userId) || tile.userId.includes(peerKey)))
+                ) {
+                  resolvedStream = stream;
+                  break;
+                }
+              }
+            }
+            // Fallback for real peer participants (not user themselves and not empty seat)
+            if (!resolvedStream && !tile.id?.includes('empty') && !isThisUser) {
+              const livePeerStreams = Array.from(peers.values()).filter(
+                (s: any) => s && typeof s.getVideoTracks === 'function' && s.getVideoTracks().some((t: any) => t.readyState === 'live' || t.enabled)
+              );
+              if (livePeerStreams.length > 0) {
+                resolvedStream = livePeerStreams[0] as MediaStream;
+              }
+            }
+          }
+        }
+
+        // Look for an active, hardware-accelerated <video> element in the DOM
+        let domVideo: HTMLVideoElement | null = null;
+        if (typeof document !== 'undefined') {
+          const allDomVideos = Array.from(document.querySelectorAll<HTMLVideoElement>('video'));
+          domVideo = allDomVideos.find((v) => {
+            if (v.hasAttribute('controls') || v.closest('[data-recorder-preview]') || v.closest('.fixed.inset-0')) {
+              return false;
+            }
+            if (isThisUser && (v.getAttribute('data-is-user') === 'true' || (localStreamRef.current && v.srcObject === localStreamRef.current))) {
+              return true;
+            }
+            if (tile.id && v.getAttribute('data-participant-id') === tile.id) {
+              return true;
+            }
+            if (tile.seatNumber && v.getAttribute('data-seat-number') === String(tile.seatNumber)) {
+              return true;
+            }
+            if (resolvedStream && v.srcObject) {
+              if (v.srcObject === resolvedStream) return true;
+              if ((v.srcObject as MediaStream).id === resolvedStream.id) return true;
+              const vTrackId = (v.srcObject as MediaStream).getVideoTracks?.()[0]?.id;
+              const rTrackId = resolvedStream.getVideoTracks?.()[0]?.id;
+              if (vTrackId && rTrackId && vTrackId === rTrackId) return true;
+            }
+            return false;
+          }) || null;
+        }
+
+        // Look up or initialize pooled fallback video element if DOM video isn't found
+        let videoEl = videoPoolRef.current.get(tile.id);
+        const streamToPlay = resolvedStream || (isThisUser ? localStreamRef.current : null);
+        const hasVideoTracks = Boolean(
+          streamToPlay && streamToPlay.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)
+        );
+
+        if (streamToPlay && hasVideoTracks && !domVideo) {
           if (!videoEl) {
             videoEl = document.createElement('video');
             videoEl.muted = true;
@@ -502,26 +527,26 @@ export function useGDRecorder({
             videoEl.setAttribute('autoplay', 'true');
             videoEl.setAttribute('playsinline', 'true');
             videoEl.setAttribute('muted', 'true');
+            videoEl.width = 320;
+            videoEl.height = 240;
+            videoEl.style.width = '320px';
+            videoEl.style.height = '240px';
             videoEl.style.position = 'fixed';
-            videoEl.style.bottom = '0px';
-            videoEl.style.right = '0px';
-            videoEl.style.width = '2px';
-            videoEl.style.height = '2px';
-            videoEl.style.opacity = '0.01';
+            videoEl.style.left = '0px';
+            videoEl.style.top = '0px';
             videoEl.style.pointerEvents = 'none';
-            videoEl.style.zIndex = '-9999';
 
             if (!hiddenVideoContainerRef.current && typeof document !== 'undefined') {
               const container = document.createElement('div');
               container.id = 'erus-gd-recorder-hidden-pool';
               container.style.position = 'fixed';
-              container.style.bottom = '0px';
-              container.style.right = '0px';
-              container.style.width = '2px';
-              container.style.height = '2px';
-              container.style.opacity = '0.01';
+              container.style.left = '0px';
+              container.style.top = '0px';
+              container.style.width = '1px';
+              container.style.height = '1px';
+              container.style.overflow = 'hidden';
               container.style.pointerEvents = 'none';
-              container.style.zIndex = '-9999';
+              container.style.zIndex = '-1';
               document.body.appendChild(container);
               hiddenVideoContainerRef.current = container;
             }
@@ -529,23 +554,15 @@ export function useGDRecorder({
               hiddenVideoContainerRef.current.appendChild(videoEl);
             }
 
-            videoEl.srcObject = resolvedStream;
-            videoEl.onloadedmetadata = () => {
-              videoEl?.play().catch(() => {});
-            };
-            videoEl.oncanplay = () => {
-              videoEl?.play().catch(() => {});
-            };
+            videoEl.srcObject = streamToPlay;
+            videoEl.onloadedmetadata = () => { videoEl?.play().catch(() => {}); };
+            videoEl.oncanplay = () => { videoEl?.play().catch(() => {}); };
             videoEl.play().catch(() => {});
             videoPoolRef.current.set(tile.id, videoEl);
-          } else if (videoEl.srcObject !== resolvedStream) {
-            videoEl.srcObject = resolvedStream;
-            videoEl.onloadedmetadata = () => {
-              videoEl?.play().catch(() => {});
-            };
-            videoEl.oncanplay = () => {
-              videoEl?.play().catch(() => {});
-            };
+          } else if (videoEl.srcObject !== streamToPlay) {
+            videoEl.srcObject = streamToPlay;
+            videoEl.onloadedmetadata = () => { videoEl?.play().catch(() => {}); };
+            videoEl.oncanplay = () => { videoEl?.play().catch(() => {}); };
             videoEl.play().catch(() => {});
           } else if (videoEl.paused) {
             videoEl.play().catch(() => {});
@@ -553,26 +570,32 @@ export function useGDRecorder({
         }
 
         const activeVideoElement = domVideo || videoEl;
-        const hasWorkingCamera = Boolean(
+        const isElementUsable = Boolean(
           activeVideoElement &&
-          hasVideoTracks &&
-          ((activeVideoElement.videoWidth > 0 && activeVideoElement.videoHeight > 0) || activeVideoElement.readyState >= 1)
+          (activeVideoElement.readyState >= 1 || activeVideoElement.videoWidth > 0)
         );
 
-        if (hasWorkingCamera && activeVideoElement) {
-          // Draw video element with aspect-cover inside rounded rect
-          ctx.save();
-          clipRoundedRect(ctx, x, y, tileW, tileH, 12);
-          const vw = activeVideoElement.videoWidth || 640;
-          const vh = activeVideoElement.videoHeight || 480;
-          const scale = Math.max(tileW / vw, tileH / vh);
-          const sw = vw * scale;
-          const sh = vh * scale;
-          const sx = x + (tileW - sw) / 2;
-          const sy = y + (tileH - sh) / 2;
-          ctx.drawImage(activeVideoElement, sx, sy, sw, sh);
-          ctx.restore();
-        } else {
+        let didDrawVideo = false;
+        if (isElementUsable && activeVideoElement) {
+          try {
+            ctx.save();
+            clipRoundedRect(ctx, x, y, tileW, tileH, 12);
+            const vw = activeVideoElement.videoWidth || 640;
+            const vh = activeVideoElement.videoHeight || 480;
+            const scale = Math.max(tileW / vw, tileH / vh);
+            const sw = vw * scale;
+            const sh = vh * scale;
+            const sx = x + (tileW - sw) / 2;
+            const sy = y + (tileH - sh) / 2;
+            ctx.drawImage(activeVideoElement, sx, sy, sw, sh);
+            ctx.restore();
+            didDrawVideo = true;
+          } catch (drawErr) {
+            didDrawVideo = false;
+          }
+        }
+
+        if (!didDrawVideo) {
           // Draw elegant avatar tile
           ctx.save();
           clipRoundedRect(ctx, x, y, tileW, tileH, 12);
