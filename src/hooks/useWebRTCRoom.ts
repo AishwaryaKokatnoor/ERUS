@@ -56,6 +56,22 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
     { urls: 'stun:stun.services.mozilla.com' },
+    // Free high-availability public TURN relay for users behind mobile hotspots / symmetric NAT / college firewalls
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
   ],
   iceCandidatePoolSize: 10,
 };
@@ -85,6 +101,7 @@ export function useWebRTCRoom({
   const [isFloorLocked, setIsFloorLocked] = useState(false);
   const [floorSpeakerName, setFloorSpeakerName] = useState<string | null>(null);
   const [floorSpeakerId, setFloorSpeakerId] = useState<string | null>(null);
+  const [isAudioAutoplayBlocked, setIsAudioAutoplayBlocked] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
@@ -128,9 +145,9 @@ export function useWebRTCRoom({
   const onRoomJoinedRef = useRef(onRoomJoined);
   onRoomJoinedRef.current = onRoomJoined;
 
-  // 1. Play incoming peer audio stream through browser speakers via HTMLAudioElement
+  // 1. Play incoming peer audio stream through browser speakers via HTMLAudioElement & Web Audio API
   const attachRemoteAudio = useCallback((peerSocketId: string, stream: MediaStream) => {
-    const audioTracks = stream.getAudioTracks();
+    const audioTracks = stream.getAudioTracks().filter((t) => t.readyState === 'live');
     if (audioTracks.length === 0) return;
 
     // HTMLAudioElement in DOM as resilient playback engine
@@ -146,8 +163,15 @@ export function useWebRTCRoom({
       audioElementsRef.current.set(peerSocketId, audioEl);
     }
 
-    const audioOnlyStream = new MediaStream(audioTracks);
-    audioEl.srcObject = audioOnlyStream;
+    const currentStream = audioEl.srcObject as MediaStream | null;
+    const currentTrack = currentStream?.getAudioTracks()[0];
+    const incomingTrack = audioTracks[0];
+
+    // CRITICAL: Only assign srcObject if it is missing or the track ID changed!
+    // Replacing srcObject continuously on already-playing streams kills audio in Chromium.
+    if (!currentStream || !currentTrack || currentTrack.id !== incomingTrack.id) {
+      audioEl.srcObject = new MediaStream(audioTracks);
+    }
     audioEl.muted = false;
     audioEl.volume = 1.0;
 
@@ -158,7 +182,10 @@ export function useWebRTCRoom({
         const playPromise = audioEl.play();
         if (playPromise !== undefined) {
           playPromise.catch((e) => {
-            console.warn('[WebRTC Audio Playback Notice]:', e);
+            console.warn(`[WebRTC Audio Playback Notice for peer ${peerSocketId}]:`, e);
+            if (e.name === 'NotAllowedError') {
+              setIsAudioAutoplayBlocked(true);
+            }
           });
         }
       }
@@ -171,6 +198,19 @@ export function useWebRTCRoom({
         playAudio();
       };
     });
+
+    // Dual-channel reliability: Also ensure Web Audio API AudioContext is active
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtx) {
+        if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+          audioContextRef.current = new AudioCtx();
+        }
+        if (audioContextRef.current.state === 'suspended') {
+          audioContextRef.current.resume().catch(() => {});
+        }
+      }
+    } catch {}
   }, []);
 
   // 2. Remove peer audio element & stream on disconnect
@@ -372,8 +412,9 @@ export function useWebRTCRoom({
         }
       } else if (pc?.connectionState === 'failed') {
         try {
-          console.log(`[WebRTC Peer ${peerSocketId}] Attempting ICE restart...`);
+          console.log(`[WebRTC Peer ${peerSocketId}] Attempting ICE restart & renegotiation...`);
           pc.restartIce();
+          renegotiatePeerRef.current(peerSocketId, pc);
         } catch (e) {
           detachRemoteAudio(peerSocketId);
           peerConnectionsRef.current.delete(peerSocketId);
@@ -648,13 +689,37 @@ export function useWebRTCRoom({
       }
     });
 
-    // A new peer joined the room (incoming peer will send offer; do NOT pre-create unassociated transceivers)
+    // A new peer joined the room (update roster & trigger self-healing mesh negotiation if connection remains unestablished)
     socket.on('peer-joined', async ({ peer }) => {
       if (!active) return;
       setPeers((prev) => {
         const filtered = prev.filter((p) => p.socketId !== peer.socketId);
         return [...filtered, peer];
       });
+
+      // Self-healing mesh: if after 1200ms no active WebRTC connection exists, initiate offer to ensure full mesh
+      setTimeout(async () => {
+        if (!active || !socketRef.current) return;
+        const pc = getOrCreatePeerConnectionRef.current(peer.socketId);
+        if (pc.connectionState !== 'connected' && pc.connectionState !== 'connecting' && pc.signalingState === 'stable') {
+          try {
+            ensureTransceiversForOfferRef.current(pc);
+            await syncTracksToPeerConnectionRef.current(pc);
+            const offer = await pc.createOffer({
+              offerToReceiveAudio: true,
+              offerToReceiveVideo: true,
+            });
+            if (pc.signalingState !== 'stable') return;
+            await pc.setLocalDescription(offer);
+            socketRef.current.emit('signal-send', {
+              to: peer.socketId,
+              signal: { sdp: pc.localDescription },
+            });
+          } catch (e) {
+            console.warn('[WebRTC auto-heal mesh offer notice]:', e);
+          }
+        }
+      }, 1200);
     });
 
     // WebRTC Signaling Relay Received (Offer, Answer, ICE Candidate)
@@ -775,12 +840,47 @@ export function useWebRTCRoom({
       silenceTimerCounterRef.current = tickSec;
     });
 
-    // Synchronized Live Transcript Chunk Broadcast
-    socket.on('new-transcript', ({ transcript }) => {
+    // Synchronized Live Transcript Chunk Broadcast with Peer Turn Counts
+    socket.on('new-transcript', ({ transcript, studentId, seatNumber, speakingTurns, speakingDurationSeconds }: any) => {
       if (!active) return;
-      if (onNewTranscriptRef.current) {
+      const targetSpeakerId = transcript?.speakerId || studentId;
+      const targetSeat = transcript?.seatNumber || seatNumber;
+
+      if (targetSpeakerId || targetSeat) {
+        setPeers((prev) =>
+          prev.map((p) => {
+            const isMatch = (targetSpeakerId && (p.userId === targetSpeakerId || p.socketId === targetSpeakerId)) ||
+              (targetSeat && p.seatNumber === targetSeat);
+            if (!isMatch) return p;
+            return {
+              ...p,
+              speakingTurns: Math.max(p.speakingTurns || 0, speakingTurns || ((p.speakingTurns || 0) + 1)),
+              speakingDurationSeconds: Math.max(p.speakingDurationSeconds || 0, speakingDurationSeconds || (p.speakingDurationSeconds || 0)),
+            };
+          })
+        );
+      }
+      if (onNewTranscriptRef.current && transcript) {
         onNewTranscriptRef.current(transcript);
       }
+    });
+
+    // Explicit Peer Stats Real-Time Synchronization Event
+    socket.on('peer-stats-updated', ({ socketId: sId, userId, seatNumber, speakingTurns, speakingDurationSeconds }: any) => {
+      if (!active) return;
+      setPeers((prev) =>
+        prev.map((p) => {
+          const isMatch = (sId && p.socketId === sId) ||
+            (userId && p.userId === userId) ||
+            (seatNumber && p.seatNumber === seatNumber);
+          if (!isMatch) return p;
+          return {
+            ...p,
+            speakingTurns: Math.max(p.speakingTurns || 0, speakingTurns || 0),
+            speakingDurationSeconds: Math.max(p.speakingDurationSeconds || 0, speakingDurationSeconds || 0),
+          };
+        })
+      );
     });
 
     // AI Facilitator Autonomous Intervention
@@ -1058,6 +1158,21 @@ export function useWebRTCRoom({
 
   const getLocalAudioStream = useCallback(() => localStreamRef.current, []);
 
+  // Explicit audio unblocker for browser autoplay policies
+  const resumeAudioPlayback = useCallback(() => {
+    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume().catch(() => {});
+    }
+    audioElementsRef.current.forEach((el) => {
+      el.muted = false;
+      el.volume = 1.0;
+      if (el.srcObject) {
+        el.play().catch(() => {});
+      }
+    });
+    setIsAudioAutoplayBlocked(false);
+  }, []);
+
   return {
     connected,
     assignedSeat,
@@ -1081,6 +1196,8 @@ export function useWebRTCRoom({
     isFloorLocked,
     floorSpeakerName,
     floorSpeakerId,
+    isAudioAutoplayBlocked,
+    resumeAudioPlayback,
     error,
   };
 }

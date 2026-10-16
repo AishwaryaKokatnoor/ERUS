@@ -292,6 +292,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     isFloorLocked: rtcIsFloorLocked,
     floorSpeakerName: rtcFloorSpeakerName,
     floorSpeakerId: rtcFloorSpeakerId,
+    isAudioAutoplayBlocked: rtcIsAudioAutoplayBlocked,
+    resumeAudioPlayback: rtcResumeAudioPlayback,
   } = useWebRTCRoom({
     slotId: session.slotId || session.id || 'slot-1',
     currentUser,
@@ -336,16 +338,26 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       // Counting them here as well would make every AI contribution appear twice.
       if (String(newTx.speakerId || '').startsWith('ai-')) return;
 
-      // Update human speaker stats.
+      const estimatedSecs = Math.max(6, Math.round(String(newTx.text || '').split(/\s+/).filter(Boolean).length / 2.1));
+
+      // Update human speaker stats across session.students matching by ID, seat number, or candidate name
       setSession((prev) => ({
         ...prev,
         currentSpeakerId: newTx.speakerId,
         silenceTimerSeconds: 0,
-        students: prev.students.map((s) =>
-          s.id === newTx.speakerId || s.seatNumber === newTx.seatNumber
-            ? { ...s, speakingTurns: s.speakingTurns + 1, lastSpokeAt: Date.now() }
-            : s
-        ),
+        students: prev.students.map((s) => {
+          const isMatch = s.id === newTx.speakerId ||
+            s.seatNumber === newTx.seatNumber ||
+            (s.name && newTx.speakerName && s.name.toLowerCase() === newTx.speakerName.toLowerCase());
+          return isMatch
+            ? {
+                ...s,
+                speakingTurns: (s.speakingTurns || 0) + 1,
+                speakingDurationSeconds: (s.speakingDurationSeconds || 0) + estimatedSecs,
+                lastSpokeAt: Date.now(),
+              }
+            : s;
+        }),
       }));
 
       // Real human peers speak with their authentic voices over WebRTC audio mesh.
@@ -789,6 +801,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         remoteStream &&
         remoteStream.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)
       );
+      const matchingSessionStudent = session.students.find(
+        (s) =>
+          s.id === peer.userId ||
+          s.id === peer.socketId ||
+          s.seatNumber === desiredSeat ||
+          (s.name && peer.name && s.name.toLowerCase() === peer.name.toLowerCase())
+      );
+      const effectiveTurns = Math.max(peer.speakingTurns || 0, matchingSessionStudent?.speakingTurns || 0);
+      const effectiveDuration = Math.max(peer.speakingDurationSeconds || 0, matchingSessionStudent?.speakingDurationSeconds || 0);
+
       seatMap.set(desiredSeat, {
         id: peer.userId || peer.socketId,
         socketId: peer.socketId,
@@ -805,8 +827,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         isSpeaking: !!peer.isSpeaking,
         micActive: !!peer.micActive,
         cameraActive: Boolean(peer.cameraActive || hasActiveRemoteVideo),
-        speakingTurns: peer.speakingTurns || 0,
-        speakingDurationSeconds: peer.speakingDurationSeconds || 0,
+        speakingTurns: effectiveTurns,
+        speakingDurationSeconds: effectiveDuration,
         volumeLevel: peer.volumeLevel || 0,
         videoStream: remoteStream,
         hasRaisedHand: false,
@@ -2423,6 +2445,38 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 }`}>
                   🎙️ Open Mics Active — Everyone unmuted (AI Arbitrates Interruptions)
                 </span>
+              </div>
+            )}
+
+            {/* Audio Autoplay Blocked Banner */}
+            {rtcIsAudioAutoplayBlocked && (
+              <div className="mt-3 p-3.5 rounded-2xl bg-amber-500/15 dark:bg-amber-950/50 border border-amber-500/40 flex items-center justify-between gap-3 flex-wrap shadow-md animate-pulse">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                    <VolumeX className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                        Peer Audio Playback Blocked
+                      </span>
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700">
+                        Browser Policy
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-amber-800 dark:text-amber-300/90 mt-0.5">
+                      Your browser blocked audio from other participants because you haven't interacted with the page yet.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => rtcResumeAudioPlayback()}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all hover:scale-105 cursor-pointer"
+                >
+                  <Volume2 className="w-4 h-4" />
+                  Unmute / Enable Audio
+                </button>
               </div>
             )}
 

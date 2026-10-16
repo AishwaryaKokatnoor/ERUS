@@ -10012,6 +10012,8 @@ io.on('connection', (socket) => {
       peer.speakingTurns += 1;
       peer.floorTurnCounted = true;
     }
+    const estimatedDuration = Math.max(6, Math.round(text.trim().split(/\s+/).filter(Boolean).length / 2.1));
+    peer.speakingDurationSeconds = (peer.speakingDurationSeconds || 0) + estimatedDuration;
     peer.lastSpokeAt = Date.now();
     room.silenceTimerSeconds = 0;
     room.silenceStage = 0;
@@ -10036,11 +10038,22 @@ io.on('connection', (socket) => {
     room.transcripts.push(newTranscript);
     persistTranscriptToMongoDB(newTranscript);
 
-    // Broadcast transcript to all connected students and faculty in room
+    // Broadcast transcript with updated turn stats to all connected students and faculty in room
     io.to(`room-${safeSlotId}`).emit('new-transcript', {
       transcript: newTranscript,
       studentId: peer.userId,
       seatNumber: peer.seatNumber,
+      speakingTurns: peer.speakingTurns,
+      speakingDurationSeconds: peer.speakingDurationSeconds,
+    });
+
+    // Also explicitly broadcast peer-stats-updated so peer turns update instantly on all screens
+    io.to(`room-${safeSlotId}`).emit('peer-stats-updated', {
+      socketId: socket.id,
+      userId: peer.userId,
+      seatNumber: peer.seatNumber,
+      speakingTurns: peer.speakingTurns,
+      speakingDurationSeconds: peer.speakingDurationSeconds,
     });
 
     // Reset prior speech yield timer and set auto-yield after statement completion
