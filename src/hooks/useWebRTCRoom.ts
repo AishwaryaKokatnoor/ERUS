@@ -539,10 +539,8 @@ export function useWebRTCRoom({
 
           // Detect speaking when volume exceeds threshold (open mics enabled)
           const isAiSpeaking = roomVoice.isSpeaking();
-          const speakingNow = avg > 5 && !isMicMutedRef.current;
-          if (speakingNow && isAiSpeaking) {
-            roomVoice.stop();
-          }
+          // While AI is speaking, ignore acoustic speaker bleed; require avg > 18 for genuine human voice activity
+          const speakingNow = !isAiSpeaking && avg > 18 && !isMicMutedRef.current;
           setIsSpeakingLive(speakingNow);
 
           if (speakingNow) {
@@ -822,9 +820,6 @@ export function useWebRTCRoom({
     // A peer updated speaking/mic/camera state
     socket.on('peer-speaking-updated', ({ socketId: peerSockId, isSpeaking, micActive, cameraActive, volumeLevel: peerVol }) => {
       if (!active) return;
-      if (isSpeaking && roomVoice.isSpeaking()) {
-        roomVoice.stop();
-      }
       if ((isSpeaking || micActive) && audioElementsRef.current.has(peerSockId)) {
         const audioEl = audioElementsRef.current.get(peerSockId);
         if (audioEl) {
@@ -879,9 +874,6 @@ export function useWebRTCRoom({
     // Synchronized Live Transcript Chunk Broadcast with Peer Turn Counts
     socket.on('new-transcript', ({ transcript, studentId, seatNumber, speakingTurns, speakingDurationSeconds }: any) => {
       if (!active) return;
-      if (roomVoice.isSpeaking() && !transcript?.isFacilitator) {
-        roomVoice.stop();
-      }
       const targetSpeakerId = transcript?.speakerId || studentId;
       const targetSeat = transcript?.seatNumber || seatNumber;
 

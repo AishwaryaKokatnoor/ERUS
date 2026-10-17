@@ -85,16 +85,6 @@ class RoomVoiceEngine {
         if (window.speechSynthesis.paused) {
           window.speechSynthesis.resume();
         }
-        // Speak a silent instant dummy utterance on first interaction to permanently unlock speech synthesis
-        if (!this.hasUnlockedGesture) {
-          this.hasUnlockedGesture = true;
-          try {
-            const dummy = new SpeechSynthesisUtterance(' ');
-            dummy.volume = 0.01;
-            dummy.rate = 10;
-            window.speechSynthesis.speak(dummy);
-          } catch {}
-        }
         this.refreshVoices();
       }
 

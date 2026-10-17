@@ -460,13 +460,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         return intervention?.transcript ? [...prev, intervention.transcript] : prev;
       });
 
-      // Suppress AI facilitator voice if a human participant is actively speaking on the floor (unless it's an urgent interruption warning)
-      const isHumanSpeakingLive = rtcIsSpeakingLive && !isInterruptionWarning;
-      if (isHumanSpeakingLive) {
-        console.log('[Facilitator] Participant is actively speaking on floor. Suppressing AI voice synthesis.');
-        return;
-      }
-
       setSession((prev) => ({
         ...prev,
         silenceTimerSeconds: 0,
@@ -496,6 +489,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
       // Audibly speak AI intervention using roomVoice
       if (!voiceMuted && !isRoomAudioMuted) {
+        roomVoice.unlock();
         roomVoice.speakAsFacilitator(intervention.text, () => {
           lastFacilitatorInterventionTimeRef.current = Date.now();
           setLocalSilenceSeconds(0);
@@ -1327,13 +1321,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         };
 
         recognition.onresult = (event: any) => {
-          // Human speech priority: If participant speaks while AI facilitator is speaking, human voice takes priority!
-          if (roomVoice.isSpeaking() || session.isFacilitatorSpeaking) {
-            roomVoice.stop();
-            setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
-            aiVoicePausedMicRef.current = false;
+          // While AI facilitator is speaking, ignore speaker audio feedback so AI speaks smoothly without self-interruption
+          if (roomVoice.isSpeaking() || session.isFacilitatorSpeaking || aiVoicePausedMicRef.current) {
+            return;
           }
-          aiVoicePausedMicRef.current = false;
           lastWebSpeechTimeRef.current = Date.now();
 
           let interimTranscript = '';

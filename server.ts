@@ -8363,7 +8363,7 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
       // Auto-clear stale isSpeaking if a peer hasn't emitted speech in >3000ms
       const checkNow = Date.now();
       for (const p of room.peers.values()) {
-        if (p.isSpeaking && p.lastSpokeAt && checkNow - p.lastSpokeAt > 3000) {
+        if (p.isSpeaking && (!p.lastSpokeAt || checkNow - p.lastSpokeAt > 3000)) {
           p.isSpeaking = false;
         }
       }
@@ -9397,7 +9397,7 @@ async function triggerDeadlockIntervention(room: LiveGDRoomState) {
     return;
   }
   for (const p of room.peers.values()) {
-    if (p.isSpeaking && p.lastSpokeAt && checkNow - p.lastSpokeAt > 3000) {
+    if (p.isSpeaking && (!p.lastSpokeAt || checkNow - p.lastSpokeAt > 3000)) {
       p.isSpeaking = false;
     }
   }
