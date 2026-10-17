@@ -532,6 +532,9 @@ export function useWebRTCRoom({
 
         const checkVolume = () => {
           if (!analyserRef.current) return;
+          if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+            audioContextRef.current.resume().catch(() => {});
+          }
           analyserRef.current.getByteFrequencyData(dataArray);
           let sum = 0;
           for (let i = 0; i < dataArray.length; i++) {
@@ -550,8 +553,11 @@ export function useWebRTCRoom({
 
           // Detect speaking when volume exceeds threshold (open mics enabled)
           const isAiSpeaking = roomVoice.isSpeaking();
-          // While AI is speaking, ignore acoustic speaker bleed; require avg > 18 for genuine human voice activity
-          const speakingNow = !isAiSpeaking && avg > 18 && !isMicMutedRef.current;
+          // If candidate speaks firmly while AI is speaking, candidate speech takes priority and halts AI
+          if (isAiSpeaking && avg > 24) {
+            roomVoice.stop();
+          }
+          const speakingNow = (!isAiSpeaking ? avg > 16 : avg > 24) && !isMicMutedRef.current;
           setIsSpeakingLive(speakingNow);
 
           if (speakingNow) {

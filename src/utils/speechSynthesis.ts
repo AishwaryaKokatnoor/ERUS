@@ -16,6 +16,7 @@ class RoomVoiceEngine {
   private watchdogInterval: any = null;
   private isCurrentlySpeaking: boolean = false;
   private speechGenerationId: number = 0;
+  private speechStartedAt: number = 0;
   private lastSpokenNormalized: string = '';
   private lastSpokenAt: number = 0;
 
@@ -353,6 +354,7 @@ class RoomVoiceEngine {
       }
 
       this.isCurrentlySpeaking = true;
+      this.speechStartedAt = Date.now();
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('erus-ai-voice-start'));
       }
@@ -361,6 +363,7 @@ class RoomVoiceEngine {
 
       const speakNextChunk = () => {
         if (genId !== this.speechGenerationId) {
+          if (onEnd) onEnd();
           return;
         }
         if (!this.isCurrentlySpeaking || currentIndex >= sentences.length) {
@@ -643,6 +646,8 @@ class RoomVoiceEngine {
             }
           }, 4000);
 
+          this.isCurrentlySpeaking = true;
+          this.speechStartedAt = Date.now();
           window.dispatchEvent(new CustomEvent('erus-ai-voice-start'));
           if (window.speechSynthesis.paused) {
             window.speechSynthesis.resume();
@@ -672,6 +677,14 @@ class RoomVoiceEngine {
 
   public isSpeaking(): boolean {
     if (typeof window === 'undefined' || !window.speechSynthesis) return false;
+    if (!this.isCurrentlySpeaking) return false;
+    // Safety check: if more than 20 seconds have elapsed since start of speech, it has naturally finished
+    if (this.speechStartedAt && Date.now() - this.speechStartedAt > 20000) {
+      this.isCurrentlySpeaking = false;
+      this.activeUtterances.clear();
+      this.currentUtterance = null;
+      return false;
+    }
     // Chromium bug: window.speechSynthesis.speaking often stays stuck at true.
     // Accurately verify if RoomVoiceEngine has an active utterance in flight.
     return this.isCurrentlySpeaking && (this.currentUtterance !== null || this.activeUtterances.size > 0);

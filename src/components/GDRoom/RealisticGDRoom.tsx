@@ -511,14 +511,24 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         }
       }
 
-      // Audibly speak AI intervention using roomVoice
+      // Audibly speak AI intervention using roomVoice with guaranteed state cleanup
       if (!voiceMuted && !isRoomAudioMuted) {
         roomVoice.unlock();
+        const estSecs = Math.min(12, Math.max(3, intervention.text.split(/\s+/).length * 0.5));
+        const safetyTimeout = setTimeout(() => {
+          setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false, silenceTimerSeconds: 0 }));
+        }, estSecs * 1000 + 2500);
+
         roomVoice.speakAsFacilitator(intervention.text, () => {
+          clearTimeout(safetyTimeout);
           lastFacilitatorInterventionTimeRef.current = Date.now();
           setLocalSilenceSeconds(0);
           setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false, silenceTimerSeconds: 0 }));
         });
+      } else {
+        setTimeout(() => {
+          setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false, silenceTimerSeconds: 0 }));
+        }, 1500);
       }
     },
   });
@@ -1156,17 +1166,24 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         clearTimeout(aiVoiceResumeTimerRef.current);
         aiVoiceResumeTimerRef.current = null;
       }
+      // Absolute max pause timeout: never block candidate mic for more than 7s
+      const maxTimer = setTimeout(() => {
+        aiVoicePausedMicRef.current = false;
+        setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
+      }, 7000);
+
       // Safety watchdog: verify when voice has finished or stopped
       const checkVoiceFinished = () => {
         if (!roomVoice.isSpeaking()) {
+          clearTimeout(maxTimer);
           aiVoicePausedMicRef.current = false;
           setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
           aiVoiceResumeTimerRef.current = null;
         } else {
-          aiVoiceResumeTimerRef.current = setTimeout(checkVoiceFinished, 500);
+          aiVoiceResumeTimerRef.current = setTimeout(checkVoiceFinished, 400);
         }
       };
-      aiVoiceResumeTimerRef.current = setTimeout(checkVoiceFinished, 800);
+      aiVoiceResumeTimerRef.current = setTimeout(checkVoiceFinished, 600);
     };
 
     const handleAiVoiceEnd = () => {
@@ -1215,10 +1232,18 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     // Reset live buffers
     liveTranscriptRef.current = '';
     setLiveSpeechTranscript('');
+    committedResultIndexRef.current = -1;
 
     // Broadcast directly to room transcript & peers
     if (handleSendUserStatementRef.current) {
       handleSendUserStatementRef.current(textToCommit);
+    }
+
+    // Refresh SpeechRecognition instance cleanly so resultIndex resets to 0 and Chrome buffers don't get stuck
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.abort();
+      } catch {}
     }
   };
 
@@ -1332,6 +1357,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     if (typeof window === 'undefined') return;
     const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
+    const recognitionStartTime = { current: Date.now() };
+    const lastResultReceivedTime = { current: Date.now() };
+
     const startRecognitionInstance = () => {
       if (!isListeningMicRef.current) return;
       if (!SpeechRecognitionClass) {
@@ -1356,27 +1384,42 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.maxAlternatives = 1;
-        // en-US or en-IN with automatic fallback
-        recognition.lang = 'en-US';
+        const navLang = typeof navigator !== 'undefined' ? (navigator.language || '') : '';
+        recognition.lang = navLang.toLowerCase().startsWith('en') ? navLang : 'en-US';
         recognitionRef.current = recognition;
 
         committedResultIndexRef.current = -1;
+        recognitionStartTime.current = Date.now();
+        lastResultReceivedTime.current = Date.now();
 
         recognition.onstart = () => {
           isRecognitionRunningRef.current = true;
+          recognitionStartTime.current = Date.now();
         };
 
         recognition.onresult = (event: any) => {
-          // While AI facilitator is speaking, ignore speaker audio feedback so AI speaks smoothly without self-interruption
-          if (roomVoice.isSpeaking() || session.isFacilitatorSpeaking || aiVoicePausedMicRef.current) {
-            return;
-          }
+          lastResultReceivedTime.current = Date.now();
           lastWebSpeechTimeRef.current = Date.now();
+
+          // While AI facilitator voice is actually speaking, ignore speaker feedback unless candidate is speaking firmly
+          if (roomVoice.isSpeaking()) {
+            if (audioLevel < 12) {
+              return;
+            }
+            // Candidate is actively speaking — cut off AI voice so user takes the floor
+            roomVoice.stop();
+            aiVoicePausedMicRef.current = false;
+            setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
+          }
 
           let interimTranscript = '';
           let finalTranscript = '';
 
-          const startIndex = Math.max(event.resultIndex, committedResultIndexRef.current + 1);
+          // Reset committed index if results list wrapped or reset
+          if (committedResultIndexRef.current >= event.results.length) {
+            committedResultIndexRef.current = -1;
+          }
+          const startIndex = Math.max(0, committedResultIndexRef.current + 1);
           for (let i = startIndex; i < event.results.length; i++) {
             const piece = event.results[i][0]?.transcript || '';
             if (event.results[i].isFinal) {
@@ -1421,7 +1464,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           isRecognitionRunningRef.current = false;
 
           if (event.error === 'no-speech') {
-            // Natural silence pause between sentences: do NOT destroy the session!
+            // Natural silence pause between sentences: revive recognition fresh so user voice is captured as soon as they speak
+            if (!isFacultyRef.current || isListeningMicRef.current) {
+              if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
+              restartRecognitionTimerRef.current = setTimeout(startRecognitionInstance, 200);
+            }
             return;
           }
 
@@ -1473,7 +1520,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             isListeningMicRef.current = true;
             setIsListeningMic(true);
             if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
-            restartRecognitionTimerRef.current = setTimeout(startRecognitionInstance, 200);
+            restartRecognitionTimerRef.current = setTimeout(startRecognitionInstance, 150);
             return;
           }
 
@@ -1488,15 +1535,38 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         isRecognitionRunningRef.current = false;
         if (isListeningMicRef.current) {
           if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
-          restartRecognitionTimerRef.current = setTimeout(startRecognitionInstance, 350);
+          restartRecognitionTimerRef.current = setTimeout(startRecognitionInstance, 300);
         }
       }
     };
 
-    // Watchdog Heartbeat: ensures recognition is running continuously if mic is active
+    // Watchdog Heartbeat: ensures recognition is running continuously and never goes stale
     const watchdog = setInterval(() => {
-      if (isListeningMicRef.current && !isRecognitionRunningRef.current) {
+      if (!isListeningMicRef.current) return;
+
+      const now = Date.now();
+      const sessionAge = now - recognitionStartTime.current;
+      const timeSinceResult = now - lastResultReceivedTime.current;
+
+      // 1. If recognition is not marked running, revive it immediately
+      if (!isRecognitionRunningRef.current) {
         startRecognitionInstance();
+        return;
+      }
+
+      // 2. Prevent Chromium SpeechRecognition socket timeout:
+      // Chrome silently drops recognition after 40-50s of continuous listening.
+      // If idle (no uncommitted speech in progress) and session is > 35s old, cycle to a fresh instance.
+      const hasUncommittedSpeech = Boolean(liveTranscriptRef.current || liveSpeechTranscript);
+      if (sessionAge > 35000 && !hasUncommittedSpeech) {
+        startRecognitionInstance();
+        return;
+      }
+
+      // 3. User is actively speaking into mic (audioLevel > 12) but speech recognition produced nothing for > 3.5s
+      if (audioLevel > 12 && timeSinceResult > 3500 && !hasUncommittedSpeech) {
+        startRecognitionInstance();
+        return;
       }
     }, 1500);
 
@@ -1677,7 +1747,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       return [...prev, entry];
     });
 
+    const estFacilitatorDuration = Math.min(14000, safeSpeechText.split(/\s+/).length * 800 + 3500);
+    const safetyTimer = setTimeout(() => {
+      setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
+      setIsAiProcessing(false);
+    }, estFacilitatorDuration);
+
     facilitatorVoice.speak(safeSpeechText, () => {
+      clearTimeout(safetyTimer);
       setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
       setIsAiProcessing(false);
       if (onSpeechEnd) {
