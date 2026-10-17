@@ -321,9 +321,9 @@ class RoomVoiceEngine {
 
     const normalized = cleanText.toLowerCase().replace(/[^a-z0-9]/g, '');
     const now = Date.now();
-    // Only skip duplicate if currently actively speaking the exact same text right now
-    if (!force && this.isCurrentlySpeaking && normalized && normalized === this.lastSpokenNormalized && now - this.lastSpokenAt < 2000) {
-      console.log('[AI Facilitator Voice] Skipping duplicate prompt while already speaking:', cleanText.slice(0, 40));
+    // If facilitator is currently speaking, allow current sentence to complete naturally without interrupting
+    if (!force && this.isSpeaking()) {
+      console.log('[AI Facilitator Voice] Facilitator is already speaking; allowing active sentence to complete naturally:', cleanText.slice(0, 40));
       if (onEnd) onEnd();
       return;
     }
@@ -334,7 +334,7 @@ class RoomVoiceEngine {
       this.unlock();
 
       const genId = ++this.speechGenerationId;
-      const shouldInterrupt = this.isCurrentlySpeaking;
+      const shouldInterrupt = Boolean(force && this.isCurrentlySpeaking);
 
       if (shouldInterrupt) {
         try {
@@ -457,16 +457,18 @@ class RoomVoiceEngine {
           if (this.watchdogInterval) clearInterval(this.watchdogInterval);
           this.watchdogInterval = setInterval(() => {
             if (typeof window !== 'undefined' && window.speechSynthesis) {
-              if (window.speechSynthesis.speaking) {
-                if (window.speechSynthesis.paused) {
-                  window.speechSynthesis.resume();
-                }
-              } else if (!this.isCurrentlySpeaking) {
+              if (this.isCurrentlySpeaking) {
+                try {
+                  if (window.speechSynthesis.paused) {
+                    window.speechSynthesis.resume();
+                  }
+                } catch {}
+              } else {
                 clearInterval(this.watchdogInterval);
                 this.watchdogInterval = null;
               }
             }
-          }, 3000);
+          }, 2000);
 
           console.log(`[AI Facilitator Voice] Speaking chunk (${currentIndex}/${sentences.length}):`, sentence, '| Voice:', voice?.name || 'Default', '| Lang:', utterance.lang);
           if (window.speechSynthesis.paused) {
@@ -685,9 +687,7 @@ class RoomVoiceEngine {
       this.currentUtterance = null;
       return false;
     }
-    // Chromium bug: window.speechSynthesis.speaking often stays stuck at true.
-    // Accurately verify if RoomVoiceEngine has an active utterance in flight.
-    return this.isCurrentlySpeaking && (this.currentUtterance !== null || this.activeUtterances.size > 0);
+    return this.isCurrentlySpeaking;
   }
 
   public stop() {

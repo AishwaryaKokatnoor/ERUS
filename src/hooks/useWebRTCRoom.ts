@@ -553,11 +553,9 @@ export function useWebRTCRoom({
 
           // Detect speaking when volume exceeds threshold (open mics enabled)
           const isAiSpeaking = roomVoice.isSpeaking();
-          // If candidate speaks firmly while AI is speaking, candidate speech takes priority and halts AI
-          if (isAiSpeaking && avg > 24) {
-            roomVoice.stop();
-          }
-          const speakingNow = (!isAiSpeaking ? avg > 16 : avg > 24) && !isMicMutedRef.current;
+          // Never kill active AI voice on mic volume; speaker output leaks into laptop mic.
+          // While AI is speaking, ignore mic acoustic feedback so AI completes its sentence.
+          const speakingNow = !isAiSpeaking && avg > 16 && !isMicMutedRef.current;
           setIsSpeakingLive(speakingNow);
 
           if (speakingNow) {

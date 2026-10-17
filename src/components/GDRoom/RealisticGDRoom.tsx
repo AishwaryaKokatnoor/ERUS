@@ -528,10 +528,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       // Audibly speak AI intervention using roomVoice with guaranteed state cleanup
       if (!voiceMuted && !isRoomAudioMuted) {
         roomVoice.unlock();
-        const estSecs = Math.min(12, Math.max(3, intervention.text.split(/\s+/).length * 0.5));
+        const estSecs = Math.max(20, Math.ceil(intervention.text.split(/\s+/).length * 1.2 + 8));
         const safetyTimeout = setTimeout(() => {
           setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false, silenceTimerSeconds: 0 }));
-        }, estSecs * 1000 + 2500);
+        }, estSecs * 1000);
 
         roomVoice.speakAsFacilitator(intervention.text, () => {
           clearTimeout(safetyTimeout);
@@ -1202,11 +1202,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         clearTimeout(aiVoiceResumeTimerRef.current);
         aiVoiceResumeTimerRef.current = null;
       }
-      // Absolute max pause timeout: never block candidate mic for more than 7s
+      // Absolute max pause timeout: safety net in case audio hangs indefinitely
       const maxTimer = setTimeout(() => {
         aiVoicePausedMicRef.current = false;
         setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
-      }, 7000);
+      }, 25000);
 
       // Safety watchdog: verify when voice has finished or stopped
       const checkVoiceFinished = () => {
@@ -1437,11 +1437,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           lastResultReceivedTime.current = Date.now();
           lastWebSpeechTimeRef.current = Date.now();
 
-          // While AI facilitator voice is actually speaking, cut off AI voice so candidate takes the floor
-          if (roomVoice.isSpeaking()) {
-            roomVoice.stop();
-            aiVoicePausedMicRef.current = false;
-            setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
+          // While AI facilitator voice is actively speaking, ignore speaker audio feedback so AI can complete sentence without self-cancellation
+          if (roomVoice.isSpeaking() || session.isFacilitatorSpeaking || aiVoicePausedMicRef.current) {
+            return;
           }
 
           let interimTranscript = '';
@@ -1782,7 +1780,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       return [...prev, entry];
     });
 
-    const estFacilitatorDuration = Math.min(14000, safeSpeechText.split(/\s+/).length * 800 + 3500);
+    const estFacilitatorDuration = Math.max(20000, safeSpeechText.split(/\s+/).length * 1200 + 8000);
     const safetyTimer = setTimeout(() => {
       setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
       setIsAiProcessing(false);
@@ -2304,8 +2302,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           const prompt = STAGE_1_PROMPTS[pIdx];
           if (rtcBroadcastFacilitatorSpeech) {
             rtcBroadcastFacilitatorSpeech(prompt, 'silence_instruction_1');
+          } else {
+            speakFacilitator(prompt, 'silence_instruction_1', 'turn_transition');
           }
-          speakFacilitator(prompt, 'silence_instruction_1', 'turn_transition');
         } else if (clientSilenceStageRef.current === 1 && currentSilence >= 7 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 4000) {
           clientSilenceStageRef.current = 2;
           lastFacilitatorInterventionTimeRef.current = Date.now();
@@ -2313,8 +2312,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           const prompt = STAGE_2_PROMPTS[pIdx];
           if (rtcBroadcastFacilitatorSpeech) {
             rtcBroadcastFacilitatorSpeech(prompt, 'silence_instruction_2');
+          } else {
+            speakFacilitator(prompt, 'silence_instruction_2', 'turn_transition');
           }
-          speakFacilitator(prompt, 'silence_instruction_2', 'turn_transition');
         } else if (currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 6000) {
           lastFacilitatorInterventionTimeRef.current = Date.now();
           clientSilenceStageRef.current = 3;
