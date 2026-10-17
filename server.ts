@@ -8226,6 +8226,8 @@ interface LiveGDRoomState {
   facilitatorHandoffCount: number;
   facilitatorHandoffStreak: number;
   speechYieldTimer?: NodeJS.Timeout;
+  overlapTimer?: NodeJS.Timeout;
+  lastOverlapWarningTime?: number;
   askedQuestions: Set<string>;
   facilitatorSpeakingUntil?: number;
 }
@@ -8334,6 +8336,8 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
       facilitatorHandoffStreak: 0,
       askedQuestions: new Set<string>(),
       facilitatorSpeakingUntil: 0,
+      overlapTimer: undefined,
+      lastOverlapWarningTime: 0,
     };
 
     // Central Silence Turn Arbitration Watchdog
@@ -9850,94 +9854,113 @@ io.on('connection', (socket) => {
     if (micActive !== undefined) peer.micActive = micActive;
     if (cameraActive !== undefined) peer.cameraActive = cameraActive;
 
-    if (isSpeaking) {
-      // Continuous open mic: do NOT mute when interruption occurs. Instead, AI instructs them!
-      const currentActiveSpeakerId = room.currentSpeakerId;
-      if (currentActiveSpeakerId && currentActiveSpeakerId !== peer.userId) {
-        let activeSpeakerName = 'another participant';
-        if (currentActiveSpeakerId === 'facilitator') {
-          activeSpeakerName = 'AI Facilitator';
-        } else if (currentActiveSpeakerId.startsWith('ai-')) {
-          const aiP = room.aiParticipants.get(currentActiveSpeakerId);
-          if (aiP) activeSpeakerName = aiP.name;
-        } else {
-          const activePeer = Array.from(room.peers.values()).find((p) => p.userId === currentActiveSpeakerId);
-          if (activePeer) activeSpeakerName = activePeer.name;
-        }
-
-        peer.interruptionCount = (peer.interruptionCount || 0) + 1;
-        peer.isSpeaking = true;
-        peer.micActive = true;
-
-        const warningMsg = `One at a time, please. Let ${activeSpeakerName} complete their thought before responding.`;
-        const interventionTx: BackendTranscript = {
-          id: `t-interruption-${Date.now()}`,
-          sessionId: room.slotId,
-          speakerId: 'facilitator',
-          speakerName: 'AI Facilitator (ERUS)',
-          seatNumber: null,
-          isFacilitator: true,
-          timestamp: '00:00',
-          timestampSeconds: Date.now(),
-          text: warningMsg,
-          type: 'intervention',
-          sentiment: 'neutral',
-        };
-        room.transcripts.push(interventionTx);
-        persistTranscriptToMongoDB(interventionTx);
-
-        // Broadcast verbal & visual instruction to room
-        io.to(`room-${safeSlotId}`).emit('facilitator-intervention', {
-          text: warningMsg,
-          action: 'interruption_warning',
-          targetUserId: peer.userId,
-          targetSeatNumber: peer.seatNumber,
-          transcript: interventionTx,
-        });
-
-        io.to(`room-${safeSlotId}`).emit('peer-speaking-updated', {
-          socketId: socket.id,
-          userId: peer.userId,
-          seatNumber: peer.seatNumber,
-          role: peer.role,
-          isSpeaking: true,
-          micActive: true,
-          cameraActive: peer.cameraActive,
-          volumeLevel: volumeLevel || 50,
-        });
-        return;
-      }
-
-      // A participant has claimed the floor; cancel any pending AI timers
-      if (room.turnTimer) clearTimeout(room.turnTimer);
-      room.turnTimer = undefined;
-      room.waitingForParticipantId = undefined;
-      room.currentSpeakerId = peer.userId;
-      room.currentSpeakerSocketId = socket.id;
+    if (peer.isSpeaking) {
+      peer.lastSpokeAt = Date.now();
+      // Reset silence watchdog whenever anyone speaks
       room.silenceTimerSeconds = 0;
       room.silenceStage = 0;
-      peer.lastSpokeAt = Date.now();
-      peer.floorTurnCounted = false;
+      if (room.turnTimer) {
+        clearTimeout(room.turnTimer);
+        room.turnTimer = undefined;
+      }
+      room.waitingForParticipantId = undefined;
+    }
+
+    // Identify all student peers currently speaking with active mics
+    const activelySpeakingPeers = Array.from(room.peers.values()).filter(
+      (p) => p.role === 'student' && p.isSpeaking && p.micActive
+    );
+
+    // VOICE OVERLAPPING RESTRICTION:
+    // Allow people to speak freely as they wish without single-speaker restriction.
+    // BUT if 2 or more participants are speaking at the exact same time continuously for >= 1800ms,
+    // AI Facilitator intervenes with a polite restriction to resolve voice overlap.
+    if (activelySpeakingPeers.length >= 2) {
+      if (!room.overlapTimer) {
+        room.overlapTimer = setTimeout(() => {
+          room.overlapTimer = undefined;
+          const currentOverlapping = Array.from(room.peers.values()).filter(
+            (p) => p.role === 'student' && p.isSpeaking && p.micActive
+          );
+          if (currentOverlapping.length >= 2) {
+            const now = Date.now();
+            if (now - (room.lastOverlapWarningTime || 0) > 20000) {
+              room.lastOverlapWarningTime = now;
+              const spk1 = currentOverlapping[0];
+              const spk2 = currentOverlapping[1];
+              spk2.interruptionCount = (spk2.interruptionCount || 0) + 1;
+
+              const warningMsg = `Please hold on a moment — your voices are overlapping. Let ${spk1.name} complete their point first, and then ${spk2.name} please go ahead.`;
+              const interventionTx: BackendTranscript = {
+                id: `t-overlap-${Date.now()}`,
+                sessionId: room.slotId,
+                speakerId: 'facilitator',
+                speakerName: 'AI Facilitator (ERUS)',
+                seatNumber: null,
+                isFacilitator: true,
+                timestamp: '00:00',
+                timestampSeconds: Date.now(),
+                text: warningMsg,
+                type: 'intervention',
+                sentiment: 'neutral',
+              };
+              room.transcripts.push(interventionTx);
+              persistTranscriptToMongoDB(interventionTx);
+
+              io.to(`room-${safeSlotId}`).emit('facilitator-intervention', {
+                text: warningMsg,
+                action: 'interruption_warning',
+                targetUserId: spk2.userId,
+                targetSeatNumber: spk2.seatNumber,
+                transcript: interventionTx,
+              });
+            }
+          }
+        }, 1800);
+      }
+    } else {
+      if (room.overlapTimer) {
+        clearTimeout(room.overlapTimer);
+        room.overlapTimer = undefined;
+      }
+    }
+
+    // Floor state: open discussion without single-person lock restriction
+    if (activelySpeakingPeers.length === 1) {
+      room.currentSpeakerId = activelySpeakingPeers[0].userId;
+      room.currentSpeakerSocketId = activelySpeakingPeers[0].socketId;
       room.floorVersion += 1;
       io.to(`room-${safeSlotId}`).emit('floor-state', {
-        speakerId: peer.userId,
-        speakerName: peer.name,
-        speakerSocketId: socket.id,
-        isFloorLocked: true,
+        speakerId: activelySpeakingPeers[0].userId,
+        speakerName: activelySpeakingPeers[0].name,
+        speakerSocketId: activelySpeakingPeers[0].socketId,
+        isFloorLocked: false,
         floorVersion: room.floorVersion,
       });
-    } else if (room.currentSpeakerSocketId === socket.id) {
+    } else if (activelySpeakingPeers.length >= 2) {
+      const names = activelySpeakingPeers.map((p) => p.name).join(' & ');
+      room.currentSpeakerId = activelySpeakingPeers[0].userId;
+      room.floorVersion += 1;
+      io.to(`room-${safeSlotId}`).emit('floor-state', {
+        speakerId: activelySpeakingPeers[0].userId,
+        speakerName: names,
+        speakerSocketId: null,
+        isFloorLocked: false,
+        floorVersion: room.floorVersion,
+      });
+    } else if (activelySpeakingPeers.length === 0 && room.currentSpeakerId) {
       if (room.speechYieldTimer) {
         clearTimeout(room.speechYieldTimer);
         room.speechYieldTimer = undefined;
       }
-      // Release floor 1.2s after speech finishes so silence watchdog can track and other participants can speak
       room.speechYieldTimer = setTimeout(() => {
         room.speechYieldTimer = undefined;
-        if (!peer.isSpeaking) {
+        const stillSpeaking = Array.from(room.peers.values()).filter(
+          (p) => p.role === 'student' && p.isSpeaking && p.micActive
+        );
+        if (stillSpeaking.length === 0) {
           room.currentSpeakerId = null;
           room.currentSpeakerSocketId = null;
-          room.waitingForParticipantId = undefined;
           room.floorVersion += 1;
           io.to(`room-${safeSlotId}`).emit('floor-state', {
             speakerId: null,
@@ -9946,18 +9969,6 @@ io.on('connection', (socket) => {
             isFloorLocked: false,
             floorVersion: room.floorVersion,
           });
-
-          // In a live GD with 2 or more real human participants, unlock the floor so
-          // other human peers can respond directly to each other; silence watchdog will arbitrate turns at 3s/6s/9s.
-          const realStudentPeers = Array.from(room.peers.values()).filter(
-            (p) => p.role === 'student'
-          );
-          if (realStudentPeers.length >= 2 && !room.simulationMode) {
-            // Let the silence watchdog track silence starting now
-            return;
-          }
-
-          scheduleNextTurn(room, peer.userId);
         }
       }, 1200);
     }

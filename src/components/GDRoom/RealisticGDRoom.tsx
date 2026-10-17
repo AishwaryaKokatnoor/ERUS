@@ -1305,7 +1305,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       audioChunksRef.current = [];
 
       mr.ondataavailable = (e) => {
-        if (!roomVoice.isSpeaking() && !rtcIsFloorLocked) {
+        if (!roomVoice.isSpeaking()) {
           aiVoicePausedMicRef.current = false;
         } else {
           aiVoicePausedMicRef.current = true;
@@ -1439,12 +1439,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         };
 
         recognition.onresult = (event: any) => {
-          // If another participant has floor lock, pause input
-          if (rtcIsFloorLocked && !isListeningMicRef.current) {
-            aiVoicePausedMicRef.current = true;
-            committedResultIndexRef.current = event.results.length - 1;
-            return;
-          }
           // Prevent acoustic loop: do not let speaker sound picked up by microphone cut off the AI facilitator
           if (roomVoice.isSpeaking() || session.isFacilitatorSpeaking) {
             aiVoicePausedMicRef.current = true;
@@ -2412,38 +2406,24 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               <span>{session?.topic || 'Group Discussion'}</span>
             </h1>
 
-            {/* Open Mics & AI Floor Arbitration Banner */}
+            {/* Open Mics & Natural Discussion Banner */}
             {isSessionActive && (
-              <div className={`mt-2.5 px-3 py-2 rounded-xl flex items-center justify-between gap-2 shadow-2xs border transition-all ${
-                rtcIsFloorLocked
-                  ? 'bg-indigo-500/10 dark:bg-indigo-950/40 border-indigo-500/30 text-indigo-900 dark:text-indigo-200'
-                  : 'bg-emerald-500/10 dark:bg-emerald-950/40 border-emerald-500/25 text-emerald-900 dark:text-emerald-200'
-              }`}>
+              <div className="mt-2.5 px-3 py-2 rounded-xl flex items-center justify-between gap-2 shadow-2xs border transition-colors duration-200 bg-emerald-500/10 dark:bg-emerald-950/40 border-emerald-500/25 text-emerald-900 dark:text-emerald-200">
                 <div className="flex items-center gap-2">
-                  {rtcIsFloorLocked ? (
-                    <>
-                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping inline-block shrink-0" />
-                      <Mic className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                      <span className="text-xs font-bold">
-                        Floor Held by: <span className="underline font-extrabold">{rtcFloorSpeakerName || 'Active Speaker'}</span>
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block shrink-0" />
-                      <Mic className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                      <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300">
-                        Floor is Open — You or peers can speak now
-                      </span>
-                    </>
-                  )}
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block shrink-0" />
+                  <Mic className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300">
+                    {rtcFloorSpeakerName ? (
+                      <>
+                        Speaking: <span className="underline font-extrabold">{rtcFloorSpeakerName}</span>
+                      </>
+                    ) : (
+                      'Floor is Open — Everyone can participate and speak freely'
+                    )}
+                  </span>
                 </div>
-                <span className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-lg border ${
-                  rtcIsFloorLocked
-                    ? 'bg-indigo-100 dark:bg-indigo-900/70 border-indigo-300 dark:border-indigo-700 text-indigo-800 dark:text-indigo-200'
-                    : 'bg-emerald-100 dark:bg-emerald-900/60 border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200'
-                }`}>
-                  🎙️ Open Mics Active — Everyone unmuted (AI Arbitrates Interruptions)
+                <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-lg border bg-emerald-100 dark:bg-emerald-900/60 border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200">
+                  🎙️ Open Discussion Active (AI Intervenes if Voices Overlap)
                 </span>
               </div>
             )}
@@ -2758,9 +2738,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           )}
         </div>
 
-        {/* Interruption Warning Alert banner */}
+        {/* Interruption / Overlap Warning Alert banner */}
         {interruptionWarning && (
-          <div className="mt-3.5 bg-amber-50 dark:bg-amber-950/80 border border-amber-300 dark:border-amber-600/60 text-amber-800 dark:text-amber-200 px-3.5 py-2 rounded-xl text-xs flex items-center gap-2.5 animate-bounce">
+          <div className="mt-3.5 bg-amber-50 dark:bg-amber-950/80 border border-amber-300 dark:border-amber-600/60 text-amber-800 dark:text-amber-200 px-3.5 py-2 rounded-xl text-xs flex items-center gap-2.5 shadow-sm transition-opacity duration-300">
             <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
             <span className="font-medium">{interruptionWarning}</span>
           </div>
@@ -2858,16 +2838,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               </div>
             </div>
 
-            {/* AI Facilitator Interruption Instruction Banner */}
+            {/* AI Facilitator Voice Overlap Guidance Banner */}
             {interruptionWarning && (
-              <div className="my-2.5 max-w-xl w-full mx-auto p-3.5 rounded-2xl bg-amber-500/20 border-2 border-amber-500 text-amber-900 dark:text-amber-100 shadow-xl flex items-center justify-between gap-3 animate-pulse relative z-30 backdrop-blur-md">
+              <div className="my-2.5 max-w-xl w-full mx-auto p-3.5 rounded-2xl bg-amber-500/20 border-2 border-amber-500 text-amber-900 dark:text-amber-100 shadow-xl flex items-center justify-between gap-3 relative z-30 backdrop-blur-md">
                 <div className="flex items-center gap-2.5">
                   <div className="w-9 h-9 rounded-xl bg-amber-500 text-slate-900 flex items-center justify-center font-bold text-base shrink-0 shadow-md">
                     ⚠️
                   </div>
                   <div>
                     <span className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300 flex items-center gap-1">
-                      AI Interruption Instruction
+                      Voice Overlap Guidance
                     </span>
                     <p className="text-xs sm:text-sm font-semibold mt-0.5">
                       {interruptionWarning}

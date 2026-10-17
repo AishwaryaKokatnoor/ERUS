@@ -125,6 +125,12 @@ export function useWebRTCRoom({
   const floorSpeakerIdRef = useRef<string | null>(null);
   const handledAiTranscriptIdsRef = useRef<Set<string>>(new Set());
 
+  // Throttling refs to prevent 60fps render thrashing and socket spamming
+  const lastSpeakingStateEmittedRef = useRef<boolean>(false);
+  const lastSpeakingEmitTimestampRef = useRef<number>(0);
+  const lastVolumeStateEmittedRef = useRef<number>(0);
+  const lastVolumeUiUpdateRef = useRef<number>(0);
+
   const isMicMutedRef = useRef<boolean>(isMicMuted);
   isMicMutedRef.current = isMicMuted;
 
@@ -518,11 +524,19 @@ export function useWebRTCRoom({
             sum += dataArray[i];
           }
           const avg = sum / dataArray.length;
-          setLocalVolume(Math.min(100, Math.round((avg / 128) * 100)));
+          const now = Date.now();
+          const normVol = Math.min(100, Math.round((avg / 128) * 100));
+
+          // Throttle UI localVolume state updates to avoid React render thrash (max 10 fps, >=4% change)
+          if (now - lastVolumeUiUpdateRef.current > 100 && Math.abs(normVol - lastVolumeStateEmittedRef.current) >= 4) {
+            lastVolumeUiUpdateRef.current = now;
+            lastVolumeStateEmittedRef.current = normVol;
+            setLocalVolume(normVol);
+          }
 
           // Detect speaking when volume exceeds threshold (open mics enabled)
           const isAiSpeaking = roomVoice.isSpeaking();
-          const speakingNow = avg > 4 && !isMicMutedRef.current;
+          const speakingNow = avg > 5 && !isMicMutedRef.current;
           if (speakingNow && isAiSpeaking) {
             roomVoice.stop();
           }
@@ -533,7 +547,12 @@ export function useWebRTCRoom({
               clearTimeout(speakingStateTimeoutRef.current);
               speakingStateTimeoutRef.current = null;
             }
-            if (socketRef.current) {
+            // Emit immediately if speaking status just switched to true, or throttle periodic updates to ~350ms
+            const stateChanged = !lastSpeakingStateEmittedRef.current;
+            const timeSinceEmit = now - lastSpeakingEmitTimestampRef.current;
+            if (socketRef.current && (stateChanged || timeSinceEmit > 350)) {
+              lastSpeakingStateEmittedRef.current = true;
+              lastSpeakingEmitTimestampRef.current = now;
               socketRef.current.emit('peer-speaking-state', {
                 slotId,
                 isSpeaking: true,
@@ -543,8 +562,10 @@ export function useWebRTCRoom({
               });
             }
           } else {
-            if (!speakingStateTimeoutRef.current && socketRef.current) {
+            if (lastSpeakingStateEmittedRef.current && !speakingStateTimeoutRef.current && socketRef.current) {
               speakingStateTimeoutRef.current = setTimeout(() => {
+                lastSpeakingStateEmittedRef.current = false;
+                lastSpeakingEmitTimestampRef.current = Date.now();
                 socketRef.current?.emit('peer-speaking-state', {
                   slotId,
                   isSpeaking: false,
@@ -553,7 +574,7 @@ export function useWebRTCRoom({
                   volumeLevel: 0,
                 });
                 speakingStateTimeoutRef.current = null;
-              }, 2500);
+              }, 1200);
             }
           }
 
@@ -798,10 +819,6 @@ export function useWebRTCRoom({
     // A peer updated speaking/mic/camera state
     socket.on('peer-speaking-updated', ({ socketId: peerSockId, isSpeaking, micActive, cameraActive, volumeLevel: peerVol }) => {
       if (!active) return;
-      const pc = peerConnectionsRef.current.get(peerSockId);
-      if (pc) {
-        updatePeerStreamFromReceiversRef.current(peerSockId, pc);
-      }
       if ((isSpeaking || micActive) && audioElementsRef.current.has(peerSockId)) {
         const audioEl = audioElementsRef.current.get(peerSockId);
         if (audioEl) {
@@ -812,13 +829,26 @@ export function useWebRTCRoom({
           }
         }
       }
-      setPeers((prev) =>
-        prev.map((p) =>
-          p.socketId === peerSockId
-            ? { ...p, isSpeaking, micActive: micActive ?? p.micActive, cameraActive: cameraActive ?? p.cameraActive, volumeLevel: peerVol }
-            : p
-        )
-      );
+      setPeers((prev) => {
+        let changed = false;
+        const next = prev.map((p) => {
+          if (p.socketId !== peerSockId) return p;
+          const sameSpeaking = p.isSpeaking === !!isSpeaking;
+          const sameMic = micActive === undefined || p.micActive === micActive;
+          const sameCam = cameraActive === undefined || p.cameraActive === cameraActive;
+          const sameVol = Math.abs((p.volumeLevel || 0) - (peerVol || 0)) < 12;
+          if (sameSpeaking && sameMic && sameCam && sameVol) return p;
+          changed = true;
+          return {
+            ...p,
+            isSpeaking: !!isSpeaking,
+            micActive: micActive ?? p.micActive,
+            cameraActive: cameraActive ?? p.cameraActive,
+            volumeLevel: peerVol || 0,
+          };
+        });
+        return changed ? next : prev;
+      });
     });
 
     // A peer disconnected from the slot
@@ -899,13 +929,13 @@ export function useWebRTCRoom({
       }
     });
 
-    socket.on('floor-state', ({ speakerId, speakerName }: any) => {
+    socket.on('floor-state', ({ speakerId, speakerName, isFloorLocked: serverFloorLocked }: any) => {
       if (!active) return;
       floorSpeakerIdRef.current = speakerId || null;
       setFloorSpeakerId(speakerId || null);
-      const isOtherSpeaking = !!speakerId && speakerId !== currentUserRef.current?.id;
-      setIsFloorLocked(isOtherSpeaking);
-      setFloorSpeakerName(speakerName || (isOtherSpeaking ? 'Another Participant' : null));
+      // Removed single-speaker restriction: floor is open to all, only locked if explicitly requested by server
+      setIsFloorLocked(Boolean(serverFloorLocked));
+      setFloorSpeakerName(speakerName || null);
 
       // Continuous open mic: do NOT forcefully mute audio tracks when someone else speaks
       if (localStreamRef.current) {
