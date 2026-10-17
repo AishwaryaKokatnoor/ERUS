@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { GDSession } from '../../types/gd';
 import { AuthUser } from '../../types/auth';
+import { isSlotCompletedLocally } from '../../utils/authApi';
 
 interface StudentPortalViewProps {
   currentUser: AuthUser | null;
@@ -33,6 +34,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
   activeSession,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [slotCategoryTab, setSlotCategoryTab] = useState<'all' | 'scheduled' | 'completed'>('all');
 
   // Group unique topics from available slots
   const topicsMap = useMemo(() => {
@@ -65,6 +67,24 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
         (t.allottedFaculty || '').toLowerCase().includes(query)
     );
   }, [topicsMap, searchQuery]);
+
+  const scheduledTopicsCount = useMemo(() => {
+    return topicsMap.filter(t => t.slots.some(s => s.status !== 'completed' && !isSlotCompletedLocally(s.id))).length;
+  }, [topicsMap]);
+
+  const completedTopicsCount = useMemo(() => {
+    return topicsMap.filter(t => t.slots.some(s => s.status === 'completed' || isSlotCompletedLocally(s.id))).length;
+  }, [topicsMap]);
+
+  const displayedTopics = useMemo(() => {
+    if (slotCategoryTab === 'scheduled') {
+      return filteredTopics.filter(t => t.slots.some(s => s.status !== 'completed' && !isSlotCompletedLocally(s.id)));
+    }
+    if (slotCategoryTab === 'completed') {
+      return filteredTopics.filter(t => t.slots.some(s => s.status === 'completed' || isSlotCompletedLocally(s.id)));
+    }
+    return filteredTopics;
+  }, [filteredTopics, slotCategoryTab]);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300 pb-12">
@@ -112,37 +132,78 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
       </div>
 
       {/* 2. Discussion Topics Section Bar */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pt-2">
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 pt-2">
         <div>
           <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
             <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-            <span>Discussion Topics ({filteredTopics.length})</span>
+            <span>Discussion Topics ({displayedTopics.length})</span>
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
             Select a topic below to view its scheduled time slots and allotted faculty evaluators.
           </p>
         </div>
 
-        {/* Search Bar */}
-        <div className="relative w-full sm:w-72">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search topics or faculty..."
-            className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 transition-all shadow-2xs"
-          />
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full md:w-auto">
+          {/* Category Filter Tabs */}
+          <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+            <button
+              type="button"
+              onClick={() => setSlotCategoryTab('all')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                slotCategoryTab === 'all'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              All ({topicsMap.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setSlotCategoryTab('scheduled')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                slotCategoryTab === 'scheduled'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400'
+              }`}
+            >
+              Scheduled ({scheduledTopicsCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => setSlotCategoryTab('completed')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                slotCategoryTab === 'completed'
+                  ? 'bg-purple-600 text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-purple-600 dark:hover:text-purple-400'
+              }`}
+            >
+              Completed ({completedTopicsCount})
+            </button>
+          </div>
+
+          {/* Search Bar */}
+          <div className="relative w-full sm:w-64">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search topics or faculty..."
+              className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 transition-all shadow-2xs"
+            />
+          </div>
         </div>
       </div>
 
       {/* 3. Topics List / Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        {filteredTopics.map((item, idx) => {
+        {displayedTopics.map((item, idx) => {
           const totalSlots = item.slots.length;
           const totalMaxCapacity = item.slots.reduce((acc, s) => acc + (s.maxCapacity || 15), 0);
           const totalEnrolled = item.slots.reduce((acc, s) => acc + (s.enrolledCount ?? s.students?.length ?? 0), 0);
           const seatsOpen = Math.max(0, totalMaxCapacity - totalEnrolled);
+          const schedSlots = item.slots.filter(s => s.status !== 'completed' && !isSlotCompletedLocally(s.id)).length;
+          const compSlots = item.slots.filter(s => s.status === 'completed' || isSlotCompletedLocally(s.id)).length;
 
           return (
             <div
@@ -156,9 +217,16 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                     <Sparkles className="w-3.5 h-3.5" />
                     <span>TOPIC {idx + 1}</span>
                   </div>
-                  <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700">
-                    {totalSlots} Slot{totalSlots === 1 ? '' : 's'} Available
-                  </span>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                      {schedSlots} Scheduled
+                    </span>
+                    {compSlots > 0 && (
+                      <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                        {compSlots} Completed
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* Title */}
@@ -205,11 +273,19 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
         })}
       </div>
 
-      {filteredTopics.length === 0 && (
+      {displayedTopics.length === 0 && (
         <div className="text-center py-12 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-8">
           <BookOpen className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
-          <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">No matching topics found</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Try clearing your search query</p>
+          <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+            {slotCategoryTab === 'all'
+              ? 'No matching topics found'
+              : `No ${slotCategoryTab === 'scheduled' ? 'scheduled' : 'completed'} topics found`}
+          </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            {slotCategoryTab === 'all'
+              ? 'Try clearing your search query'
+              : 'Switch to another tab or clear search filters'}
+          </p>
         </div>
       )}
 

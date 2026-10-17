@@ -111,6 +111,22 @@ export const SlotSelectionModal: React.FC<SlotSelectionModalProps> = ({
     return slotsMatchingFaculty.filter((s) => s.topic === selectedTopic);
   }, [slotsMatchingFaculty, selectedTopic, uniqueTopics]);
 
+  const [modalSlotCategoryTab, setModalSlotCategoryTab] = useState<'scheduled' | 'completed' | 'all'>('scheduled');
+
+  const scheduledSlotsForTopic = useMemo(() => {
+    return slotsForTopic.filter((s) => s.status !== 'completed');
+  }, [slotsForTopic]);
+
+  const completedSlotsForTopic = useMemo(() => {
+    return slotsForTopic.filter((s) => s.status === 'completed');
+  }, [slotsForTopic]);
+
+  const displayedSlotsForTopic = useMemo(() => {
+    if (modalSlotCategoryTab === 'scheduled') return scheduledSlotsForTopic;
+    if (modalSlotCategoryTab === 'completed') return completedSlotsForTopic;
+    return slotsForTopic;
+  }, [modalSlotCategoryTab, scheduledSlotsForTopic, completedSlotsForTopic, slotsForTopic]);
+
   const activeTopicDetails = slotsForTopic[0] || slotsMatchingFaculty[0] || availableSlots[0];
   const activeFaculty = facultyList.find((f) => f.id === selectedFacultyId);
 
@@ -332,13 +348,49 @@ export const SlotSelectionModal: React.FC<SlotSelectionModalProps> = ({
 
         {/* 4. SLOTS GRID */}
         <div className="space-y-3">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-600 dark:text-slate-400 px-1">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-semibold text-slate-600 dark:text-slate-400 px-1">
             <span>
               {selectedFacultyId === 'ALL'
-                ? `All Available Slots (${slotsForTopic.length} Total):`
-                : `Slots with ${activeFaculty?.name || 'Faculty In-Charge'} (${slotsForTopic.length} Total):`}
+                ? `Available Discussion Slots (${displayedSlotsForTopic.length}):`
+                : `Slots with ${activeFaculty?.name || 'Faculty In-Charge'} (${displayedSlotsForTopic.length}):`}
             </span>
-            <span className="text-[11px] font-mono text-slate-500">Live Seat Availability</span>
+
+            {/* Modal Slots Filter Tabs */}
+            <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700 self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={() => setModalSlotCategoryTab('scheduled')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  modalSlotCategoryTab === 'scheduled'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400'
+                }`}
+              >
+                Scheduled ({scheduledSlotsForTopic.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalSlotCategoryTab('completed')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  modalSlotCategoryTab === 'completed'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-purple-600 dark:hover:text-purple-400'
+                }`}
+              >
+                Completed ({completedSlotsForTopic.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalSlotCategoryTab('all')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  modalSlotCategoryTab === 'all'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                All ({slotsForTopic.length})
+              </button>
+            </div>
           </div>
 
           {slotsForTopic.length === 0 ? (
@@ -352,11 +404,22 @@ export const SlotSelectionModal: React.FC<SlotSelectionModalProps> = ({
                   {activeFaculty?.name} does not have any active slots scheduled under this topic right now. Select another faculty mentor above to view open discussion sessions.
                 </p>
               </div>
-              
+            </div>
+          ) : displayedSlotsForTopic.length === 0 ? (
+            <div className="p-8 rounded-2xl border border-slate-200 dark:border-slate-800 text-center space-y-2 bg-slate-50/50 dark:bg-slate-950/50">
+              <Clock className="w-8 h-8 text-slate-400 mx-auto" />
+              <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                No {modalSlotCategoryTab === 'scheduled' ? 'Scheduled' : 'Completed'} Slots
+              </h4>
+              <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+                {modalSlotCategoryTab === 'scheduled'
+                  ? 'There are no active scheduled slots for this topic. Switch to the Completed tab to view past sessions.'
+                  : 'There are no completed slots for this topic yet. Switch to the Scheduled tab to view open slots.'}
+              </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {slotsForTopic.map((slot, index) => {
+              {displayedSlotsForTopic.map((slot, index) => {
                 const maxCap = slot.maxCapacity || 15;
                 const enrolled = slot.enrolledCount ?? slot.students?.length ?? 15;
                 const isFull = enrolled >= maxCap;

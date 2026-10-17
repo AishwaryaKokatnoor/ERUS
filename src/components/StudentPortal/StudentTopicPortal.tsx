@@ -93,6 +93,24 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
     );
   }, [assignedSlots, bookedSlotsMap, currentUser]);
 
+  const [bookedSlotsFilterTab, setBookedSlotsFilterTab] = useState<'all' | 'scheduled' | 'completed'>('all');
+  const [topicSlotsFilterTab, setTopicSlotsFilterTab] = useState<'all' | 'scheduled' | 'completed'>('scheduled');
+  const [topicListFilterTab, setTopicListFilterTab] = useState<'all' | 'scheduled' | 'completed'>('all');
+
+  const scheduledBookedSlots = useMemo(() => {
+    return allBookedSlots.filter((s) => s.status !== 'completed' && !isSlotCompletedLocally(s.id) && !hasStudentParticipatedInSlot(s, currentUser));
+  }, [allBookedSlots, currentUser]);
+
+  const completedBookedSlots = useMemo(() => {
+    return allBookedSlots.filter((s) => s.status === 'completed' || isSlotCompletedLocally(s.id) || hasStudentParticipatedInSlot(s, currentUser));
+  }, [allBookedSlots, currentUser]);
+
+  const displayedBookedSlots = useMemo(() => {
+    if (bookedSlotsFilterTab === 'scheduled') return scheduledBookedSlots;
+    if (bookedSlotsFilterTab === 'completed') return completedBookedSlots;
+    return allBookedSlots;
+  }, [bookedSlotsFilterTab, scheduledBookedSlots, completedBookedSlots, allBookedSlots]);
+
   // Backward-compatible single booked slot reference
   const bookedSlot = allBookedSlots[0] || null;
 
@@ -176,11 +194,46 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
     );
   }, [topicsData, searchQuery]);
 
+  const scheduledTopicsCount = useMemo(() => {
+    return topicsData.filter(t => t.slots.some(s => s.status !== 'completed' && !isSlotCompletedLocally(s.id))).length;
+  }, [topicsData]);
+
+  const completedTopicsCount = useMemo(() => {
+    return topicsData.filter(t => t.slots.some(s => s.status === 'completed' || isSlotCompletedLocally(s.id))).length;
+  }, [topicsData]);
+
+  const displayedTopics = useMemo(() => {
+    if (topicListFilterTab === 'scheduled') {
+      return filteredTopics.filter(t => t.slots.some(s => s.status !== 'completed' && !isSlotCompletedLocally(s.id)));
+    }
+    if (topicListFilterTab === 'completed') {
+      return filteredTopics.filter(t => t.slots.some(s => s.status === 'completed' || isSlotCompletedLocally(s.id)));
+    }
+    return filteredTopics;
+  }, [filteredTopics, topicListFilterTab]);
+
   // Selected topic object (when drilldown is active)
   const activeTopicObj = useMemo(() => {
     if (!selectedTopic) return null;
     return topicsData.find((t) => t.topic === selectedTopic) || null;
   }, [selectedTopic, topicsData]);
+
+  const scheduledTopicSlots = useMemo(() => {
+    if (!activeTopicObj) return [];
+    return activeTopicObj.slots.filter((s) => s.status !== 'completed' && !isSlotCompletedLocally(s.id));
+  }, [activeTopicObj]);
+
+  const completedTopicSlots = useMemo(() => {
+    if (!activeTopicObj) return [];
+    return activeTopicObj.slots.filter((s) => s.status === 'completed' || isSlotCompletedLocally(s.id));
+  }, [activeTopicObj]);
+
+  const displayedTopicSlots = useMemo(() => {
+    if (!activeTopicObj) return [];
+    if (topicSlotsFilterTab === 'scheduled') return scheduledTopicSlots;
+    if (topicSlotsFilterTab === 'completed') return completedTopicSlots;
+    return activeTopicObj.slots;
+  }, [activeTopicObj, topicSlotsFilterTab, scheduledTopicSlots, completedTopicSlots]);
 
   // Helper icon by topic keywords
   const getTopicIcon = (title: string) => {
@@ -236,121 +289,166 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
       {/* 2. CONFIRMED BOOKED SLOTS BANNER (If Student Has Booked Any Topic Slots) */}
       {allBookedSlots.length > 0 && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-300 px-1">
-            <span className="flex items-center gap-1.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-1">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700 dark:text-slate-300">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <span>Your Confirmed Discussion Bookings ({allBookedSlots.length})</span>
-            </span>
-            <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium">
-              1 Slot Per Topic Policy Active
-            </span>
+            </div>
+
+            {/* Booked Slots Filter Tabs */}
+            <div className="flex items-center gap-1.5 self-start sm:self-auto bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => setBookedSlotsFilterTab('all')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  bookedSlotsFilterTab === 'all'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                All ({allBookedSlots.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setBookedSlotsFilterTab('scheduled')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  bookedSlotsFilterTab === 'scheduled'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400'
+                }`}
+              >
+                Scheduled ({scheduledBookedSlots.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setBookedSlotsFilterTab('completed')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  bookedSlotsFilterTab === 'completed'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-purple-600 dark:hover:text-purple-400'
+                }`}
+              >
+                Completed ({completedBookedSlots.length})
+              </button>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-3.5">
-            {allBookedSlots.map((bSlot) => {
-              const isBCompleted = bSlot.status === 'completed' || isSlotCompletedLocally(bSlot.id) || hasStudentParticipatedInSlot(bSlot, currentUser);
-              const canReviveInfo = checkCanReviveSlot(bSlot);
-              const isLockedDueToTime = !canReviveInfo.canRevive;
+          {displayedBookedSlots.length === 0 ? (
+            <div className="p-6 rounded-3xl bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 text-center space-y-1">
+              <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                No {bookedSlotsFilterTab} bookings to display
+              </p>
+              <p className="text-[11px] text-slate-500">
+                Switch between Scheduled and Completed tabs to view your other bookings.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3.5">
+              {displayedBookedSlots.map((bSlot) => {
+                const isBCompleted = bSlot.status === 'completed' || isSlotCompletedLocally(bSlot.id) || hasStudentParticipatedInSlot(bSlot, currentUser);
+                const canReviveInfo = checkCanReviveSlot(bSlot);
+                const isLockedDueToTime = !canReviveInfo.canRevive;
 
-              return (
-                <div
-                  key={bSlot.id}
-                  className="p-5 rounded-3xl bg-emerald-50/80 dark:bg-emerald-950/40 border-2 border-emerald-500/80 dark:border-emerald-500/60 shadow-md shadow-emerald-600/5 space-y-3"
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="flex items-start gap-3.5">
-                      <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-emerald-600/30 mt-0.5">
-                        <CheckCircle2 className="w-6 h-6" />
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs uppercase font-extrabold tracking-wider text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/60 px-2.5 py-0.5 rounded-full border border-emerald-300 dark:border-emerald-700">
-                            {isBCompleted ? 'Completed Discussion Slot' : 'Confirmed Topic Slot'}
-                          </span>
-                          <span className="text-xs font-mono font-bold text-slate-700 dark:text-slate-300">
-                            {bSlot.slotName}
-                          </span>
+                return (
+                  <div
+                    key={bSlot.id}
+                    className="p-5 rounded-3xl bg-emerald-50/80 dark:bg-emerald-950/40 border-2 border-emerald-500/80 dark:border-emerald-500/60 shadow-md shadow-emerald-600/5 space-y-3"
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-start gap-3.5">
+                        <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-emerald-600/30 mt-0.5">
+                          <CheckCircle2 className="w-6 h-6" />
                         </div>
-                        <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:white">
-                          {bSlot.topic}
-                        </h3>
-                        <div className="flex items-center gap-4 text-xs text-slate-600 dark:text-slate-300 flex-wrap pt-0.5">
-                          <span className="flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400">
-                            <Clock className="w-3.5 h-3.5" />
-                            <span>{bSlot.slotTiming || '10:00 AM - 10:30 AM'} ({formatSlotDate(bSlot.slotDate)})</span>
-                          </span>
-                          {bSlot.assignedFacultyName && (
-                            <span className="flex items-center gap-1 font-medium text-slate-700 dark:text-slate-300">
-                              <GraduationCap className="w-3.5 h-3.5 text-indigo-500" />
-                              <span>Evaluator: <strong>{bSlot.assignedFacultyName}</strong></span>
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs uppercase font-extrabold tracking-wider text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/60 px-2.5 py-0.5 rounded-full border border-emerald-300 dark:border-emerald-700">
+                              {isBCompleted ? 'Completed Discussion Slot' : 'Confirmed Topic Slot'}
                             </span>
-                          )}
-                          <span className="flex items-center gap-1 font-medium text-slate-500">
-                            <Users className="w-3.5 h-3.5" />
-                            <span>{bSlot.enrolledCount ?? bSlot.students?.length ?? 15}/{bSlot.maxCapacity || 15} Candidates</span>
-                          </span>
+                            <span className="text-xs font-mono font-bold text-slate-700 dark:text-slate-300">
+                              {bSlot.slotName}
+                            </span>
+                          </div>
+                          <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:white">
+                            {bSlot.topic}
+                          </h3>
+                          <div className="flex items-center gap-4 text-xs text-slate-600 dark:text-slate-300 flex-wrap pt-0.5">
+                            <span className="flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400">
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>{bSlot.slotTiming || '10:00 AM - 10:30 AM'} ({formatSlotDate(bSlot.slotDate)})</span>
+                            </span>
+                            {bSlot.assignedFacultyName && (
+                              <span className="flex items-center gap-1 font-medium text-slate-700 dark:text-slate-300">
+                                <GraduationCap className="w-3.5 h-3.5 text-indigo-500" />
+                                <span>Evaluator: <strong>{bSlot.assignedFacultyName}</strong></span>
+                              </span>
+                            )}
+                            <span className="flex items-center gap-1 font-medium text-slate-500">
+                              <Users className="w-3.5 h-3.5" />
+                              <span>{bSlot.enrolledCount ?? bSlot.students?.length ?? 15}/{bSlot.maxCapacity || 15} Candidates</span>
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    {/* Action Buttons: Enter GD Room & Revive/Release Slot */}
-                    <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
-                      {isBCompleted ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (onViewReport) {
-                              onViewReport(bSlot.id);
-                            }
-                          }}
-                          className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs sm:text-sm shadow-md shadow-purple-600/30 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
-                        >
-                          <FileText className="w-4 h-4" />
-                          <span>View Assessment Report</span>
-                          <ArrowRight className="w-4 h-4" />
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => onEnterRoom(bSlot.id)}
-                          className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm shadow-md shadow-emerald-600/30 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
-                        >
-                          <Radio className="w-4 h-4 animate-pulse" />
-                          <span>Enter Discussion Room</span>
-                          <ArrowRight className="w-4 h-4" />
-                        </button>
-                      )}
-
-                      {/* Revive Slot Button with 1-Hour Guard (only if not completed) */}
-                      {!isBCompleted && (
-                        isLockedDueToTime ? (
+                      {/* Action Buttons: Enter GD Room & Revive/Release Slot */}
+                      <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+                        {isBCompleted ? (
                           <button
                             type="button"
-                            disabled
-                            title="Slot starts within 1 hour. Cancellation or slot changes are disabled as per institutional evaluation policy."
-                            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border border-slate-200 dark:border-slate-700 text-xs font-semibold cursor-not-allowed opacity-75"
+                            onClick={() => {
+                              if (onViewReport) {
+                                onViewReport(bSlot.id);
+                              }
+                            }}
+                            className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs sm:text-sm shadow-md shadow-purple-600/30 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
                           >
-                            <Lock className="w-3.5 h-3.5" />
-                            <span>Revive Locked (&lt;1h to Start)</span>
+                            <FileText className="w-4 h-4" />
+                            <span>View Assessment Report</span>
+                            <ArrowRight className="w-4 h-4" />
                           </button>
                         ) : (
                           <button
                             type="button"
-                            onClick={() => setReviveModalSlot(bSlot)}
-                            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-white dark:bg-slate-900 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/50 hover:border-rose-300 text-xs font-semibold shadow-2xs transition-all cursor-pointer group"
-                            title="Revive your booking to release this seat and choose another discussion slot on this topic (available up to 1 hour before session starts)"
+                            onClick={() => onEnterRoom(bSlot.id)}
+                            className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm shadow-md shadow-emerald-600/30 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
                           >
-                            <RotateCcw className="w-3.5 h-3.5 group-hover:-rotate-45 transition-transform" />
-                            <span>Revive / Change Slot</span>
+                            <Radio className="w-4 h-4 animate-pulse" />
+                            <span>Enter Discussion Room</span>
+                            <ArrowRight className="w-4 h-4" />
                           </button>
-                        )
-                      )}
+                        )}
+
+                        {/* Revive Slot Button with 1-Hour Guard (only if not completed) */}
+                        {!isBCompleted && (
+                          isLockedDueToTime ? (
+                            <button
+                              type="button"
+                              disabled
+                              title="Slot starts within 1 hour. Cancellation or slot changes are disabled as per institutional evaluation policy."
+                              className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border border-slate-200 dark:border-slate-700 text-xs font-semibold cursor-not-allowed opacity-75"
+                            >
+                              <Lock className="w-3.5 h-3.5" />
+                              <span>Revive Locked (&lt;1h to Start)</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setReviveModalSlot(bSlot)}
+                              className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-white dark:bg-slate-900 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/50 hover:border-rose-300 text-xs font-semibold shadow-2xs transition-all cursor-pointer group"
+                              title="Revive your booking to release this seat and choose another discussion slot on this topic (available up to 1 hour before session starts)"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5 group-hover:-rotate-45 transition-transform" />
+                              <span>Revive / Change Slot</span>
+                            </button>
+                          )
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -369,33 +467,80 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
               </p>
             </div>
 
-            {/* Search filter */}
-            <div className="relative max-w-xs w-full">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search topics or faculty..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 text-xs rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-2xs"
-              />
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+              {/* Category Filter Tabs */}
+              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => setTopicListFilterTab('all')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    topicListFilterTab === 'all'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  All ({topicsData.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTopicListFilterTab('scheduled')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    topicListFilterTab === 'scheduled'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400'
+                  }`}
+                >
+                  Scheduled ({scheduledTopicsCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTopicListFilterTab('completed')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    topicListFilterTab === 'completed'
+                      ? 'bg-purple-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-purple-600 dark:hover:text-purple-400'
+                  }`}
+                >
+                  Completed ({completedTopicsCount})
+                </button>
+              </div>
+
+              {/* Search filter */}
+              <div className="relative max-w-xs w-full">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search topics or faculty..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 text-xs rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-2xs"
+                />
+              </div>
             </div>
           </div>
 
           {/* Topics Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
-            {filteredTopics.length === 0 && (
+            {displayedTopics.length === 0 && (
               <div className="col-span-full p-8 text-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl">
                 <BookOpen className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-                <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200">No Discussion Slots Assigned Yet</h4>
+                <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                  {topicListFilterTab === 'all'
+                    ? 'No Discussion Slots Assigned Yet'
+                    : `No ${topicListFilterTab === 'scheduled' ? 'Scheduled' : 'Completed'} Topics Found`}
+                </h4>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
-                  You have not been allotted to any Group Discussion slots yet. Once your College Admin or Faculty In-Charge assigns you to an upcoming session, your slot schedule and discussion topic will appear here.
+                  {topicListFilterTab === 'all'
+                    ? 'You have not been allotted to any Group Discussion slots yet. Once your College Admin or Faculty In-Charge assigns you to an upcoming session, your slot schedule and discussion topic will appear here.'
+                    : `Switch back to the All or ${topicListFilterTab === 'scheduled' ? 'Completed' : 'Scheduled'} tab to view topics in other stages.`}
                 </p>
               </div>
             )}
-            {filteredTopics.map((topicItem, index) => {
+            {displayedTopics.map((topicItem, index) => {
               const openSeats = Math.max(0, topicItem.totalSeats - topicItem.enrolledSeats);
               const isTopicBooked = topicItem.hasBookedSlot;
+              const schedSlotsCount = topicItem.slots.filter(s => s.status !== 'completed' && !isSlotCompletedLocally(s.id)).length;
+              const compSlotsCount = topicItem.slots.filter(s => s.status === 'completed' || isSlotCompletedLocally(s.id)).length;
 
               return (
                 <div
@@ -419,16 +564,22 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                         </span>
                       </div>
 
-                      {isTopicBooked ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-bold text-[10px] border border-emerald-300 dark:border-emerald-800">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                          <span>1 Confirmed Slot</span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {isTopicBooked && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-bold text-[10px] border border-emerald-300 dark:border-emerald-800">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            <span>Confirmed</span>
+                          </span>
+                        )}
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                          {schedSlotsCount} Scheduled
                         </span>
-                      ) : (
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                          {topicItem.slots.length} {topicItem.slots.length === 1 ? 'Slot Available' : 'Slots Available'}
-                        </span>
-                      )}
+                        {compSlotsCount > 0 && (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                            {compSlotsCount} Completed
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     {/* Topic Title */}
@@ -531,28 +682,77 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
 
             {/* Slots Grid */}
             <div className="space-y-3">
-              <div className="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-300 px-1">
-                <span>Available Discussion Slots ({activeTopicObj.slots.length}):</span>
-                <span className="text-[11px] font-mono text-slate-500 font-normal">Standard 15-Seat Batches</span>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-bold text-slate-700 dark:text-slate-300 px-1">
+                <span>Discussion Slots ({displayedTopicSlots.length}):</span>
+                
+                {/* Topic Slots Filter Tabs */}
+                <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700 self-start sm:self-auto">
+                  <button
+                    type="button"
+                    onClick={() => setTopicSlotsFilterTab('scheduled')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      topicSlotsFilterTab === 'scheduled'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400'
+                    }`}
+                  >
+                    Scheduled ({scheduledTopicSlots.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTopicSlotsFilterTab('completed')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      topicSlotsFilterTab === 'completed'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-purple-600 dark:hover:text-purple-400'
+                    }`}
+                  >
+                    Completed ({completedTopicSlots.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTopicSlotsFilterTab('all')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      topicSlotsFilterTab === 'all'
+                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    All ({activeTopicObj.slots.length})
+                  </button>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {activeTopicObj.slots.map((slot, index) => {
-                  const isPresentation = slot.activityType === 'presentation' || slot.roomLayout === 'classroom';
-                  const maxCap = isPresentation ? 6 : (slot.maxCapacity || 15);
-                  const enrolled = isPresentation 
-                    ? Math.min(slot.enrolledCount ?? slot.students?.length ?? 6, 6)
-                    : (slot.enrolledCount ?? slot.students?.length ?? 15);
-                  const isFull = enrolled >= maxCap;
-                  const bookedSlotForThisTopic = bookedSlotsMap[activeTopicObj.topic];
-                  const isThisBooked = Boolean(bookedSlotForThisTopic) && slot.id === bookedSlotForThisTopic;
-                  const isOtherSlotLocked = Boolean(bookedSlotForThisTopic) && slot.id !== bookedSlotForThisTopic;
-                  const seatsLeft = Math.max(0, maxCap - enrolled);
-                  const occupancyPercent = Math.min(100, Math.round((enrolled / maxCap) * 100));
+              {displayedTopicSlots.length === 0 ? (
+                <div className="p-8 rounded-3xl bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 text-center space-y-2">
+                  <Clock className="w-8 h-8 text-slate-400 mx-auto" />
+                  <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                    No {topicSlotsFilterTab === 'scheduled' ? 'Scheduled' : 'Completed'} Slots
+                  </h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+                    {topicSlotsFilterTab === 'scheduled'
+                      ? 'All evaluation batches for this topic have concluded. Switch to the Completed tab to review reports.'
+                      : 'No evaluation batches have concluded yet for this topic. Switch to the Scheduled tab to reserve open seats.'}
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {displayedTopicSlots.map((slot, index) => {
+                    const isPresentation = slot.activityType === 'presentation' || slot.roomLayout === 'classroom';
+                    const maxCap = isPresentation ? 6 : (slot.maxCapacity || 15);
+                    const enrolled = isPresentation 
+                      ? Math.min(slot.enrolledCount ?? slot.students?.length ?? 6, 6)
+                      : (slot.enrolledCount ?? slot.students?.length ?? 15);
+                    const isFull = enrolled >= maxCap;
+                    const bookedSlotForThisTopic = bookedSlotsMap[activeTopicObj.topic];
+                    const isThisBooked = Boolean(bookedSlotForThisTopic) && slot.id === bookedSlotForThisTopic;
+                    const isOtherSlotLocked = Boolean(bookedSlotForThisTopic) && slot.id !== bookedSlotForThisTopic;
+                    const seatsLeft = Math.max(0, maxCap - enrolled);
+                    const occupancyPercent = Math.min(100, Math.round((enrolled / maxCap) * 100));
 
-                  const isSlotCompleted = slot.status === 'completed' || isSlotCompletedLocally(slot.id) || hasStudentParticipatedInSlot(slot, currentUser);
-                  const canReviveInfo = checkCanReviveSlot(slot);
-                  const isReviveLockedByTime = !canReviveInfo.canRevive;
+                    const isSlotCompleted = slot.status === 'completed' || isSlotCompletedLocally(slot.id) || hasStudentParticipatedInSlot(slot, currentUser);
+                    const canReviveInfo = checkCanReviveSlot(slot);
+                    const isReviveLockedByTime = !canReviveInfo.canRevive;
 
                   return (
                     <div
@@ -767,10 +967,11 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                   );
                 })}
               </div>
-            </div>
+            )}
           </div>
-        )
-      )}
+        </div>
+      )
+    )}
 
       {/* 5. REVIVE SLOT CONFIRMATION MODAL */}
       {reviveModalSlot && (

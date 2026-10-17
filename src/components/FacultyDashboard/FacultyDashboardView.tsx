@@ -96,6 +96,22 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
     return base;
   }, [availableSlots, currentUser, facultyId]);
 
+  const [slotCategoryTab, setSlotCategoryTab] = useState<'all' | 'scheduled' | 'completed'>('scheduled');
+
+  const scheduledSlots = useMemo(() => {
+    return safeAvailableSlots.filter((s) => s.status !== 'completed' && !isSlotCompletedLocally(s.id));
+  }, [safeAvailableSlots]);
+
+  const completedSlots = useMemo(() => {
+    return safeAvailableSlots.filter((s) => s.status === 'completed' || isSlotCompletedLocally(s.id));
+  }, [safeAvailableSlots]);
+
+  const displayedFacultySlots = useMemo(() => {
+    if (slotCategoryTab === 'scheduled') return scheduledSlots;
+    if (slotCategoryTab === 'completed') return completedSlots;
+    return safeAvailableSlots;
+  }, [slotCategoryTab, scheduledSlots, completedSlots, safeAvailableSlots]);
+
   useEffect(() => {
     if (!safeSession?.id) return;
     let cancelled = false;
@@ -498,196 +514,263 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
         </div>
       )}
 
-      {/* Faculty topic / slot navigator: show each assigned topic first,
-          then the slots belonging to that topic underneath it. */}
+      {/* Faculty topic / slot navigator: Divided into Scheduled and Completed tabs */}
       {safeAvailableSlots.length > 0 && onSelectSlot && (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 sm:p-5 rounded-2xl shadow-xs">
-          <div className="flex items-center gap-2 mb-4">
-            <Layers className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-            <div>
-              <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
-                Assigned GD Topics & Slots
-              </span>
-              <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                Topics assigned to you with their available session slots
-              </span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+              <div>
+                <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
+                  Assigned GD Topics &amp; Slots
+                </span>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Switch between Scheduled (upcoming/live) and Completed discussion slots
+                </span>
+              </div>
+            </div>
+
+            {/* Division Tabs: Scheduled vs Completed */}
+            <div className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/80 self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={() => setSlotCategoryTab('scheduled')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  slotCategoryTab === 'scheduled'
+                    ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Calendar className="w-3.5 h-3.5 text-emerald-500" />
+                <span>Scheduled</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                  slotCategoryTab === 'scheduled' ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300' : 'bg-slate-200 dark:bg-slate-700'
+                }`}>
+                  {scheduledSlots.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSlotCategoryTab('completed')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  slotCategoryTab === 'completed'
+                    ? 'bg-white dark:bg-slate-900 text-purple-600 dark:text-purple-400 shadow-2xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <CheckCircle2 className="w-3.5 h-3.5 text-purple-500" />
+                <span>Completed</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                  slotCategoryTab === 'completed' ? 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300' : 'bg-slate-200 dark:bg-slate-700'
+                }`}>
+                  {completedSlots.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSlotCategoryTab('all')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  slotCategoryTab === 'all'
+                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-2xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <span>All ({safeAvailableSlots.length})</span>
+              </button>
             </div>
           </div>
 
           <div className="space-y-4">
-            {Array.from(
-              safeAvailableSlots.reduce((groups, sl) => {
-                const topic = sl.topic || sl.slotName || 'Group Discussion';
-                const existing = groups.get(topic) || [];
-                existing.push(sl);
-                groups.set(topic, existing);
-                return groups;
-              }, new Map<string, GDSession[]>())
-            ).map(([topic, slots]) => (
-              <div
-                key={topic}
-                className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden"
-              >
-                <div className="px-4 py-3 bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800">
-                  <span className="text-sm font-bold text-slate-900 dark:text-white">
-                    {topic}
-                  </span>
-                </div>
+            {displayedFacultySlots.length === 0 ? (
+              <div className="p-8 text-center rounded-xl border border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50">
+                <Layers className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  {slotCategoryTab === 'scheduled' ? 'No scheduled GD slots pending right now.' : 'No completed GD slots yet.'}
+                </p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  {slotCategoryTab === 'scheduled' ? 'Click "Completed" to view past evaluated sessions and reports.' : 'Click "Scheduled" to view upcoming discussion slots.'}
+                </p>
+              </div>
+            ) : (
+              Array.from(
+                displayedFacultySlots.reduce((groups, sl) => {
+                  const topic = sl.topic || sl.slotName || 'Group Discussion';
+                  const existing = groups.get(topic) || [];
+                  existing.push(sl);
+                  groups.set(topic, existing);
+                  return groups;
+                }, new Map<string, GDSession[]>())
+              ).map(([topic, slots]) => (
+                <div
+                  key={topic}
+                  className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden"
+                >
+                  <div className="px-4 py-3 bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-sm font-bold text-slate-900 dark:text-white">
+                      {topic}
+                    </span>
+                    <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                      {slots.length} {slotCategoryTab === 'scheduled' ? 'Scheduled' : slotCategoryTab === 'completed' ? 'Completed' : 'Total'} {slots.length === 1 ? 'Slot' : 'Slots'}
+                    </span>
+                  </div>
 
-                <div className="p-3 space-y-2">
-                  {slots.map((sl) => {
-                    const isSelected = sl.id === safeSession.id;
-                    const isCompleted = sl.status === 'completed' || isSlotCompletedLocally(sl.id);
+                  <div className="p-3 space-y-2">
+                    {slots.map((sl) => {
+                      const isSelected = sl.id === safeSession.id;
+                      const isCompleted = sl.status === 'completed' || isSlotCompletedLocally(sl.id);
 
-                    return (
-                      <div
-                        key={sl.id}
-                        className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl border transition-all ${
-                          isSelected
-                            ? 'border-indigo-300 dark:border-indigo-700 bg-indigo-50/70 dark:bg-indigo-950/30'
-                            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
-                        }`}
-                      >
-                        <button
-                          onClick={() => handleSelectSlotForDashboard(sl.id)}
-                          className="flex-1 text-left cursor-pointer"
+                      return (
+                        <div
+                          key={sl.id}
+                          className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl border transition-all ${
+                            isSelected
+                              ? 'border-indigo-300 dark:border-indigo-700 bg-indigo-50/70 dark:bg-indigo-950/30'
+                              : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
+                          }`}
                         >
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                              {sl.slotName || sl.id}
-                            </span>
-                            {(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                                🎓 Presentation
+                          <button
+                            onClick={() => handleSelectSlotForDashboard(sl.id)}
+                            className="flex-1 text-left cursor-pointer"
+                          >
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                                {sl.slotName || sl.id}
                               </span>
-                            ) : (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                                👥 GD
-                              </span>
-                            )}
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
-                              isCompleted
-                                ? 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300'
-                                : sl.status === 'active'
-                                ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
-                                : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                            }`}>
-                              {isCompleted ? 'Completed' : sl.status}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500 dark:text-slate-400 flex-wrap">
-                            <span className="flex items-center gap-1 font-medium text-indigo-600 dark:text-indigo-400">
-                              <Calendar className="w-3 h-3" />
-                              <span>{formatSlotDate(sl.slotDate)}</span>
-                            </span>
-                            {sl.slotTiming && (
-                              <>
-                                <span>•</span>
-                                <span className="flex items-center gap-1">
-                                  <Clock className="w-3 h-3" />
-                                  <span>{sl.slotTiming}</span>
+                              {(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                                  🎓 Presentation
                                 </span>
-                              </>
-                            )}
-                          </div>
-                        </button>
-
-                        <div className="flex items-center gap-2 shrink-0">
-                          {(isCompleted || sl.recordingUrl) && (
-                            <button
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                let targetSlot = sl;
-                                if (!targetSlot.recordingUrl) {
-                                  try {
-                                    const res = await fetch(`/api/sessions/${encodeURIComponent(sl.id)}/recording`);
-                                    const d = await res.json();
-                                    if (d.success && d.recordingUrl) {
-                                      targetSlot = { ...sl, recordingUrl: d.recordingUrl };
-                                    }
-                                  } catch {}
-                                }
-                                setActiveVideoSlot(targetSlot);
-                                setShowVideoModal(true);
-                              }}
-                              className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
-                              title="Watch full recorded video and audio of this GD session"
-                            >
-                              <Video className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                              <span>Recording</span>
-                            </button>
-                          )}
-
-                          {isCompleted && (
-                            <button
-                              onClick={() => {
-                                if (onSelectSlot) onSelectSlot(sl.id);
-                                const firstStudentId = sl.students?.find((s) => !s.isEmptySeat && s.college !== 'Available Desk')?.id || sl.students?.[0]?.id || '';
-                                if (onViewStudentReport) {
-                                  onViewStudentReport(firstStudentId);
-                                }
-                              }}
-                              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-purple-600 hover:bg-purple-500 text-white shadow-sm transition-all flex items-center gap-1.5 cursor-pointer"
-                              title="View candidate assessment reports for this completed slot"
-                            >
-                              <FileText className="w-3.5 h-3.5" />
-                              <span>Assessment Reports</span>
-                            </button>
-                          )}
-
-                          {!isCompleted && sl.status === 'active' && (
-                            <button
-                              onClick={() => {
-                                if (onSelectSlot) onSelectSlot(sl.id);
-                                if (onBackToRoom) {
-                                  onBackToRoom();
-                                } else if (onEnterGDRoom) {
-                                  onEnterGDRoom(sl.id);
-                                }
-                              }}
-                              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm transition-all flex items-center gap-1.5 cursor-pointer animate-pulse"
-                              title={(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Enter live presentation room" : "Enter live discussion room"}
-                            >
-                              <Radio className="w-3.5 h-3.5" />
-                              <span>{(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Enter Presentation" : "Enter Room"}</span>
-                            </button>
-                          )}
-
-                          {!isCompleted && sl.status !== 'active' && (
-                            <div className="flex items-center gap-1.5">
-                              {onEnterGDRoom && (
-                                <button
-                                  onClick={() => {
-                                    if (onSelectSlot) onSelectSlot(sl.id);
-                                    onEnterGDRoom(sl.id);
-                                  }}
-                                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 transition-all cursor-pointer"
-                                  title="Enter room to prepare and view seated candidates before commencing"
-                                >
-                                  <span>Enter Room</span>
-                                </button>
+                              ) : (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                                  👥 GD
+                                </span>
                               )}
-                              {onStartSession && (
-                                <button
-                                  onClick={() => {
-                                    onStartSession(sl.id);
-                                  }}
-                                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm transition-all flex items-center gap-1.5 cursor-pointer hover:scale-105 active:scale-95"
-                                  title={(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Start this presentation slot" : "Start this assigned GD slot and commence discussion"}
-                                >
-                                  <Play className="w-3 h-3 fill-current" />
-                                  <span>{(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Start Presentation" : "Start"}</span>
-                                </button>
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
+                                isCompleted
+                                  ? 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300'
+                                  : sl.status === 'active'
+                                  ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
+                                  : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                              }`}>
+                                {isCompleted ? 'Completed' : sl.status}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500 dark:text-slate-400 flex-wrap">
+                              <span className="flex items-center gap-1 font-medium text-indigo-600 dark:text-indigo-400">
+                                <Calendar className="w-3 h-3" />
+                                <span>{formatSlotDate(sl.slotDate)}</span>
+                              </span>
+                              {sl.slotTiming && (
+                                <>
+                                  <span>•</span>
+                                  <span className="flex items-center gap-1">
+                                    <Clock className="w-3 h-3" />
+                                    <span>{sl.slotTiming}</span>
+                                  </span>
+                                </>
                               )}
                             </div>
-                          )}
+                          </button>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            {(isCompleted || sl.recordingUrl) && (
+                              <button
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  let targetSlot = sl;
+                                  if (!targetSlot.recordingUrl) {
+                                    try {
+                                      const res = await fetch(`/api/sessions/${encodeURIComponent(sl.id)}/recording`);
+                                      const d = await res.json();
+                                      if (d.success && d.recordingUrl) {
+                                        targetSlot = { ...sl, recordingUrl: d.recordingUrl };
+                                      }
+                                    } catch {}
+                                  }
+                                  setActiveVideoSlot(targetSlot);
+                                  setShowVideoModal(true);
+                                }}
+                                className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+                                title="Watch full recorded video and audio of this GD session"
+                              >
+                                <Video className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                                <span>Recording</span>
+                              </button>
+                            )}
+
+                            {isCompleted && (
+                              <button
+                                onClick={() => {
+                                  if (onSelectSlot) onSelectSlot(sl.id);
+                                  const firstStudentId = sl.students?.find((s) => !s.isEmptySeat && s.college !== 'Available Desk')?.id || sl.students?.[0]?.id || '';
+                                  if (onViewStudentReport) {
+                                    onViewStudentReport(firstStudentId);
+                                  }
+                                }}
+                                className="px-3 py-1.5 rounded-lg text-xs font-bold bg-purple-600 hover:bg-purple-500 text-white shadow-sm transition-all flex items-center gap-1.5 cursor-pointer"
+                                title="View candidate assessment reports for this completed slot"
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                                <span>Assessment Reports</span>
+                              </button>
+                            )}
+
+                            {!isCompleted && sl.status === 'active' && (
+                              <button
+                                onClick={() => {
+                                  if (onSelectSlot) onSelectSlot(sl.id);
+                                  if (onBackToRoom) {
+                                    onBackToRoom();
+                                  } else if (onEnterGDRoom) {
+                                    onEnterGDRoom(sl.id);
+                                  }
+                                }}
+                                className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm transition-all flex items-center gap-1.5 cursor-pointer animate-pulse"
+                                title={(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Enter live presentation room" : "Enter live discussion room"}
+                              >
+                                <Radio className="w-3.5 h-3.5" />
+                                <span>{(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Enter Presentation" : "Enter Room"}</span>
+                              </button>
+                            )}
+
+                            {!isCompleted && sl.status !== 'active' && (
+                              <div className="flex items-center gap-1.5">
+                                {onEnterGDRoom && (
+                                  <button
+                                    onClick={() => {
+                                      if (onSelectSlot) onSelectSlot(sl.id);
+                                      onEnterGDRoom(sl.id);
+                                    }}
+                                    className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 transition-all cursor-pointer"
+                                    title="Enter room to prepare and view seated candidates before commencing"
+                                  >
+                                    <span>Enter Room</span>
+                                  </button>
+                                )}
+                                {onStartSession && (
+                                  <button
+                                    onClick={() => {
+                                      onStartSession(sl.id);
+                                    }}
+                                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm transition-all flex items-center gap-1.5 cursor-pointer hover:scale-105 active:scale-95"
+                                    title={(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Start this presentation slot" : "Start this assigned GD slot and commence discussion"}
+                                  >
+                                    <Play className="w-3 h-3 fill-current" />
+                                    <span>{(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Start Presentation" : "Start"}</span>
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       )}
