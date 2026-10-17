@@ -8243,6 +8243,7 @@ interface LiveGDRoomState {
   lastOverlapWarningTime?: number;
   askedQuestions: Set<string>;
   facilitatorSpeakingUntil?: number;
+  silenceInterventionCount?: number;
 }
 
 const LIVE_ROOMS = new Map<string, LiveGDRoomState>();
@@ -8319,13 +8320,14 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
   let room = LIVE_ROOMS.get(slotId);
   if (!room) {
     let resolvedTopic = topic;
-    if (!resolvedTopic) {
-      for (const slots of Object.values(persistentState.slots)) {
-        const slot = slots.find((s) => s.id === slotId);
-        if (slot?.topic) {
-          resolvedTopic = slot.topic;
-          break;
-        }
+    let slotStatus: 'waiting' | 'active' | 'completed' = 'waiting';
+    for (const slots of Object.values(persistentState.slots)) {
+      const slot = slots.find((s) => s.id === slotId);
+      if (slot) {
+        if (!resolvedTopic && slot.topic) resolvedTopic = slot.topic;
+        if (slot.status === 'active') slotStatus = 'active';
+        else if (slot.status === 'completed') slotStatus = 'completed';
+        break;
       }
     }
     resolvedTopic = resolvedTopic || (currentLiveSession as any)?.topic || 'Group Discussion';
@@ -8338,10 +8340,11 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
       currentSpeakerSocketId: null,
       silenceTimerSeconds: 0,
       silenceStage: 0,
-      status: 'waiting',
+      status: slotStatus,
       topic: resolvedTopic,
       transcripts: liveTranscripts.filter((t) => t.sessionId === slotId),
       deadlockCount: 0,
+      silenceInterventionCount: 0,
       simulationMode: AI_GD_SIMULATION_MODE,
       floorVersion: 0,
       openingStarted: false,
@@ -8356,9 +8359,21 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
     // Central Silence Turn Arbitration Watchdog
     room.silenceInterval = setInterval(async () => {
       if (room.status !== 'active') {
-        room.silenceTimerSeconds = 0;
-        room.silenceStage = 0;
-        return;
+        let isSlotActive = false;
+        for (const list of Object.values(persistentState.slots)) {
+          const s = list.find((slot) => slot.id === slotId);
+          if (s?.status === 'active') {
+            isSlotActive = true;
+            break;
+          }
+        }
+        if (isSlotActive) {
+          room.status = 'active';
+        } else {
+          room.silenceTimerSeconds = 0;
+          room.silenceStage = 0;
+          return;
+        }
       }
 
       // Auto-clear stale isSpeaking if a peer hasn't emitted speech in >3000ms
@@ -8418,7 +8433,8 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
         // Stage 0 -> 1: At 3s silence -> AI gives Stage 1 guidance (rotating prompt, never repetitive)
         if (room.silenceStage === 0 && room.silenceTimerSeconds >= 3) {
           room.silenceStage = 1;
-          const promptIdx = (room.deadlockCount || 0) % STAGE_1_PROMPTS.length;
+          room.silenceInterventionCount = (room.silenceInterventionCount || 0) + 1;
+          const promptIdx = room.silenceInterventionCount % STAGE_1_PROMPTS.length;
           const instruction1 = STAGE_1_PROMPTS[promptIdx];
           const interventionTx: BackendTranscript = {
             id: `t-facilitator-silence1-${Date.now()}`,
@@ -8445,7 +8461,8 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
         // Stage 1 -> 2: At 6s silence (3s after Stage 1) -> AI gives Stage 2 guidance
         else if (room.silenceStage === 1 && room.silenceTimerSeconds >= 6) {
           room.silenceStage = 2;
-          const promptIdx = (room.deadlockCount || 0) % STAGE_2_PROMPTS.length;
+          room.silenceInterventionCount = (room.silenceInterventionCount || 0) + 1;
+          const promptIdx = room.silenceInterventionCount % STAGE_2_PROMPTS.length;
           const instruction2 = STAGE_2_PROMPTS[promptIdx];
           const interventionTx: BackendTranscript = {
             id: `t-facilitator-silence2-${Date.now()}`,
@@ -9636,6 +9653,14 @@ io.on('connection', (socket) => {
   socket.on('join-gd-room', ({ slotId, user }) => {
     const safeSlotId = slotId || 'session-101';
     const room = getOrCreateLiveRoom(safeSlotId);
+    let targetSlot: any = null;
+    for (const [, list] of Object.entries(persistentState.slots)) {
+      const found = list.find((s) => s.id === safeSlotId);
+      if (found) { targetSlot = found; break; }
+    }
+    if (targetSlot?.status === 'active' && room.status !== 'active') {
+      room.status = 'active';
+    }
     socket.join(`room-${safeSlotId}`);
 
     if (user?.id) {

@@ -467,14 +467,28 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       const normalizePrompt = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
       const normNew = normalizePrompt(intText);
       const normLast = normalizePrompt(lastFacilitatorInterventionTextRef.current || '');
-      const isInterruptionWarning = intervention.action === 'interruption_warning';
+      const isExemptDeduplication =
+        intervention.action === 'interruption_warning' ||
+        intervention.action === 'silence_instruction_1' ||
+        intervention.action === 'silence_instruction_2' ||
+        intervention.action === 'deadlock_intervention' ||
+        intervention.action === 'targeted_question_student';
 
-      if (!isInterruptionWarning && normNew === normLast && now - lastFacilitatorInterventionTimeRef.current < 25000) {
+      if (!isExemptDeduplication && normNew === normLast && now - lastFacilitatorInterventionTimeRef.current < 25000) {
         console.log('[Facilitator] Suppressing duplicate vocalization of recently spoken prompt:', intText);
         return;
       }
       lastFacilitatorInterventionTimeRef.current = now;
       lastFacilitatorInterventionTextRef.current = intText;
+
+      // Update client silence stage to match server intervention
+      if (intervention.action === 'silence_instruction_1') {
+        clientSilenceStageRef.current = 1;
+      } else if (intervention.action === 'silence_instruction_2') {
+        clientSilenceStageRef.current = 2;
+      } else if (intervention.action === 'deadlock_intervention' || intervention.action === 'targeted_question_student') {
+        clientSilenceStageRef.current = 3;
+      }
 
       // Record question in sessionQuestionTracker so local fallback never repeats it
       sessionQuestionTracker.recordQuestion(intText);
@@ -556,11 +570,23 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     }
   }, [session.status, currentUser?.role, onFinishSession, session.slotId, session.id]);
 
-  // Continuous local silence stopwatch fallback to ensure 15s triggers even during socket network lag
+  // Continuous local silence stopwatch fallback to ensure 3s triggers even during socket network lag
   const [localSilenceSeconds, setLocalSilenceSeconds] = useState(0);
 
   // Authoritative microphone volume level derived from active WebRTC stream
   const audioLevel = rtcLocalVolume > 0 ? rtcLocalVolume : userMediaAudioLevel;
+
+  // Stable refs for real-time sensor updates to prevent interval teardown on every audio frame
+  const audioLevelRef = useRef(audioLevel);
+  audioLevelRef.current = audioLevel;
+  const rtcIsSpeakingLiveRef = useRef(rtcIsSpeakingLive);
+  rtcIsSpeakingLiveRef.current = rtcIsSpeakingLive;
+  const liveSpeechTranscriptRef = useRef(liveSpeechTranscript);
+  liveSpeechTranscriptRef.current = liveSpeechTranscript;
+  const rtcPeersRef = useRef(rtcPeers);
+  rtcPeersRef.current = rtcPeers;
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
 
   useEffect(() => {
     if (!isSessionActive) {
@@ -568,13 +594,18 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       return;
     }
     const interval = setInterval(() => {
+      const curAudio = audioLevelRef.current;
+      const curTranscript = liveSpeechTranscriptRef.current;
+      const curSpeakingLive = rtcIsSpeakingLiveRef.current;
+      const curSession = sessionRef.current;
+
       const isAnyActive =
-        session.isFacilitatorSpeaking ||
+        curSession.isFacilitatorSpeaking ||
         roomVoice.isSpeaking() ||
         aiVoicePausedMicRef.current ||
-        rtcIsSpeakingLive ||
-        (isListeningMicRef.current && (audioLevel > 4 || !!liveSpeechTranscript)) ||
-        session.students.some((s) => s.isSpeaking);
+        curSpeakingLive ||
+        (isListeningMicRef.current && (curAudio > 8 || !!curTranscript)) ||
+        (curSession.students || []).some((s) => s.isSpeaking);
 
       if (isAnyActive) {
         setLocalSilenceSeconds(0);
@@ -584,29 +615,34 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       }
     }, 1000);
     return () => clearInterval(interval);
-  }, [isSessionActive, session.isFacilitatorSpeaking, rtcIsSpeakingLive, audioLevel, liveSpeechTranscript, session.students]);
+  }, [isSessionActive]);
 
   // Synchronize silenceTimerSeconds from RTC hook and local stopwatch to session state
   useEffect(() => {
     setSession((prev) => {
-      const merged = isSocketConnected ? rtcSilenceTimer : localSilenceSeconds;
+      const merged = Math.max(rtcSilenceTimer, localSilenceSeconds);
       if (prev.silenceTimerSeconds === merged) return prev;
       return { ...prev, silenceTimerSeconds: merged };
     });
-  }, [rtcSilenceTimer, localSilenceSeconds, isSocketConnected]);
+  }, [rtcSilenceTimer, localSilenceSeconds]);
 
   // Continuous real-time speaking time tracker: increments participant speaking seconds live while speaking
   const activeSpeakersTrackerRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!isSessionActive) return;
     const interval = setInterval(() => {
-      const isUserSpeaking = !isFaculty && isListeningMicRef.current && (rtcIsSpeakingLive || audioLevel > 4 || !!liveSpeechTranscript);
+      const curAudio = audioLevelRef.current;
+      const curTranscript = liveSpeechTranscriptRef.current;
+      const curSpeakingLive = rtcIsSpeakingLiveRef.current;
+      const curPeers = rtcPeersRef.current;
+
+      const isUserSpeaking = !isFaculty && isListeningMicRef.current && (curSpeakingLive || curAudio > 8 || !!curTranscript);
 
       setSession((prev) => {
         let hasChanges = false;
-        const updated = prev.students.map((s) => {
+        const updated = (prev.students || []).map((s) => {
           const isThisUserSpeaking = s.isUser && isUserSpeaking;
-          const matchingPeer = rtcPeers.find((p) => p.userId === s.id || p.socketId === s.id || p.seatNumber === s.seatNumber);
+          const matchingPeer = curPeers.find((p) => p.userId === s.id || p.socketId === s.id || p.seatNumber === s.seatNumber);
           const isRemotePeerSpeaking = Boolean(matchingPeer?.isSpeaking);
           const isAiSpeaking = Boolean(s.isDemoAI && s.isSpeaking);
 
@@ -638,7 +674,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       });
     }, 1000);
     return () => clearInterval(interval);
-  }, [isSessionActive, rtcIsSpeakingLive, audioLevel, isFaculty, liveSpeechTranscript, rtcPeers]);
+  }, [isSessionActive, isFaculty]);
 
   // When two or more real students are connected, the server owns turn orchestration.
   // Local auto-simulation is retained only for the single-user demo mode.
@@ -1401,12 +1437,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           lastResultReceivedTime.current = Date.now();
           lastWebSpeechTimeRef.current = Date.now();
 
-          // While AI facilitator voice is actually speaking, ignore speaker feedback unless candidate is speaking firmly
+          // While AI facilitator voice is actually speaking, cut off AI voice so candidate takes the floor
           if (roomVoice.isSpeaking()) {
-            if (audioLevel < 12) {
-              return;
-            }
-            // Candidate is actively speaking — cut off AI voice so user takes the floor
             roomVoice.stop();
             aiVoicePausedMicRef.current = false;
             setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
@@ -1557,14 +1589,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       // 2. Prevent Chromium SpeechRecognition socket timeout:
       // Chrome silently drops recognition after 40-50s of continuous listening.
       // If idle (no uncommitted speech in progress) and session is > 35s old, cycle to a fresh instance.
-      const hasUncommittedSpeech = Boolean(liveTranscriptRef.current || liveSpeechTranscript);
+      const hasUncommittedSpeech = Boolean(liveTranscriptRef.current || liveSpeechTranscriptRef.current);
       if (sessionAge > 35000 && !hasUncommittedSpeech) {
         startRecognitionInstance();
         return;
       }
 
       // 3. User is actively speaking into mic (audioLevel > 12) but speech recognition produced nothing for > 3.5s
-      if (audioLevel > 12 && timeSinceResult > 3500 && !hasUncommittedSpeech) {
+      if (audioLevelRef.current > 12 && timeSinceResult > 3500 && !hasUncommittedSpeech) {
         startRecognitionInstance();
         return;
       }
@@ -1690,6 +1722,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     const isDirective = actionType === 'initiate_opening_speaker' || 
                         actionType === 'explain_rules' || 
                         actionType === 'welcome' ||
+                        actionType === 'silence_instruction_1' ||
+                        actionType === 'silence_instruction_2' ||
+                        actionType === 'deadlock_intervention' ||
                         actionType === 'targeted_question_student' ||
                         actionType === 'interruption_arbitration' ||
                         actionType === 'test_voice' ||
@@ -2220,7 +2255,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     }
 
     // 2. 3-Second Staged Turn Arbitration Watchdog (3s Stage 1, 6s Stage 2, 9s Targeted Candidate Callout)
-    const currentSilence = isSocketConnected ? rtcSilenceTimer : Math.max(localSilenceSeconds, session.silenceTimerSeconds);
+    const currentSilence = Math.max(localSilenceSeconds, rtcSilenceTimer, session.silenceTimerSeconds);
     if (
       !session.isFacilitatorSpeaking &&
       !roomVoice.isSpeaking() &&
@@ -2229,22 +2264,22 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       !isTransitioningTurnRef.current &&
       !liveSpeechTranscript
     ) {
-      if (!isSocketConnected) {
-        const STAGE_1_PROMPTS = [
-          "Who would like to build on that point or share an alternative perspective?",
-          "Let's hear other viewpoints on this topic — anyone is welcome to jump in.",
-          "Who has a counter-argument or fresh insight to bring to the discussion?",
-          "Let's explore another angle of this issue — who would like to speak next?",
-          "Feel free to share your thoughts or provide real-world examples on this point.",
-        ];
-        const STAGE_2_PROMPTS = [
-          "Let's keep the discussion moving — feel free to jump in with your thoughts.",
-          "We encourage everyone to participate — please share your perspective.",
-          "Let's hear from our peers who haven't spoken recently — what is your view?",
-          "Does anyone want to add data or concrete industry examples to support our analysis?",
-          "Who would like to take the floor next to expand on this topic?",
-        ];
+      const STAGE_1_PROMPTS = [
+        "Who would like to build on that point or share an alternative perspective?",
+        "Let's hear other viewpoints on this topic — anyone is welcome to jump in.",
+        "Who has a counter-argument or fresh insight to bring to the discussion?",
+        "Let's explore another angle of this issue — who would like to speak next?",
+        "Feel free to share your thoughts or provide real-world examples on this point.",
+      ];
+      const STAGE_2_PROMPTS = [
+        "Let's keep the discussion moving — feel free to jump in with your thoughts.",
+        "We encourage everyone to participate — please share your perspective.",
+        "Let's hear from our peers who haven't spoken recently — what is your view?",
+        "Does anyone want to add data or concrete industry examples to support our analysis?",
+        "Who would like to take the floor next to expand on this topic?",
+      ];
 
+      if (!isSocketConnected) {
         if (clientSilenceStageRef.current === 0 && currentSilence >= 3 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
           clientSilenceStageRef.current = 1;
           lastFacilitatorInterventionTimeRef.current = Date.now();
@@ -2260,10 +2295,34 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           lastFacilitatorInterventionTimeRef.current = Date.now();
           handleFacilitatorTargetedProbe();
         }
-      } else if (currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 10000) {
-        lastFacilitatorInterventionTimeRef.current = Date.now();
-        if (rtcRequestAiIntervention) {
-          rtcRequestAiIntervention();
+      } else {
+        // Socket mode: Fail-safe if server hasn't intervened within 4s of silence
+        if (clientSilenceStageRef.current === 0 && currentSilence >= 4 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 4000) {
+          clientSilenceStageRef.current = 1;
+          lastFacilitatorInterventionTimeRef.current = Date.now();
+          const pIdx = Math.floor(Date.now() / 1000) % STAGE_1_PROMPTS.length;
+          const prompt = STAGE_1_PROMPTS[pIdx];
+          if (rtcBroadcastFacilitatorSpeech) {
+            rtcBroadcastFacilitatorSpeech(prompt, 'silence_instruction_1');
+          }
+          speakFacilitator(prompt, 'silence_instruction_1', 'turn_transition');
+        } else if (clientSilenceStageRef.current === 1 && currentSilence >= 7 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 4000) {
+          clientSilenceStageRef.current = 2;
+          lastFacilitatorInterventionTimeRef.current = Date.now();
+          const pIdx = Math.floor(Date.now() / 1000) % STAGE_2_PROMPTS.length;
+          const prompt = STAGE_2_PROMPTS[pIdx];
+          if (rtcBroadcastFacilitatorSpeech) {
+            rtcBroadcastFacilitatorSpeech(prompt, 'silence_instruction_2');
+          }
+          speakFacilitator(prompt, 'silence_instruction_2', 'turn_transition');
+        } else if (currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 6000) {
+          lastFacilitatorInterventionTimeRef.current = Date.now();
+          clientSilenceStageRef.current = 3;
+          if (rtcRequestAiIntervention) {
+            rtcRequestAiIntervention();
+          } else {
+            handleFacilitatorTargetedProbe();
+          }
         }
       }
     }

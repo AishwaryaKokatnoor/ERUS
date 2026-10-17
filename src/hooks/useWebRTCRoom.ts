@@ -592,7 +592,7 @@ export function useWebRTCRoom({
                   volumeLevel: 0,
                 });
                 speakingStateTimeoutRef.current = null;
-              }, 1200);
+              }, 600);
             }
           }
 
