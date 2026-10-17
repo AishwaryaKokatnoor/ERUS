@@ -9871,10 +9871,9 @@ io.on('connection', (socket) => {
       (p) => p.role === 'student' && p.isSpeaking && p.micActive
     );
 
-    // VOICE OVERLAPPING RESTRICTION:
-    // Allow people to speak freely as they wish without single-speaker restriction.
-    // BUT if 2 or more participants are speaking at the exact same time continuously for >= 1800ms,
-    // AI Facilitator intervenes with a polite restriction to resolve voice overlap.
+    // INTERRUPTION & VOICE OVERLAPPING RESTRICTION:
+    // Continuous discussion: all mics stay open, but if multiple participants speak simultaneously
+    // for >= 1000ms, the AI Facilitator gives the interruption message.
     if (activelySpeakingPeers.length >= 2) {
       if (!room.overlapTimer) {
         room.overlapTimer = setTimeout(() => {
@@ -9884,13 +9883,13 @@ io.on('connection', (socket) => {
           );
           if (currentOverlapping.length >= 2) {
             const now = Date.now();
-            if (now - (room.lastOverlapWarningTime || 0) > 20000) {
+            if (now - (room.lastOverlapWarningTime || 0) > 12000) {
               room.lastOverlapWarningTime = now;
               const spk1 = currentOverlapping[0];
               const spk2 = currentOverlapping[1];
               spk2.interruptionCount = (spk2.interruptionCount || 0) + 1;
 
-              const warningMsg = `Please hold on a moment — your voices are overlapping. Let ${spk1.name} complete their point first, and then ${spk2.name} please go ahead.`;
+              const warningMsg = `Please allow ${spk1.name} to finish their statement before speaking. Let's maintain proper discussion decorum.`;
               const interventionTx: BackendTranscript = {
                 id: `t-overlap-${Date.now()}`,
                 sessionId: room.slotId,
@@ -9914,9 +9913,18 @@ io.on('connection', (socket) => {
                 targetSeatNumber: spk2.seatNumber,
                 transcript: interventionTx,
               });
+
+              io.to(`room-${safeSlotId}`).emit('peer-stats-updated', {
+                socketId: spk2.socketId,
+                userId: spk2.userId,
+                seatNumber: spk2.seatNumber,
+                speakingTurns: spk2.speakingTurns,
+                speakingDurationSeconds: spk2.speakingDurationSeconds,
+                interruptionCount: spk2.interruptionCount,
+              });
             }
           }
-        }, 1800);
+        }, 1000);
       }
     } else {
       if (room.overlapTimer) {

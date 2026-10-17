@@ -113,15 +113,21 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       return true;
     });
   }, [transcripts]);
+
+  const isFaculty = currentUser?.role === 'faculty';
+  const isFacultyOrAdmin = currentUser?.role === 'faculty' || currentUser?.role === 'college_admin' || currentUser?.role === 'super_admin';
+  const canStartSession = isFacultyOrAdmin;
+  const isStudent = currentUser?.role === 'student';
+
   const [liveSpeechTranscript, setLiveSpeechTranscript] = useState('');
   const [typedStatement, setTypedStatement] = useState('');
   const liveTranscriptRef = useRef<string>('');
   const speechPauseTimerRef = useRef<any>(null);
-  const isListeningMicRef = useRef<boolean>(false);
+  const isListeningMicRef = useRef<boolean>(!isFaculty);
   const isRecognitionRunningRef = useRef<boolean>(false);
   const restartRecognitionTimerRef = useRef<any>(null);
   const handleSendUserStatementRef = useRef<(textToSend?: string) => Promise<void>>(() => Promise.resolve());
-  const [isListeningMic, setIsListeningMic] = useState(false);
+  const [isListeningMic, setIsListeningMic] = useState(!isFaculty);
   const [interruptionWarning, setInterruptionWarning] = useState<string | null>(null);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   // Server-side Socket.IO is now the single source of truth for AI turns.
@@ -138,11 +144,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   const lastFacilitatorInterventionTimeRef = useRef<number>(0);
   const lastFacilitatorInterventionTextRef = useRef<string>('');
   const clientSilenceStageRef = useRef<number>(0);
-
-  const isFaculty = currentUser?.role === 'faculty';
-  const isFacultyOrAdmin = currentUser?.role === 'faculty' || currentUser?.role === 'college_admin' || currentUser?.role === 'super_admin';
-  const canStartSession = isFacultyOrAdmin;
-  const isStudent = currentUser?.role === 'student';
   const isSessionActive = session.status === 'active';
   const [showVideoModal, setShowVideoModal] = useState(false);
   // Faculty Live Observation Notes State (Enhancement 4)
@@ -622,7 +623,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           batch: (currentUser as any)?.batch || '2024-2028',
           avatar: currentUser?.avatar || '',
           isUser: true,
-          micActive: false,
+          micActive: !isFaculty,
           isSpeaking: false,
           hasRaisedHand: false,
           cameraActive: false,
@@ -1572,14 +1573,19 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       }
     };
 
-    // Watchdog Heartbeat: ensures recognition is running if mic is active
+    // Watchdog Heartbeat: ensures recognition is running continuously if mic is active
     const watchdog = setInterval(() => {
       if (isListeningMicRef.current && !isRecognitionRunningRef.current) {
         startRecognitionInstance();
       }
     }, 1500);
 
-    // Save helper reference so toggleMicRecognition can invoke it directly
+    // Continuous discussion: auto-start recognition immediately for student participants
+    if (isListeningMicRef.current) {
+      setTimeout(startRecognitionInstance, 300);
+    }
+
+    // Save helper reference so it can be revived if needed
     (window as any).__startErusSpeechRecognition = startRecognitionInstance;
 
     return () => {
@@ -1599,102 +1605,80 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     };
   }, []);
 
-  const toggleMicRecognition = async () => {
-    if (isListeningMic) {
-      // User muting: auto-commit any pending speech immediately so words are not lost
-      if (speechPauseTimerRef.current) {
-        clearTimeout(speechPauseTimerRef.current);
-        speechPauseTimerRef.current = null;
-      }
-      const pendingSpeech = String(liveTranscriptRef.current || liveSpeechTranscript || '').trim();
-      if (pendingSpeech) {
-        commitLiveSpeechToRoom(pendingSpeech);
-      }
+  const activateContinuousMicrophone = useCallback(async () => {
+    if (isFaculty) return;
+    if (roomVoice.isSpeaking() || session.isFacilitatorSpeaking) {
+      roomVoice.stop();
+      setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
+    }
+    aiVoicePausedMicRef.current = false;
+    if (aiVoiceResumeTimerRef.current) {
+      clearTimeout(aiVoiceResumeTimerRef.current);
+      aiVoiceResumeTimerRef.current = null;
+    }
 
-      isListeningMicRef.current = false;
-      aiVoicePausedMicRef.current = false;
-      isRecognitionRunningRef.current = false;
-      if (restartRecognitionTimerRef.current) {
-        clearTimeout(restartRecognitionTimerRef.current);
-        restartRecognitionTimerRef.current = null;
-      }
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.onstart = null;
-          recognitionRef.current.onresult = null;
-          recognitionRef.current.onerror = null;
-          recognitionRef.current.onend = null;
-          recognitionRef.current.abort();
-        } catch (e) {
-          console.warn('Recognition abort error:', e);
-        }
-        recognitionRef.current = null;
-      }
-      setIsListeningMic(false);
-      stopMediaRecorderFallback();
-      stopAudioAnalyser();
-      await rtcSetMicEnabled(false);
-      yieldFloorAndNotifyRef.current();
-      if (!isFaculty) {
-        setSession((prev) => ({
-          ...prev,
-          students: prev.students.map((s) => (s.isUser ? { ...s, micActive: false } : s)),
-        }));
-      }
-    } else {
-      if (roomVoice.isSpeaking() || session.isFacilitatorSpeaking) {
-        roomVoice.stop();
-        setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
-      }
-      liveTranscriptRef.current = '';
-      setLiveSpeechTranscript('');
-      aiVoicePausedMicRef.current = false;
-      if (aiVoiceResumeTimerRef.current) {
-        clearTimeout(aiVoiceResumeTimerRef.current);
-        aiVoiceResumeTimerRef.current = null;
-      }
+    isListeningMicRef.current = true;
+    setIsListeningMic(true);
 
-      isListeningMicRef.current = true;
-      setIsListeningMic(true);
-
+    try {
       await rtcSetMicEnabled(true);
+    } catch (e) {}
 
-      // Reuse WebRTC microphone stream first so two getUserMedia calls don't contend for the mic
-      let activeMicStream: MediaStream | null = getLocalAudioStream ? getLocalAudioStream() : null;
-      if (!activeMicStream) {
-        try {
-          activeMicStream = await startAudioAnalyser();
-        } catch (e) {
-          console.warn('startAudioAnalyser error:', e);
-        }
-      }
-
-      // Start MediaRecorder fallback using the verified stream
-      if (activeMicStream) {
-        startMediaRecorderFallback(activeMicStream);
-      }
-
-      if (typeof (window as any).__startErusSpeechRecognition === 'function') {
-        (window as any).__startErusSpeechRecognition();
-      } else if (recognitionRef.current && !isRecognitionRunningRef.current) {
-        try {
-          recognitionRef.current.start();
-        } catch (e) {
-          setTimeout(() => {
-            if (isListeningMicRef.current && !isRecognitionRunningRef.current && recognitionRef.current) {
-              try { recognitionRef.current.start(); } catch {}
-            }
-          }, 150);
-        }
-      }
-      if (!isFaculty) {
-        setSession((prev) => ({
-          ...prev,
-          students: prev.students.map((s) => (s.isUser ? { ...s, micActive: true } : s)),
-        }));
+    let activeMicStream: MediaStream | null = getLocalAudioStream ? getLocalAudioStream() : null;
+    if (!activeMicStream) {
+      try {
+        activeMicStream = await startAudioAnalyser();
+      } catch (e) {
+        console.warn('startAudioAnalyser error:', e);
       }
     }
-  };
+
+    if (activeMicStream) {
+      startMediaRecorderFallback(activeMicStream);
+    }
+
+    if (typeof (window as any).__startErusSpeechRecognition === 'function') {
+      (window as any).__startErusSpeechRecognition();
+    } else if (recognitionRef.current && !isRecognitionRunningRef.current) {
+      try {
+        recognitionRef.current.start();
+      } catch (e) {
+        setTimeout(() => {
+          if (isListeningMicRef.current && !isRecognitionRunningRef.current && recognitionRef.current) {
+            try { recognitionRef.current.start(); } catch {}
+          }
+        }, 150);
+      }
+    }
+
+    setSession((prev) => ({
+      ...prev,
+      students: prev.students.map((s) => (s.isUser ? { ...s, micActive: true } : s)),
+    }));
+  }, [isFaculty, session.isFacilitatorSpeaking, rtcSetMicEnabled, getLocalAudioStream, startAudioAnalyser]);
+
+  const toggleMicRecognition = activateContinuousMicrophone;
+
+  // Auto-activate continuous open microphone for participants
+  useEffect(() => {
+    if (!isFaculty) {
+      activateContinuousMicrophone();
+    }
+  }, [isFaculty, activateContinuousMicrophone]);
+
+  // Ensure AudioContext and continuous recognition resume on first user interaction
+  useEffect(() => {
+    if (isFaculty) return;
+    const resumeOnInteraction = () => {
+      activateContinuousMicrophone();
+    };
+    window.addEventListener('click', resumeOnInteraction, { once: true });
+    window.addEventListener('keydown', resumeOnInteraction, { once: true });
+    return () => {
+      window.removeEventListener('click', resumeOnInteraction);
+      window.removeEventListener('keydown', resumeOnInteraction);
+    };
+  }, [isFaculty, activateContinuousMicrophone]);
 
   // Helper for candidate to explicitly finish speaking and pass floor to other participants/facilitator
   const handlePassFloor = useCallback(async () => {
@@ -1707,9 +1691,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       commitLiveSpeechToRoom(pendingSpeech);
     }
     yieldFloorAndNotifyRef.current();
-    if (isListeningMicRef.current) {
-      await toggleMicRecognition();
-    }
   }, [liveSpeechTranscript]);
 
   // Trigger Facilitator speech and vocalize
@@ -2893,17 +2874,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 </div>
                 {invitedStudentPrompt.student.isUser && (
                   <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
-                    <button
-                      onClick={() => {
-                        if (!isListeningMic) {
-                          toggleMicRecognition();
-                        }
-                      }}
-                      className="px-3.5 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md flex items-center gap-1.5 cursor-pointer hover:scale-105 transition-all"
-                    >
+                    <div className="px-3 py-2 rounded-xl text-xs font-bold bg-emerald-600 text-white shadow-md flex items-center gap-1.5">
                       <Mic className="w-3.5 h-3.5" />
-                      <span>{isListeningMic ? 'Mic Active (Speaking...)' : 'Unmute & Speak'}</span>
-                    </button>
+                      <span>Floor is Yours (Speak Freely)</span>
+                    </div>
                     <button
                       onClick={() => {
                         setInvitedStudentPrompt(null);
@@ -3182,33 +3156,23 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 {/* Center Control Action Buttons */}
                 <div className="flex items-center gap-2 sm:gap-3 mx-auto sm:mx-0">
                   
-                  {/* 1. Microphone Toggle (Student participants only - faculty is strictly a listener) */}
+                  {/* 1. Continuous Open Microphone Status (No unmuting/muting required) */}
                   {!isFaculty && (
-                    <button
-                      id="mic-speak-btn"
-                      onClick={toggleMicRecognition}
-                      className={`relative p-3 rounded-full font-semibold transition-all shadow-lg flex items-center justify-center cursor-pointer ${
-                        isListeningMic
-                          ? 'bg-red-600 hover:bg-red-700 text-white ring-4 ring-red-500/40 animate-pulse'
-                          : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
-                      }`}
-                      title={
-                        isListeningMic 
-                          ? 'Mute Microphone (Speaking Active)' 
-                          : 'Unmute Microphone (Push to Speak)'
-                      }
+                    <div
+                      id="mic-continuous-indicator"
+                      className="relative px-3.5 py-2.5 rounded-full font-semibold shadow-md flex items-center gap-2 bg-emerald-500/20 border border-emerald-500/40 text-emerald-300"
+                      title="Continuous Open Microphone Active — Speak freely at any time"
                     >
-                      {isListeningMic ? (
-                        <Mic className="w-5 h-5 text-white animate-bounce" />
-                      ) : (
-                        <MicOff className="w-5 h-5 text-rose-400" />
-                      )}
-                      {isListeningMic && audioLevel > 0 && (
-                        <span 
-                          className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-slate-950 animate-ping"
-                        />
-                      )}
-                    </button>
+                      <div className="relative flex items-center justify-center">
+                        <Mic className="w-5 h-5 text-emerald-400" />
+                        {audioLevel > 4 && (
+                          <span 
+                            className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-400 border border-slate-950 animate-ping"
+                          />
+                        )}
+                      </div>
+                      <span className="text-xs font-bold text-emerald-200 hidden sm:inline">Open Mic Active</span>
+                    </div>
                   )}
 
                   {/* 2. Camera Toggle (Student only) */}
@@ -3458,14 +3422,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                           <Volume2 className="w-3 h-3" />
                           <span>Test Audio</span>
                         </button>
-                        <button
-                          onClick={toggleMicRecognition}
-                          className="px-2.5 py-1 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white text-[11px] font-semibold flex items-center gap-1 transition-all cursor-pointer shadow"
-                          title="Mute microphone and finish speaking"
-                        >
-                          <MicOff className="w-3 h-3" />
-                          <span>Mute / Finish</span>
-                        </button>
                       </div>
                     </div>
 
@@ -3550,13 +3506,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                         <span>Test Audio & Mic</span>
                       </button>
 
-                      <button
-                        onClick={toggleMicRecognition}
-                        className="px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-md cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
-                      >
-                        <Mic className="w-3.5 h-3.5" />
-                        <span>Unmute & Speak Live</span>
-                      </button>
+                      <div className="px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center gap-1.5 shadow-2xs">
+                        <Mic className="w-3.5 h-3.5 text-emerald-500" />
+                        <span>Continuous Open Mic</span>
+                      </div>
                     </div>
                   </div>
                 )}

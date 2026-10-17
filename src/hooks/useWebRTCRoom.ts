@@ -95,7 +95,7 @@ export function useWebRTCRoom({
   const [aiParticipants, setAiParticipants] = useState<any[]>([]);
   const [simulationMode, setSimulationMode] = useState(false);
   const [silenceTimerSeconds, setSilenceTimerSeconds] = useState(0);
-  const [isMicMuted, setIsMicMuted] = useState(true);
+  const [isMicMuted, setIsMicMuted] = useState(currentUser?.role === 'faculty');
   const [isSpeakingLive, setIsSpeakingLive] = useState(false);
   const [localVolume, setLocalVolume] = useState(0);
   const [isFloorLocked, setIsFloorLocked] = useState(false);
@@ -472,11 +472,12 @@ export function useWebRTCRoom({
 
       localStreamRef.current = stream;
 
-      // Start with audio tracks muted initially; participant can freely unmute via toggleMute()
+      // Continuous open mic: start with audio tracks active for students (no manual unmuting needed)
+      const isFacultyUser = currentUserRef.current?.role === 'faculty';
       stream.getAudioTracks().forEach((track) => {
-        track.enabled = false;
+        track.enabled = !isFacultyUser;
       });
-      setIsMicMuted(true);
+      setIsMicMuted(Boolean(isFacultyUser));
 
       // Attach tracks to any peer connections that were established before mic was ready
       peerConnectionsRef.current.forEach((pc, peerSocketId) => {
