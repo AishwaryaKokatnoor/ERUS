@@ -946,9 +946,7 @@ export function useWebRTCRoom({
         });
       }
 
-      if (speakerId && speakerId !== 'facilitator' && roomVoice.isSpeaking()) {
-        roomVoice.stop();
-      }
+      // Do NOT kill active roomVoice on floor-state events; AI facilitator and AI student speech should complete naturally
       if (!speakerId) {
         setError(null);
       }

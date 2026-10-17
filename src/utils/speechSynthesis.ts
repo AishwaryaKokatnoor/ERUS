@@ -105,6 +105,11 @@ class RoomVoiceEngine {
   private initVoices() {
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       this.refreshVoices();
+      try {
+        window.speechSynthesis.addEventListener('voiceschanged', () => {
+          this.refreshVoices();
+        });
+      } catch {}
       if (typeof window.speechSynthesis.onvoiceschanged !== 'undefined') {
         window.speechSynthesis.onvoiceschanged = () => {
           this.refreshVoices();
@@ -127,8 +132,16 @@ class RoomVoiceEngine {
   }
 
   public getVoices(): SpeechSynthesisVoice[] {
-    if (this.cachedVoices.length > 0) return this.cachedVoices;
-    return this.refreshVoices();
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      try {
+        const live = window.speechSynthesis.getVoices();
+        if (live && live.length > 0) {
+          this.cachedVoices = live;
+          return live;
+        }
+      } catch {}
+    }
+    return this.cachedVoices;
   }
 
   // Detect whether a voice is an authentic Indian English voice
@@ -320,19 +333,18 @@ class RoomVoiceEngine {
       this.unlock();
 
       const genId = ++this.speechGenerationId;
-      const hadActiveSpeech =
-        this.isCurrentlySpeaking ||
-        window.speechSynthesis.speaking ||
-        window.speechSynthesis.pending;
+      const shouldInterrupt = this.isCurrentlySpeaking;
 
-      if (hadActiveSpeech) {
+      if (shouldInterrupt) {
         try {
           window.speechSynthesis.cancel();
-          if (window.speechSynthesis.paused) {
-            window.speechSynthesis.resume();
-          }
         } catch {}
       }
+      try {
+        if (window.speechSynthesis.paused) {
+          window.speechSynthesis.resume();
+        }
+      } catch {}
 
       const sentences = this.splitIntoSentences(cleanText);
       if (sentences.length === 0) {
@@ -374,15 +386,17 @@ class RoomVoiceEngine {
 
           const utterance = new SpeechSynthesisUtterance(sentence);
           utterance.volume = 1.0;
-          utterance.rate = 0.96; // Dignified, clear Indian academic cadence
+          utterance.rate = 0.96; // Dignified, clear academic cadence
           utterance.pitch = 1.0;
 
-          const voice = this.getIndianFacilitatorVoice();
+          const allVoices = this.getVoices();
+          const voice = this.getIndianFacilitatorVoice() || (allVoices.length > 0 ? allVoices[0] : undefined);
           if (voice) {
             utterance.voice = voice;
-            utterance.lang = voice.lang || 'en-IN';
+            utterance.lang = voice.lang || 'en-US';
           } else {
-            utterance.lang = 'en-IN';
+            // Universal fallback: en-US is supported across all Windows and Chromium installations
+            utterance.lang = 'en-US';
           }
 
           this.activeUtterances.add(utterance);
@@ -451,10 +465,16 @@ class RoomVoiceEngine {
             }
           }, 3000);
 
-          console.log(`[AI Facilitator Voice] Speaking chunk (${currentIndex}/${sentences.length}):`, sentence, '| Voice:', voice?.name || 'Default');
+          console.log(`[AI Facilitator Voice] Speaking chunk (${currentIndex}/${sentences.length}):`, sentence, '| Voice:', voice?.name || 'Default', '| Lang:', utterance.lang);
+          if (window.speechSynthesis.paused) {
+            window.speechSynthesis.resume();
+          }
           window.speechSynthesis.speak(utterance);
+          if (window.speechSynthesis.paused) {
+            window.speechSynthesis.resume();
+          }
 
-          // Ensure unpaused and retry if Windows SAPI silently dropped the utterance
+          // Ensure unpaused and retry if Windows SAPI delayed or dropped the utterance
           retryTimer = setTimeout(() => {
             if (genId !== this.speechGenerationId || hasAdvanced) return;
             if (typeof window !== 'undefined' && window.speechSynthesis) {
@@ -468,17 +488,16 @@ class RoomVoiceEngine {
                 } catch {}
               }
             }
-          }, 550);
+          }, 450);
         } catch (innerErr) {
           console.warn('[AI Facilitator Voice] Inner speak error:', innerErr);
           speakNextChunk();
         }
       };
 
-      // Give Windows SAPI 120ms to settle if we just cancelled prior speech, or 25ms if idle
       setTimeout(() => {
         speakNextChunk();
-      }, hadActiveSpeech ? 120 : 25);
+      }, shouldInterrupt ? 70 : 15);
     } catch (e) {
       console.warn('Facilitator voice synthesis error:', e);
       this.isCurrentlySpeaking = false;
@@ -498,16 +517,18 @@ class RoomVoiceEngine {
       this.unlock();
 
       const genId = ++this.speechGenerationId;
-      const hadActiveSpeech =
-        this.isCurrentlySpeaking ||
-        window.speechSynthesis.speaking ||
-        window.speechSynthesis.pending;
+      const shouldInterrupt = this.isCurrentlySpeaking;
 
-      if (hadActiveSpeech) {
+      if (shouldInterrupt) {
         try {
           window.speechSynthesis.cancel();
         } catch {}
       }
+      try {
+        if (window.speechSynthesis.paused) {
+          window.speechSynthesis.resume();
+        }
+      } catch {}
 
       this.isCurrentlySpeaking = true;
 
@@ -529,14 +550,15 @@ class RoomVoiceEngine {
           const isFemale = student.gender === 'female' || femaleNames.includes(firstName);
           const seatNum = student.seatNumber || (parseInt(student.id.replace(/\D/g, ''), 10) || 1);
 
+          const allVoices = this.getVoices();
           const indianVoices = this.getAvailableIndianVoices().filter((v) =>
             (v.lang || '').toLowerCase().startsWith('en-in') ||
             (v.lang || '').toLowerCase().startsWith('en')
           );
-          const allEnglishVoices = this.getVoices().filter((v) =>
+          const allEnglishVoices = allVoices.filter((v) =>
             (v.lang || '').toLowerCase().startsWith('en')
           );
-          const voicePool = indianVoices.length >= 2 ? indianVoices : allEnglishVoices;
+          const voicePool = indianVoices.length >= 2 ? indianVoices : (allEnglishVoices.length > 0 ? allEnglishVoices : allVoices);
           
           let selectedVoice: SpeechSynthesisVoice | undefined;
           if (voicePool.length > 0) {
@@ -549,9 +571,9 @@ class RoomVoiceEngine {
 
           if (selectedVoice) {
             utterance.voice = selectedVoice;
-            utterance.lang = selectedVoice.lang || 'en-IN';
+            utterance.lang = selectedVoice.lang || 'en-US';
           } else {
-            utterance.lang = 'en-IN';
+            utterance.lang = 'en-US';
           }
 
           if (isFemale) {
@@ -604,7 +626,7 @@ class RoomVoiceEngine {
           };
 
           utterance.onerror = (e) => {
-            console.warn('[AI Student Voice Notice]: utterance event:', e.error);
+            console.warn('[AI Student Voice Notice]: utterance event:', e?.error);
             cleanup();
             if (onEnd) onEnd();
           };
@@ -622,7 +644,13 @@ class RoomVoiceEngine {
           }, 4000);
 
           window.dispatchEvent(new CustomEvent('erus-ai-voice-start'));
+          if (window.speechSynthesis.paused) {
+            window.speechSynthesis.resume();
+          }
           window.speechSynthesis.speak(utterance);
+          if (window.speechSynthesis.paused) {
+            window.speechSynthesis.resume();
+          }
 
           setTimeout(() => {
             if (typeof window !== 'undefined' && window.speechSynthesis && window.speechSynthesis.paused) {
@@ -634,7 +662,7 @@ class RoomVoiceEngine {
           this.isCurrentlySpeaking = false;
           if (onEnd) onEnd();
         }
-      }, hadActiveSpeech ? 140 : 40);
+      }, shouldInterrupt ? 70 : 15);
     } catch (e) {
       console.warn('Student voice synthesis error:', e);
       this.isCurrentlySpeaking = false;

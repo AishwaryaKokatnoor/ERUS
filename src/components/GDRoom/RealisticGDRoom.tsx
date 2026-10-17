@@ -1481,10 +1481,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   const activateContinuousMicrophone = useCallback(async () => {
     if (isFaculty) return;
-    if (roomVoice.isSpeaking() || session.isFacilitatorSpeaking) {
-      roomVoice.stop();
-      setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
-    }
     aiVoicePausedMicRef.current = false;
     if (aiVoiceResumeTimerRef.current) {
       clearTimeout(aiVoiceResumeTimerRef.current);
@@ -1529,7 +1525,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       ...prev,
       students: prev.students.map((s) => (s.isUser ? { ...s, micActive: true } : s)),
     }));
-  }, [isFaculty, session.isFacilitatorSpeaking, rtcSetMicEnabled, getLocalAudioStream, startAudioAnalyser]);
+  }, [isFaculty, rtcSetMicEnabled, getLocalAudioStream, startAudioAnalyser]);
 
   const toggleMicRecognition = activateContinuousMicrophone;
 
