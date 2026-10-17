@@ -443,12 +443,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       const normalizePrompt = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
       const normNew = normalizePrompt(intText);
       const normLast = normalizePrompt(lastFacilitatorInterventionTextRef.current || '');
-      const isTurnArbitrationAction = intervention.action === 'interruption_warning' ||
-        intervention.action === 'silence_instruction_1' ||
-        intervention.action === 'silence_instruction_2' ||
-        intervention.action === 'deadlock_intervention';
+      const isInterruptionWarning = intervention.action === 'interruption_warning';
 
-      if (!isTurnArbitrationAction && normNew === normLast && now - lastFacilitatorInterventionTimeRef.current < 25000) {
+      if (!isInterruptionWarning && normNew === normLast && now - lastFacilitatorInterventionTimeRef.current < 25000) {
         console.log('[Facilitator] Suppressing duplicate vocalization of recently spoken prompt:', intText);
         return;
       }
@@ -463,8 +460,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         return intervention?.transcript ? [...prev, intervention.transcript] : prev;
       });
 
-      // Suppress AI facilitator ONLY if a human participant is actively speaking live right now (and not an arbitration/deadlock intervention)
-      const isHumanSpeakingLive = rtcIsSpeakingLive && !isTurnArbitrationAction;
+      // Suppress AI facilitator voice if a human participant is actively speaking on the floor (unless it's an urgent interruption warning)
+      const isHumanSpeakingLive = rtcIsSpeakingLive && !isInterruptionWarning;
       if (isHumanSpeakingLive) {
         console.log('[Facilitator] Participant is actively speaking on floor. Suppressing AI voice synthesis.');
         return;
@@ -1123,6 +1120,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       const checkVoiceFinished = () => {
         if (!roomVoice.isSpeaking()) {
           aiVoicePausedMicRef.current = false;
+          setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
           aiVoiceResumeTimerRef.current = null;
         } else {
           aiVoiceResumeTimerRef.current = setTimeout(checkVoiceFinished, 500);
@@ -1137,6 +1135,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         aiVoiceResumeTimerRef.current = null;
       }
       aiVoicePausedMicRef.current = false;
+      setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
     };
 
     window.addEventListener('erus-ai-voice-start', handleAiVoiceStart);
@@ -1206,24 +1205,12 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       audioChunksRef.current = [];
 
       mr.ondataavailable = (e) => {
-        if (!roomVoice.isSpeaking()) {
-          aiVoicePausedMicRef.current = false;
-        } else {
-          aiVoicePausedMicRef.current = true;
-          return;
-        }
         if (e.data && e.data.size > 0) {
           audioChunksRef.current.push(e.data);
         }
       };
 
       mr.onstop = async () => {
-        if (!roomVoice.isSpeaking()) {
-          aiVoicePausedMicRef.current = false;
-        } else {
-          audioChunksRef.current = [];
-          return;
-        }
         if (audioChunksRef.current.length === 0) return;
         const audioBlob = new Blob(audioChunksRef.current, { type: mime });
         audioChunksRef.current = [];
@@ -1340,11 +1327,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         };
 
         recognition.onresult = (event: any) => {
-          // Prevent acoustic loop: do not let speaker sound picked up by microphone cut off the AI facilitator
+          // Human speech priority: If participant speaks while AI facilitator is speaking, human voice takes priority!
           if (roomVoice.isSpeaking() || session.isFacilitatorSpeaking) {
-            aiVoicePausedMicRef.current = true;
-            committedResultIndexRef.current = event.results.length - 1;
-            return;
+            roomVoice.stop();
+            setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
+            aiVoicePausedMicRef.current = false;
           }
           aiVoicePausedMicRef.current = false;
           lastWebSpeechTimeRef.current = Date.now();
@@ -1600,8 +1587,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     const isDirective = actionType === 'initiate_opening_speaker' || 
                         actionType === 'explain_rules' || 
                         actionType === 'welcome' ||
-                        actionType === 'silence_instruction_1' ||
-                        actionType === 'silence_instruction_2' ||
                         actionType === 'targeted_question_student' ||
                         actionType === 'interruption_arbitration' ||
                         actionType === 'test_voice' ||
@@ -2124,7 +2109,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       }
     }
 
-    // 2. 3-Second Turn Arbitration (3s Instruction 1, 6s Instruction 2, 9s Targeted Candidate Callout)
+    // 2. Natural GD Silence Watchdog (intervene only on genuine, extended silence >= 25s)
     const currentSilence = Math.max(rtcSilenceTimer, session.silenceTimerSeconds, localSilenceSeconds);
     if (
       !session.isFacilitatorSpeaking &&
@@ -2132,32 +2117,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       !aiVoicePausedMicRef.current &&
       !rtcIsSpeakingLive &&
       !isTransitioningTurnRef.current &&
-      !liveSpeechTranscript
+      !liveSpeechTranscript &&
+      currentSilence >= 25 &&
+      Date.now() - lastFacilitatorInterventionTimeRef.current >= 30000
     ) {
+      lastFacilitatorInterventionTimeRef.current = Date.now();
+      setLocalSilenceSeconds(0);
       if (!isSocketConnected) {
-        if (clientSilenceStageRef.current === 0 && currentSilence >= 3 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
-          clientSilenceStageRef.current = 1;
-          setLocalSilenceSeconds(0);
-          lastFacilitatorInterventionTimeRef.current = Date.now();
-          const instruction1 = "The floor is open — who would like to build on that point or share an alternative perspective?";
-          speakFacilitator(instruction1, 'silence_instruction_1', 'turn_transition');
-        } else if (clientSilenceStageRef.current === 1 && currentSilence >= 3 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
-          clientSilenceStageRef.current = 2;
-          setLocalSilenceSeconds(0);
-          lastFacilitatorInterventionTimeRef.current = Date.now();
-          const instruction2 = "Let's keep the discussion moving — feel free to jump in with your thoughts or counter-arguments.";
-          speakFacilitator(instruction2, 'silence_instruction_2', 'turn_transition');
-        } else if (clientSilenceStageRef.current === 2 && currentSilence >= 3 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
-          clientSilenceStageRef.current = 3;
-          setLocalSilenceSeconds(0);
-          lastFacilitatorInterventionTimeRef.current = Date.now();
-          handleFacilitatorTargetedProbe();
-        }
-      } else if (currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 12000) {
-        lastFacilitatorInterventionTimeRef.current = Date.now();
-        if (rtcRequestAiIntervention) {
-          rtcRequestAiIntervention();
-        }
+        handleFacilitatorTargetedProbe();
+      } else if (rtcRequestAiIntervention) {
+        rtcRequestAiIntervention();
       }
     }
   }, [

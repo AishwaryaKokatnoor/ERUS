@@ -8390,81 +8390,25 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
 
         room.silenceTimerSeconds += 1;
 
-        // Broadcast current silence countdown tick to all peers (turn arbitration: 3s intervals up to 9s max)
+        // Natural GD Turn Arbitration Watchdog:
+        // Give participants ample room to discuss naturally without artificial 3s interruptions.
+        // Intervene only on genuine, prolonged room deadlock (>= 25 seconds) with at least 30s cooldown.
+        const canIntervene = (checkNow - (room.lastDeadlockAt || 0)) >= 30000;
+
+        // Broadcast current silence countdown tick to all peers (maxSilence: 25)
         io.to(`room-${slotId}`).emit('silence-timer-tick', {
           silenceTimerSeconds: room.silenceTimerSeconds,
           silenceStage: room.silenceStage,
-          maxSilence: 9,
+          maxSilence: 25,
         });
 
-        // Strict 3-Second Turn Arbitration:
-        // Stage 0: First 3s silence gap -> AI gives Instruction 1 (open floor)
-        if (room.silenceStage === 0 && room.silenceTimerSeconds >= 3) {
-          const instruction1 = "The floor is open — who would like to build on that point or share an alternative perspective?";
-          const interventionTx: BackendTranscript = {
-            id: `t-facilitator-silence1-${Date.now()}`,
-            sessionId: room.slotId,
-            speakerId: 'facilitator',
-            speakerName: 'AI Facilitator (ERUS)',
-            seatNumber: null,
-            isFacilitator: true,
-            timestamp: '00:00',
-            timestampSeconds: Date.now(),
-            text: instruction1,
-            type: 'intervention',
-            sentiment: 'neutral',
-          };
-          room.transcripts.push(interventionTx);
-          persistTranscriptToMongoDB(interventionTx);
+        if (room.silenceTimerSeconds >= 25 && canIntervene) {
+          room.silenceTimerSeconds = 0;
           room.silenceStage = 1;
-          room.silenceTimerSeconds = 0;
-          room.facilitatorSpeakingUntil = Date.now() + 4500;
-          io.to(`room-${slotId}`).emit('facilitator-intervention', {
-            text: instruction1,
-            action: 'silence_instruction_1',
-            transcript: interventionTx,
-          });
-        }
-        // Stage 1: Again after 3s silence gap (from when instruction 1 finished) -> AI gives Instruction 2
-        else if (room.silenceStage === 1 && room.silenceTimerSeconds >= 3) {
-          const instruction2 = "Let's keep the discussion moving — feel free to jump in with your thoughts or counter-arguments.";
-          const interventionTx: BackendTranscript = {
-            id: `t-facilitator-silence2-${Date.now()}`,
-            sessionId: room.slotId,
-            speakerId: 'facilitator',
-            speakerName: 'AI Facilitator (ERUS)',
-            seatNumber: null,
-            isFacilitator: true,
-            timestamp: '00:00',
-            timestampSeconds: Date.now(),
-            text: instruction2,
-            type: 'intervention',
-            sentiment: 'neutral',
-          };
-          room.transcripts.push(interventionTx);
-          persistTranscriptToMongoDB(interventionTx);
-          room.silenceStage = 2;
-          room.silenceTimerSeconds = 0;
-          room.facilitatorSpeakingUntil = Date.now() + 4500;
-          io.to(`room-${slotId}`).emit('facilitator-intervention', {
-            text: instruction2,
-            action: 'silence_instruction_2',
-            transcript: interventionTx,
-          });
-        }
-        // Stage 2: After another 3s silence gap (after instruction 2 and no one responds) -> AI asks contextual question to least spoken person!
-        else if (room.silenceStage === 2 && room.silenceTimerSeconds >= 3) {
-          room.silenceStage = 3;
-          room.silenceTimerSeconds = 0;
-          room.lastDeadlockAt = Date.now();
+          room.lastDeadlockAt = checkNow;
           room.deadlockCount += 1;
           room.waitingForParticipantId = undefined;
           await triggerDeadlockIntervention(room);
-        }
-        // Stage 3: Question was asked; if after 18 seconds still nobody responds, re-trigger for next quiet candidate
-        else if (room.silenceStage === 3 && room.silenceTimerSeconds >= 18) {
-          room.silenceStage = 2;
-          room.silenceTimerSeconds = 3;
         }
       } else {
         // Someone is actively speaking -> floor is active, reset silence and stage immediately!
@@ -8476,7 +8420,7 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
         io.to(`room-${slotId}`).emit('silence-timer-tick', {
           silenceTimerSeconds: 0,
           silenceStage: 0,
-          maxSilence: 9,
+          maxSilence: 25,
         });
 
         // Track current speaker's continuous speaking time (no mid-speech interruptions)
@@ -9875,6 +9819,7 @@ io.on('connection', (socket) => {
       // Reset silence watchdog whenever anyone speaks
       room.silenceTimerSeconds = 0;
       room.silenceStage = 0;
+      room.facilitatorSpeakingUntil = 0; // Human speaker immediately cuts off facilitator speech
       if (room.turnTimer) {
         clearTimeout(room.turnTimer);
         room.turnTimer = undefined;

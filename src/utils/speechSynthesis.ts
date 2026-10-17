@@ -668,10 +668,12 @@ class RoomVoiceEngine {
       clearInterval(this.watchdogInterval);
       this.watchdogInterval = null;
     }
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch {}
+    if (typeof window !== 'undefined') {
+      if (window.speechSynthesis) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {}
+      }
       window.dispatchEvent(new CustomEvent('erus-ai-voice-end'));
     }
   }
