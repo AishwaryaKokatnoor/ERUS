@@ -542,7 +542,7 @@ export function useWebRTCRoom({
           }
           const avg = sum / dataArray.length;
           const now = Date.now();
-          const normVol = Math.min(100, Math.round((avg / 128) * 100));
+          const normVol = isMicMutedRef.current ? 0 : Math.min(100, Math.round((avg / 128) * 100));
 
           // Throttle UI localVolume state updates to avoid React render thrash (max 10 fps, >=4% change)
           if (now - lastVolumeUiUpdateRef.current > 100 && Math.abs(normVol - lastVolumeStateEmittedRef.current) >= 4) {
@@ -1091,6 +1091,7 @@ export function useWebRTCRoom({
         audioTrack.enabled = enabled;
       }
       setIsMicMuted(!enabled);
+      isMicMutedRef.current = !enabled;
 
       // Synchronize audio track across all peer connections and renegotiate if needed
       peerConnectionsRef.current.forEach(async (pc, peerSocketId) => {
