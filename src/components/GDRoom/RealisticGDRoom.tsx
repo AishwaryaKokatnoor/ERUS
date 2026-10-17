@@ -947,126 +947,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // Only filled seats: strictly identical to activeDisplayStudents
   const filledStudents = activeDisplayStudents;
 
-  // Speaker-Centric Perspective & Dynamic Zooming (First-Person View)
+  // Fixed, Deterministic Round Table Seating (Zero Flickering / No Seat Teleportation)
   const roundTablePositionedStudents = useMemo(() => {
     const students = filledStudents;
     const n = students.length;
     if (n === 0) return [];
 
-    // Find active speaker among filled students
-    const activeSpk = students.find((s) => s.id === session.currentSpeakerId || s.isSpeaking) ||
-      (session.currentSpeakerId ? students.find((s) => s.id === session.currentSpeakerId) : null);
-
-    const isUserSpeaking = !!(activeSpk?.isUser || (isListeningMic && !isFaculty && rtcIsSpeakingLive));
-    const isPeerSpeaking = !!(activeSpk && !isUserSpeaking);
-
-    // If a peer is speaking:
-    // - Orient table so active speaker is positioned directly OPPOSITE the current user's vantage point.
-    // - Current user is at bottom center (angle = PI/2).
-    // - Active speaker is at top center (angle = -PI/2), facing the user.
-    // - Keep active speaker in full focus along with immediate left and right neighbors.
-    // - Gracefully zoom out or dim remaining participants.
-    if (isPeerSpeaking && activeSpk) {
-      const spkIdx = students.findIndex((s) => s.id === activeSpk.id);
-      const safeSpkIdx = spkIdx >= 0 ? spkIdx : 0;
-      const userIdx = students.findIndex((s) => s.isUser);
-
-      // If user is present, anchor user at bottom-center (PI/2) and speaker at top-center (-PI/2)
-      if (userIdx >= 0 && userIdx !== safeSpkIdx && n > 2) {
-        // Place active speaker directly opposite user (-PI/2) and user at bottom (+PI/2)
-        // Divide peers into left and right arcs between speaker and user
-        const otherStudents = students.filter((s) => s.id !== activeSpk.id && !s.isUser);
-        const half = Math.ceil(otherStudents.length / 2);
-        const rightStudents = otherStudents.slice(0, half);
-        const leftStudents = otherStudents.slice(half);
-
-        const results: Array<{ student: Student; angle: number; zoomLevel: 'zoomed' | 'neighbor' | 'dimmed' | 'normal' }> = [];
-
-        // 1. Active Speaker at top center (-PI/2 = 270 deg)
-        results.push({
-          student: activeSpk,
-          angle: -Math.PI / 2,
-          zoomLevel: 'zoomed',
-        });
-
-        // 2. Right arc participants (between top -PI/2 and bottom PI/2, through 0)
-        rightStudents.forEach((student, idx) => {
-          const step = Math.PI / (rightStudents.length + 1);
-          const angle = -Math.PI / 2 + step * (idx + 1);
-          const isImmediateNeighbor = idx === 0;
-          results.push({
-            student,
-            angle,
-            zoomLevel: isImmediateNeighbor ? 'neighbor' : 'dimmed',
-          });
-        });
-
-        // 3. User at bottom center (PI/2 = 90 deg, directly opposite speaker)
-        results.push({
-          student: students[userIdx],
-          angle: Math.PI / 2,
-          zoomLevel: 'normal',
-        });
-
-        // 4. Left arc participants (between bottom PI/2 and top 3PI/2 = -PI/2, through PI)
-        leftStudents.forEach((student, idx) => {
-          const step = Math.PI / (leftStudents.length + 1);
-          const angle = Math.PI / 2 + step * (idx + 1);
-          const isImmediateNeighbor = idx === leftStudents.length - 1;
-          results.push({
-            student,
-            angle,
-            zoomLevel: isImmediateNeighbor ? 'neighbor' : 'dimmed',
-          });
-        });
-
-        return results;
-      }
-
-      // Default or 2-participant case: Speaker at -PI/2 (top), other(s) opposite
-      const reordered: Array<{ student: Student; angle: number; zoomLevel: 'zoomed' | 'neighbor' | 'dimmed' | 'normal' }> = [];
-      for (let i = 0; i < n; i++) {
-        const studentIndex = (safeSpkIdx + i) % n;
-        const student = students[studentIndex];
-
-        // Speaker at -PI/2 (top center)
-        const angle = -Math.PI / 2 + (i * 2 * Math.PI) / n;
-
-        let zoomLevel: 'zoomed' | 'neighbor' | 'dimmed' | 'normal' = 'normal';
-        if (i === 0) {
-          zoomLevel = 'zoomed'; // The active speaker opposite user
-        } else if (i === 1 || i === n - 1) {
-          zoomLevel = 'neighbor'; // Immediate left & right neighbors beside speaker
-        } else {
-          zoomLevel = 'dimmed';
-        }
-
-        reordered.push({ student, angle, zoomLevel });
-      }
-      return reordered;
-    }
-
-    // When the user themselves is speaking:
-    // "When the user themselves is speaking, center the table on the audience facing the user."
-    // User is seated at bottom (angle = PI/2) and the audience is centered directly in front/facing them.
-    if (isUserSpeaking) {
-      const userIdx = students.findIndex((s) => s.isUser);
-      const safeUserIdx = userIdx >= 0 ? userIdx : 0;
-
-      return students.map((student, idx) => {
-        const relativeIdx = (idx - safeUserIdx + n) % n;
-        // User (relativeIdx = 0) is at bottom (PI/2). Audience members are distributed facing user.
-        const angle = Math.PI / 2 + (relativeIdx * 2 * Math.PI) / n;
-        return {
-          student,
-          angle,
-          zoomLevel: relativeIdx === 0 ? ('zoomed' as const) : ('neighbor' as const),
-        };
-      });
-    }
-
-    // When floor is open / silent:
-    // Retain natural balanced seating order around the round table!
+    // Anchor user at bottom-center (angle = Math.PI / 2), with all other participants
+    // distributed deterministically around the circle by their seat order.
+    // Seats NEVER rotate, fly, or swap positions when people speak, preventing
+    // DOM thrashing, page flickering, and unclickable buttons.
     const userIdx = students.findIndex((s) => s.isUser);
     const baseOffset = userIdx >= 0 ? userIdx : 0;
 
@@ -1079,7 +969,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         zoomLevel: 'normal' as const,
       };
     });
-  }, [filledStudents, session.currentSpeakerId, isListeningMic, isFaculty, rtcIsSpeakingLive]);
+  }, [filledStudents]);
 
   const [isFinalizingRecording, setIsFinalizingRecording] = useState(false);
 
@@ -1258,9 +1148,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
 
 
-  // Auto scroll transcript
+  // Auto scroll transcript strictly within its own scrollable container
   useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (transcriptEndRef.current?.parentElement) {
+      transcriptEndRef.current.parentElement.scrollTop = transcriptEndRef.current.parentElement.scrollHeight;
+    }
   }, [transcripts]);
 
   // Auto-commit helper for live speech to broadcast directly to the room
@@ -2319,6 +2211,31 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto p-3 sm:p-6 space-y-5 [overflow-anchor:none]">
+      {/* AI Facilitator Voice Overlap Guidance Floating Banner (Non-disruptive, Zero Layout Shift) */}
+      {interruptionWarning && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 max-w-xl w-[92vw] sm:w-full p-3.5 rounded-2xl bg-amber-500/95 dark:bg-amber-950/95 border-2 border-amber-400 text-slate-900 dark:text-amber-100 shadow-2xl flex items-center justify-between gap-3 backdrop-blur-md animate-in fade-in slide-in-from-top-4 duration-200 pointer-events-auto">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-xl bg-amber-400 dark:bg-amber-500 text-slate-950 flex items-center justify-center font-bold text-sm shrink-0 shadow-md">
+              ⚠️
+            </div>
+            <div className="min-w-0">
+              <span className="text-[10px] font-black uppercase tracking-wider text-amber-950 dark:text-amber-300 block">
+                Discussion Decorum Notice
+              </span>
+              <p className="text-xs sm:text-sm font-semibold truncate sm:whitespace-normal">
+                {interruptionWarning}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setInterruptionWarning(null)}
+            className="px-2.5 py-1 rounded-lg bg-amber-600/30 hover:bg-amber-600/50 dark:bg-amber-800/60 dark:hover:bg-amber-700 text-xs font-bold transition-colors cursor-pointer shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       
       {/* Session Title & Facilitator Broadcast Banner */}
       <div className="bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-sm dark:shadow-xl relative overflow-hidden backdrop-blur-md transition-colors duration-200">
@@ -2719,13 +2636,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           )}
         </div>
 
-        {/* Interruption / Overlap Warning Alert banner */}
-        {interruptionWarning && (
-          <div className="mt-3.5 bg-amber-50 dark:bg-amber-950/80 border border-amber-300 dark:border-amber-600/60 text-amber-800 dark:text-amber-200 px-3.5 py-2 rounded-xl text-xs flex items-center gap-2.5 shadow-sm transition-opacity duration-300">
-            <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
-            <span className="font-medium">{interruptionWarning}</span>
-          </div>
-        )}
+
       </div>
 
       {/* Main Grid: Realistic Seating Layout (Left 7-8 Cols) + Sidebar Hub (Right 4-5 Cols) */}
@@ -2819,31 +2730,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               </div>
             </div>
 
-            {/* AI Facilitator Voice Overlap Guidance Banner */}
-            {interruptionWarning && (
-              <div className="my-2.5 max-w-xl w-full mx-auto p-3.5 rounded-2xl bg-amber-500/20 border-2 border-amber-500 text-amber-900 dark:text-amber-100 shadow-xl flex items-center justify-between gap-3 relative z-30 backdrop-blur-md">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-amber-500 text-slate-900 flex items-center justify-center font-bold text-base shrink-0 shadow-md">
-                    ⚠️
-                  </div>
-                  <div>
-                    <span className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300 flex items-center gap-1">
-                      Voice Overlap Guidance
-                    </span>
-                    <p className="text-xs sm:text-sm font-semibold mt-0.5">
-                      {interruptionWarning}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setInterruptionWarning(null)}
-                  className="px-2.5 py-1 rounded-lg bg-amber-600/30 hover:bg-amber-600/50 text-xs font-bold cursor-pointer"
-                >
-                  Dismiss
-                </button>
-              </div>
-            )}
+
 
             {/* Autonomous Turn Invitation / Targeted Question Callout Banner */}
             {invitedStudentPrompt && (
@@ -2946,21 +2833,22 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                       </div>
                     </div>
 
-                    {/* Seating Perimeter: Dynamic Filled Seats on True Circular Perimeter with Speaker-Centric Zoom */}
+                    {/* Seating Perimeter: Deterministic Stable Seats on Circular Perimeter */}
                     {roundTablePositionedStudents.map(({ student, angle, zoomLevel }) => {
                       const R = count > 12 ? 37 : count > 8 ? 35 : 34; // Flexible circular radius % for compact circle and clear video cards
                       const leftPct = 50 + R * Math.cos(angle);
                       const topPct = 50 + R * Math.sin(angle);
+                      const isSpk = session.currentSpeakerId === student.id || student.isSpeaking;
 
                       return (
                         <div
                           key={student.id}
-                          className="absolute transition-all duration-300 ease-out"
+                          className="absolute pointer-events-auto"
                           style={{
                             left: `${leftPct}%`,
                             top: `${topPct}%`,
                             transform: 'translate(-50%, -50%)',
-                            zIndex: zoomLevel === 'zoomed' ? 40 : zoomLevel === 'neighbor' ? 25 : 10,
+                            zIndex: isSpk ? 30 : 10,
                           }}
                         >
                           <StudentPodCard 
@@ -4575,25 +4463,15 @@ export const StudentPodCard: React.FC<{
   onEnlarge,
 }) => {
   const isUser = !isFaculty && !!student.isUser;
-  const isZoomedSpeaker = zoomLevel === 'zoomed' || (isCurrentSpeaker && zoomLevel !== 'dimmed' && zoomLevel !== 'neighbor');
+  const isZoomedSpeaker = isCurrentSpeaker;
 
   return (
     <div 
       onDoubleClick={() => !student.isEmptySeat && onEnlarge?.(student)}
       title={student.isEmptySeat ? 'Open Desk' : `${student.name} • Double-click to enlarge spotlight`}
-      className={`flex flex-col items-center group transition-transform duration-300 ease-out ${
+      className={`flex flex-col items-center group pointer-events-auto ${
         student.isEmptySeat ? '' : 'cursor-pointer'
-      } ${
-        zoomLevel === 'zoomed'
-          ? 'scale-105 sm:scale-110 z-40 opacity-100 drop-shadow-xl'
-          : zoomLevel === 'neighbor'
-          ? 'scale-100 sm:scale-102 z-25 opacity-100 drop-shadow-md'
-          : zoomLevel === 'dimmed'
-          ? 'scale-85 sm:scale-90 z-10 opacity-60 hover:opacity-95 hover:scale-95'
-          : isCurrentSpeaker
-          ? 'scale-105 z-30 opacity-100 drop-shadow-lg'
-          : 'scale-95 sm:scale-100 z-15 opacity-100'
-      }`}
+      } z-20`}
     >
       
       {/* 1. Realistic Numbered Seat Placard (Pinned cleanly at top, in natural flex flow) */}
@@ -4630,27 +4508,23 @@ export const StudentPodCard: React.FC<{
         )}
       </div>
 
-      {/* 2. Student Video / Avatar Bubble (Enlarged for prominent screen visibility) */}
+      {/* 2. Student Video / Avatar Bubble (Stable dimensions with active speaker ring & glow) */}
       <div className="relative">
         {/* Speaking Voice Waves Aura */}
         {(isCurrentSpeaker || isZoomedSpeaker) && (
           <div className="absolute -inset-2 rounded-3xl bg-emerald-500/25 animate-pulse pointer-events-none" />
         )}
 
-        <div className={`rounded-2xl sm:rounded-3xl overflow-hidden border-2 transition-all shadow-lg relative bg-slate-900 ${
-          isZoomedSpeaker
-            ? 'w-28 h-28 sm:w-36 sm:h-36 md:w-44 md:h-44 border-emerald-500 dark:border-emerald-400 ring-4 ring-emerald-500/60 shadow-emerald-500/50 shadow-xl'
-            : zoomLevel === 'neighbor'
-            ? 'w-24 h-24 sm:w-30 sm:h-30 md:w-36 md:h-36 border-slate-300 dark:border-slate-700 ring-2 ring-indigo-400/40'
-            : 'w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 border-slate-300 dark:border-slate-700'
-        } ${
-          student.isEmptySeat
+        <div className={`w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-2xl sm:rounded-3xl overflow-hidden border-2 transition-all shadow-md relative bg-slate-900 ${
+          isCurrentSpeaker
+            ? 'border-emerald-500 dark:border-emerald-400 ring-4 ring-emerald-500/60 shadow-emerald-500/40 shadow-xl'
+            : student.isEmptySeat
             ? 'border-dashed border-slate-300 dark:border-slate-700 bg-slate-100/60 dark:bg-slate-900/60 shadow-none'
             : isUser 
             ? 'border-blue-500 dark:border-blue-500/80 ring-2 ring-blue-500/30' 
             : student.isRealPeer
             ? 'border-emerald-500 dark:border-emerald-400 ring-2 ring-emerald-500/30'
-            : ''
+            : 'border-slate-300 dark:border-slate-700'
         }`}>
           <StudentVideoFrame
             student={student}
@@ -4659,7 +4533,7 @@ export const StudentPodCard: React.FC<{
             videoStream={videoStream}
             audioLevel={audioLevel}
             isListeningMic={isListeningMic}
-            size={isZoomedSpeaker ? 'large' : 'normal'}
+            size="normal"
             isFaculty={isFaculty}
           />
 
@@ -4680,7 +4554,7 @@ export const StudentPodCard: React.FC<{
       </div>
 
       {/* 3. Student Name & Turns (Positioned cleanly below avatar with zero overlap) */}
-      <div className={`text-center mt-1 ${isZoomedSpeaker ? 'max-w-[130px] sm:max-w-[150px]' : 'max-w-[90px] sm:max-w-[110px]'}`}>
+      <div className="text-center mt-1 max-w-[100px] sm:max-w-[120px]">
         <p className={`font-semibold truncate leading-tight ${
           isZoomedSpeaker
             ? 'text-xs sm:text-sm text-emerald-800 dark:text-emerald-300 font-bold'
