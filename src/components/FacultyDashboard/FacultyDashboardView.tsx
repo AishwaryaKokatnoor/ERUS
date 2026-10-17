@@ -653,17 +653,33 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
                             </button>
                           )}
 
-                          {onStartSession && !isCompleted && sl.status !== 'active' && (
-                            <button
-                              onClick={() => {
-                                onStartSession(sl.id);
-                              }}
-                              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm transition-all flex items-center gap-1.5 cursor-pointer hover:scale-105 active:scale-95"
-                              title={(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Start this presentation slot" : "Start this assigned GD slot and commence discussion"}
-                            >
-                              <Play className="w-3 h-3 fill-current" />
-                              <span>{(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Start Presentation" : "Start"}</span>
-                            </button>
+                          {!isCompleted && sl.status !== 'active' && (
+                            <div className="flex items-center gap-1.5">
+                              {onEnterGDRoom && (
+                                <button
+                                  onClick={() => {
+                                    if (onSelectSlot) onSelectSlot(sl.id);
+                                    onEnterGDRoom(sl.id);
+                                  }}
+                                  className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 transition-all cursor-pointer"
+                                  title="Enter room to prepare and view seated candidates before commencing"
+                                >
+                                  <span>Enter Room</span>
+                                </button>
+                              )}
+                              {onStartSession && (
+                                <button
+                                  onClick={() => {
+                                    onStartSession(sl.id);
+                                  }}
+                                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm transition-all flex items-center gap-1.5 cursor-pointer hover:scale-105 active:scale-95"
+                                  title={(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Start this presentation slot" : "Start this assigned GD slot and commence discussion"}
+                                >
+                                  <Play className="w-3 h-3 fill-current" />
+                                  <span>{(sl.activityType === 'presentation' || sl.roomLayout === 'classroom') ? "Start Presentation" : "Start"}</span>
+                                </button>
+                              )}
+                            </div>
                           )}
                         </div>
                       </div>

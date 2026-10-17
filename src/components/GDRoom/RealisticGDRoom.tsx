@@ -1164,6 +1164,12 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       speechPauseTimerRef.current = null;
     }
 
+    if (!isSessionActive) {
+      liveTranscriptRef.current = '';
+      setLiveSpeechTranscript('');
+      return;
+    }
+
     const textToCommit = String(forcedText || liveTranscriptRef.current || liveSpeechTranscript || '').trim();
     if (!textToCommit) return;
 
@@ -1713,13 +1719,12 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   // User or Faculty submits a spoken statement / guidance
   const handleSendUserStatement = async (textToSend?: string) => {
-    // If not active, auto-activate session so student speech is never discarded
-    if (!isSessionActive && !isFaculty) {
-      setSession((prev) => ({
-        ...prev,
-        status: 'active',
-        startedAt: prev.startedAt || Date.now(),
-      }));
+    // Pre-session: Do NOT auto-activate session on student speech.
+    // The GD must only commence when the Faculty Evaluator explicitly starts the session.
+    if (!isSessionActive) {
+      liveTranscriptRef.current = '';
+      setLiveSpeechTranscript('');
+      return;
     }
     const text = String(textToSend || liveSpeechTranscript || '').trim();
     if (!text) return;
@@ -2475,6 +2480,29 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   <span className="text-[11px] font-mono text-slate-500 font-semibold w-8 text-right">
                     {Math.max(0, 9 - rtcSilenceTimer)}s
                   </span>
+                </div>
+              </div>
+            ) : !isSessionActive && session.status !== 'completed' ? (
+              <div className="mt-3 p-2.5 sm:p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-800/60 flex items-center justify-between gap-3 flex-wrap shadow-xs">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 flex items-center justify-center animate-pulse">
+                    <Clock className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-amber-950 dark:text-amber-200">
+                        Session Waiting • Discussion Not Started
+                      </span>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-200/80 dark:bg-amber-900/90 text-amber-900 dark:text-amber-200 font-bold uppercase tracking-wider">
+                        Awaiting Evaluator
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-amber-800 dark:text-amber-300/80">
+                      {canStartSession
+                        ? "You are evaluating this session. When candidates are ready, click 'Start Group Discussion' below to commence."
+                        : "The discussion has not begun yet. Please wait for the Faculty Evaluator to commence the session."}
+                    </p>
+                  </div>
                 </div>
               </div>
             ) : null}

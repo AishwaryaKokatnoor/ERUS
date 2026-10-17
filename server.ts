@@ -323,6 +323,18 @@ function loadPersistentState() {
         ? { ...persistentState.systemSettings, ...raw.systemSettings }
         : persistentState.systemSettings,
     };
+    // Ensure any slots left in 'active' state from previous process crashes are reset to 'scheduled' on boot
+    if (persistentState.slots && typeof persistentState.slots === 'object') {
+      for (const list of Object.values(persistentState.slots)) {
+        if (Array.isArray(list)) {
+          for (const s of list) {
+            if (s && s.status === 'active') {
+              s.status = 'scheduled';
+            }
+          }
+        }
+      }
+    }
     console.warn('[Persistence] Loaded preserved local snapshot as a recovery fallback. MongoDB sync will take precedence when connected.');
   } catch (err: any) {
     console.warn('[Persistence] Could not read legacy state snapshot; file was preserved:', err.message);
@@ -5826,7 +5838,7 @@ interface BackendSession {
   durationMinutes: number;
   difficulty: 'Beginner' | 'Intermediate' | 'Advanced';
   assessmentRubric: string;
-  status: 'active' | 'completed' | 'paused';
+  status: 'active' | 'completed' | 'paused' | 'waiting' | 'scheduled';
   currentPhase: 'intro' | 'rules' | 'active_discussion' | 'probing' | 'conclusion';
   facilitatorSpeech: string;
   facilitatorAction: string;
@@ -5853,8 +5865,8 @@ let currentLiveSession: BackendSession = {
   durationMinutes: 25,
   difficulty: 'Intermediate',
   assessmentRubric: 'Standard Academic 7-Parameter Rubric',
-  status: 'active',
-  currentPhase: 'active_discussion',
+  status: 'waiting',
+  currentPhase: 'intro',
   facilitatorSpeech: 'Welcome participants. Today we analyze how generative AI is shifting tech talent evaluation from syntax memorization to architectural thinking. The floor is open.',
   facilitatorAction: 'Moderating discussion flow',
   isFacilitatorSpeaking: false,
@@ -9708,6 +9720,12 @@ io.on('connection', (socket) => {
   // 1.5 Start Discussion Session
   socket.on('start-session', ({ slotId, topic }: { slotId: string; topic?: string }) => {
     const safeSlotId = slotId || 'session-101';
+    const room = getOrCreateLiveRoom(safeSlotId, topic);
+    const peer = room.peers.get(socket.id);
+    if (peer && peer.role !== 'faculty' && peer.role !== 'college_admin' && peer.role !== 'super_admin') {
+      console.warn(`[start-session] Non-evaluator user (${peer.userId}, role: ${peer.role}) attempted to start session ${safeSlotId}`);
+      return;
+    }
 
     let targetSlot: any = null;
     for (const [, list] of Object.entries(persistentState.slots)) {
@@ -9718,8 +9736,6 @@ io.on('connection', (socket) => {
       targetSlot.status = 'active';
       savePersistentState();
     }
-
-    const room = getOrCreateLiveRoom(safeSlotId, topic || targetSlot?.topic);
     if (topic) room.topic = topic;
     room.status = 'active';
     room.silenceTimerSeconds = 0;
