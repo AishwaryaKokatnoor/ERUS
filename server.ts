@@ -8191,6 +8191,7 @@ interface LiveRoomPeer {
   interruptionCount: number;
   joinedAt: number;
   lastSpokeAt?: number;
+  speakingStartedAt?: number;
   floorTurnCounted?: boolean;
 }
 
@@ -9882,11 +9883,24 @@ io.on('connection', (socket) => {
       return;
     }
 
+    const wasSpeaking = peer.isSpeaking;
     peer.isSpeaking = !!isSpeaking;
     if (micActive !== undefined) peer.micActive = micActive;
     if (cameraActive !== undefined) peer.cameraActive = cameraActive;
 
     if (peer.isSpeaking) {
+      if (!wasSpeaking) {
+        peer.speakingStartedAt = Date.now();
+        peer.speakingTurns = (peer.speakingTurns || 0) + 1;
+        peer.floorTurnCounted = true;
+        io.to(`room-${safeSlotId}`).emit('peer-stats-updated', {
+          socketId: socket.id,
+          userId: peer.userId,
+          seatNumber: peer.seatNumber,
+          speakingTurns: peer.speakingTurns,
+          speakingDurationSeconds: peer.speakingDurationSeconds || 0,
+        });
+      }
       peer.lastSpokeAt = Date.now();
       // Reset silence watchdog whenever anyone speaks
       room.silenceTimerSeconds = 0;
@@ -9897,6 +9911,20 @@ io.on('connection', (socket) => {
         room.turnTimer = undefined;
       }
       room.waitingForParticipantId = undefined;
+    } else if (wasSpeaking && !peer.isSpeaking) {
+      if (peer.speakingStartedAt) {
+        const spokenSecs = Math.max(1, Math.round((Date.now() - peer.speakingStartedAt) / 1000));
+        peer.speakingDurationSeconds = (peer.speakingDurationSeconds || 0) + spokenSecs;
+        peer.speakingStartedAt = undefined;
+      }
+      peer.floorTurnCounted = false;
+      io.to(`room-${safeSlotId}`).emit('peer-stats-updated', {
+        socketId: socket.id,
+        userId: peer.userId,
+        seatNumber: peer.seatNumber,
+        speakingTurns: peer.speakingTurns,
+        speakingDurationSeconds: peer.speakingDurationSeconds,
+      });
     }
 
     // Identify all student peers currently speaking with active mics
@@ -10117,6 +10145,7 @@ io.on('connection', (socket) => {
     // Automatically yield floor 3s after statement completion if participant stopped speaking
     room.speechYieldTimer = setTimeout(() => {
       room.speechYieldTimer = undefined;
+      peer.floorTurnCounted = false;
       if (room.currentSpeakerId === peer.userId || room.currentSpeakerSocketId === socket.id) {
         if (!peer.isSpeaking) {
           room.currentSpeakerId = null;

@@ -36,6 +36,14 @@ interface UseWebRTCRoomOptions {
   onSessionStarted?: (data: any) => void;
   onSessionEnded?: (data: any) => void;
   onAiParticipantSpeech?: (data: any) => void;
+  onPeerStatsUpdated?: (data: {
+    socketId?: string;
+    userId?: string;
+    seatNumber?: number;
+    speakingTurns?: number;
+    speakingDurationSeconds?: number;
+    interruptionCount?: number;
+  }) => void;
   onRoomJoined?: (data: {
     assignedSeat?: number;
     transcripts?: GDTranscript[];
@@ -86,6 +94,7 @@ export function useWebRTCRoom({
   onSessionStarted,
   onSessionEnded,
   onAiParticipantSpeech,
+  onPeerStatsUpdated,
   onRoomJoined,
 }: UseWebRTCRoomOptions) {
   const [connected, setConnected] = useState(false);
@@ -144,11 +153,13 @@ export function useWebRTCRoom({
   const onSessionStartedRef = useRef(onSessionStarted);
   const onSessionEndedRef = useRef(onSessionEnded);
   const onAiParticipantSpeechRef = useRef(onAiParticipantSpeech);
+  const onPeerStatsUpdatedRef = useRef(onPeerStatsUpdated);
   onNewTranscriptRef.current = onNewTranscript;
   onFacilitatorInterventionRef.current = onFacilitatorIntervention;
   onSessionStartedRef.current = onSessionStarted;
   onSessionEndedRef.current = onSessionEnded;
   onAiParticipantSpeechRef.current = onAiParticipantSpeech;
+  onPeerStatsUpdatedRef.current = onPeerStatsUpdated;
   const onRoomJoinedRef = useRef(onRoomJoined);
   onRoomJoinedRef.current = onRoomJoined;
 
@@ -894,10 +905,19 @@ export function useWebRTCRoom({
       if (onNewTranscriptRef.current && transcript) {
         onNewTranscriptRef.current(transcript);
       }
+      if (onPeerStatsUpdatedRef.current && (speakingTurns !== undefined || speakingDurationSeconds !== undefined)) {
+        onPeerStatsUpdatedRef.current({
+          socketId: studentId,
+          userId: targetSpeakerId,
+          seatNumber: targetSeat,
+          speakingTurns,
+          speakingDurationSeconds,
+        });
+      }
     });
 
     // Explicit Peer Stats Real-Time Synchronization Event
-    socket.on('peer-stats-updated', ({ socketId: sId, userId, seatNumber, speakingTurns, speakingDurationSeconds }: any) => {
+    socket.on('peer-stats-updated', ({ socketId: sId, userId, seatNumber, speakingTurns, speakingDurationSeconds, interruptionCount }: any) => {
       if (!active) return;
       setPeers((prev) =>
         prev.map((p) => {
@@ -912,6 +932,16 @@ export function useWebRTCRoom({
           };
         })
       );
+      if (onPeerStatsUpdatedRef.current) {
+        onPeerStatsUpdatedRef.current({
+          socketId: sId,
+          userId,
+          seatNumber,
+          speakingTurns,
+          speakingDurationSeconds,
+          interruptionCount,
+        });
+      }
     });
 
     // AI Facilitator Autonomous Intervention

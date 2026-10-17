@@ -352,12 +352,12 @@ function GDAppContent() {
     if (!socket) return;
     const handleRemoteSessionStarted = (data: any) => {
       const slotId = String(data?.slotId || '').trim();
-      if (!slotId || currentUser.role !== 'student') return;
+      if (!slotId) return;
       if (isSlotCompletedLocally(slotId)) return;
 
       const bookedSlotIds = Object.values(studentBookedSlotsByTopic);
-      const isMySession = session?.id === slotId || bookedSlotIds.includes(slotId);
-      if (!isMySession) return;
+      const isMySession = session?.id === slotId || bookedSlotIds.includes(slotId) || currentTab === 'room';
+      if (!isMySession && currentUser.role === 'student') return;
 
       const targetSlot = availableSlots.find((slot) => slot.id === slotId);
       if (targetSlot?.status === 'completed') return;
@@ -380,7 +380,9 @@ function GDAppContent() {
         setElapsedSeconds(0);
         setTranscripts([]);
       }
-      setCurrentTab('room');
+      if (currentUser.role === 'student' || currentTab === 'room') {
+        setCurrentTab('room');
+      }
     };
     const handleRemoteSessionEnded = (data: any) => {
       if (data?.slotId) {
@@ -662,14 +664,15 @@ function GDAppContent() {
 
   // Main session elapsed timer (Strictly active only when room is live; silence moderation is handled by RealisticGDRoom & server)
   useEffect(() => {
-    if (!currentUser || currentTab !== 'room' || session.status !== 'active') return;
+    const isLive = session.status === 'active' || Boolean(session.startedAt && session.status !== 'completed');
+    if (!currentUser || currentTab !== 'room' || !isLive) return;
 
     const timer = setInterval(() => {
       setElapsedSeconds((prev) => prev + 1);
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [currentUser, currentTab, session.status]);
+  }, [currentUser, currentTab, session.status, session.startedAt]);
 
   // Host / Participant Commences the Discussion Session
   const handleStartSession = (slotIdToStart?: string) => {

@@ -144,7 +144,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   const lastFacilitatorInterventionTimeRef = useRef<number>(0);
   const lastFacilitatorInterventionTextRef = useRef<string>('');
   const clientSilenceStageRef = useRef<number>(0);
-  const isSessionActive = session.status === 'active';
+  const isSessionActive = session.status === 'active' || Boolean(session.startedAt && session.status !== 'completed');
   const [showVideoModal, setShowVideoModal] = useState(false);
   // Faculty Live Observation Notes State (Enhancement 4)
   const [isNotesModalOpen, setIsNotesModalOpen] = useState(false);
@@ -308,6 +308,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           status: 'active',
           topic: roomData.topic || prev.topic,
         }));
+        if (onStartSession) {
+          onStartSession(session.id);
+        }
       }
       if (roomData.transcripts && roomData.transcripts.length > 0) {
         setTranscripts(roomData.transcripts);
@@ -321,6 +324,27 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         ...prev,
         status: 'active',
         startedAt: prev.startedAt || Date.now(),
+      }));
+      if (onStartSession) {
+        onStartSession(session.id);
+      }
+    },
+    onPeerStatsUpdated: (stats) => {
+      setSession((prev) => ({
+        ...prev,
+        students: prev.students.map((s) => {
+          const isMatch = (stats.userId && (s.id === stats.userId || s.id === stats.socketId)) ||
+            (stats.socketId && s.id === stats.socketId) ||
+            (stats.seatNumber !== undefined && s.seatNumber === stats.seatNumber) ||
+            (s.isUser && currentUser && (currentUser.id === stats.userId || (currentUser as any).seatNumber === stats.seatNumber));
+          if (!isMatch) return s;
+          return {
+            ...s,
+            speakingTurns: Math.max(s.speakingTurns || 0, stats.speakingTurns ?? s.speakingTurns ?? 0),
+            speakingDurationSeconds: Math.max(s.speakingDurationSeconds || 0, stats.speakingDurationSeconds ?? s.speakingDurationSeconds ?? 0),
+            interruptionCount: stats.interruptionCount !== undefined ? Math.max(s.interruptionCount || 0, stats.interruptionCount) : s.interruptionCount,
+          };
+        }),
       }));
     },
     onSessionEnded: () => {
@@ -562,27 +586,49 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   }, [rtcSilenceTimer, localSilenceSeconds, isSocketConnected]);
 
   // Continuous real-time speaking time tracker: increments participant speaking seconds live while speaking
+  const activeSpeakersTrackerRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!isSessionActive) return;
     const interval = setInterval(() => {
-      const isUserSpeaking = isListeningMicRef.current && (rtcIsSpeakingLive || audioLevel > 4 || !!liveSpeechTranscript);
-      if (isUserSpeaking && !isFaculty) {
-        setSession((prev) => ({
-          ...prev,
-          students: prev.students.map((s) =>
-            s.isUser
-              ? {
-                  ...s,
-                  speakingDurationSeconds: (s.speakingDurationSeconds || 0) + 1,
-                  lastSpokeAt: Date.now(),
-                }
-              : s
-          ),
-        }));
-      }
+      const isUserSpeaking = !isFaculty && isListeningMicRef.current && (rtcIsSpeakingLive || audioLevel > 4 || !!liveSpeechTranscript);
+
+      setSession((prev) => {
+        let hasChanges = false;
+        const updated = prev.students.map((s) => {
+          const isThisUserSpeaking = s.isUser && isUserSpeaking;
+          const matchingPeer = rtcPeers.find((p) => p.userId === s.id || p.socketId === s.id || p.seatNumber === s.seatNumber);
+          const isRemotePeerSpeaking = Boolean(matchingPeer?.isSpeaking);
+          const isAiSpeaking = Boolean(s.isDemoAI && s.isSpeaking);
+
+          const isCurrentlySpeaking = isThisUserSpeaking || isRemotePeerSpeaking || isAiSpeaking;
+          const speakerKey = s.id || `seat-${s.seatNumber}`;
+
+          if (isCurrentlySpeaking) {
+            hasChanges = true;
+            let newTurns = s.speakingTurns || 0;
+            if (!activeSpeakersTrackerRef.current.has(speakerKey)) {
+              activeSpeakersTrackerRef.current.add(speakerKey);
+              newTurns += 1;
+            }
+            return {
+              ...s,
+              isSpeaking: true,
+              speakingTurns: newTurns,
+              speakingDurationSeconds: (s.speakingDurationSeconds || 0) + 1,
+              lastSpokeAt: Date.now(),
+            };
+          } else {
+            if (activeSpeakersTrackerRef.current.has(speakerKey)) {
+              activeSpeakersTrackerRef.current.delete(speakerKey);
+            }
+            return s;
+          }
+        });
+        return hasChanges ? { ...prev, students: updated } : prev;
+      });
     }, 1000);
     return () => clearInterval(interval);
-  }, [isSessionActive, rtcIsSpeakingLive, audioLevel, isFaculty, liveSpeechTranscript]);
+  }, [isSessionActive, rtcIsSpeakingLive, audioLevel, isFaculty, liveSpeechTranscript, rtcPeers]);
 
   // When two or more real students are connected, the server owns turn orchestration.
   // Local auto-simulation is retained only for the single-user demo mode.
@@ -2946,7 +2992,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                             {isSpeakingLive ? 'Actively Addressing Group' : 'Floor Spotlight'}
                           </span>
                           <span>•</span>
-                          <span>{currentSpeakerStudent?.speakingTurns || 0} turns</span>
+                          <span>{currentSpeakerStudent?.speakingTurns || 0} turns • {currentSpeakerStudent?.speakingDurationSeconds || 0}s</span>
                         </div>
 
                         {/* Speech Quote from the center */}
@@ -4574,7 +4620,7 @@ export const StudentPodCard: React.FC<{
           {student.isEmptySeat ? 'Available' : student.name.split(' ')[0]}
         </p>
         <span className={`font-mono block mt-0.5 ${isZoomedSpeaker ? 'text-[10px] text-emerald-700 dark:text-emerald-400 font-bold' : 'text-[10px] text-slate-500 dark:text-slate-400'}`}>
-          {student.isEmptySeat ? 'Waiting...' : `${student.speakingTurns} turns`}
+          {student.isEmptySeat ? 'Waiting...' : `${student.speakingTurns || 0} turns • ${student.speakingDurationSeconds || 0}s`}
         </span>
       </div>
 
