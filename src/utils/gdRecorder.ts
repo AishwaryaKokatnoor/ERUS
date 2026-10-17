@@ -116,6 +116,7 @@ export interface GDParticipantTile {
   cameraActive?: boolean;
   isUser?: boolean;
   videoStream?: MediaStream | null;
+  avatar?: string;
 }
 
 export interface UseGDRecorderOptions {
@@ -247,6 +248,8 @@ export function useGDRecorder({
   const audioContextRef = useRef<AudioContext | null>(null);
   const destinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const connectedTracksRef = useRef<Set<string>>(new Set());
+  const activeSourcesRef = useRef<Map<string, MediaStreamAudioSourceNode>>(new Map());
+  const avatarImagePoolRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const chunksRef = useRef<Blob[]>([]);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const durationCounterRef = useRef<number>(0);
@@ -264,6 +267,7 @@ export function useGDRecorder({
   const topicTitleRef = useRef<string>(topicTitle);
   const peerStreamsRef = useRef<Map<string, MediaStream> | undefined>(peerStreams);
   const localStreamRef = useRef<MediaStream | null | undefined>(localStream);
+  const localAudioStreamRef = useRef<MediaStream | null | undefined>(localAudioStream);
 
   // Keep refs in sync with latest props
   useEffect(() => {
@@ -286,26 +290,41 @@ export function useGDRecorder({
     localStreamRef.current = localStream;
   }, [localStream]);
 
+  useEffect(() => {
+    localAudioStreamRef.current = localAudioStream;
+  }, [localAudioStream]);
+
   // Format seconds to mm:ss
   const formattedDuration = `${Math.floor(recordingDurationSeconds / 60)
     .toString()
     .padStart(2, '0')}:${(recordingDurationSeconds % 60).toString().padStart(2, '0')}`;
 
-  // Helper to connect an audio stream to the mixer destination node
+  // Helper to connect an audio stream to the mixer destination node with GC immunity
   const mixStreamIntoDestination = useCallback((stream: MediaStream) => {
-    if (!audioContextRef.current || !destinationRef.current) return;
-    const audioTracks = stream.getAudioTracks();
+    if (!audioContextRef.current || !destinationRef.current || !stream) return;
+    const audioTracks = stream.getAudioTracks().filter((t) => t.readyState === 'live');
     if (audioTracks.length === 0) return;
+
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume().catch(() => {});
+    }
 
     for (const track of audioTracks) {
       if (connectedTracksRef.current.has(track.id)) continue;
       try {
-        const singleStream = new MediaStream([track]);
-        const source = audioContextRef.current.createMediaStreamSource(singleStream);
+        const trackStream = stream.getAudioTracks().length === 1 ? stream : new MediaStream([track]);
+        const source = audioContextRef.current.createMediaStreamSource(trackStream);
         source.connect(destinationRef.current);
+
+        // Store in activeSourcesRef to prevent JavaScript garbage collection from killing the stream!
+        activeSourcesRef.current.set(track.id, source);
         connectedTracksRef.current.add(track.id);
 
         track.onended = () => {
+          try {
+            source.disconnect();
+          } catch {}
+          activeSourcesRef.current.delete(track.id);
           connectedTracksRef.current.delete(track.id);
         };
       } catch (err) {
@@ -329,6 +348,25 @@ export function useGDRecorder({
       }
     }
   }, [enabled, isRecording, localStream, localAudioStream, peerStreams, mixStreamIntoDestination]);
+
+  // Active audio watchdog: continuously ensure all microphone & peer tracks remain connected throughout recording
+  useEffect(() => {
+    if (!enabled || !isRecording) return;
+    const watchdogInterval = setInterval(() => {
+      if (audioContextRef.current?.state === 'suspended') {
+        audioContextRef.current.resume().catch(() => {});
+      }
+      if (localStreamRef.current) mixStreamIntoDestination(localStreamRef.current);
+      if (localAudioStreamRef.current) mixStreamIntoDestination(localAudioStreamRef.current);
+      if (peerStreamsRef.current) {
+        for (const peerStream of peerStreamsRef.current.values()) {
+          mixStreamIntoDestination(peerStream);
+        }
+      }
+    }, 1500);
+
+    return () => clearInterval(watchdogInterval);
+  }, [enabled, isRecording, mixStreamIntoDestination]);
 
   // Video rendering loop for composite grid
   const startCanvasVideoCompositor = useCallback((canvas: HTMLCanvasElement) => {
@@ -615,16 +653,37 @@ export function useGDRecorder({
           ctx.fillStyle = '#334155';
           ctx.fill();
           ctx.strokeStyle = '#475569';
-          ctx.lineWidth = 2;
-          ctx.stroke();
+          let didDrawAvatarImg = false;
+          if (tile.avatar) {
+            let img = avatarImagePoolRef.current.get(tile.avatar);
+            if (!img) {
+              img = new Image();
+              img.crossOrigin = 'anonymous';
+              img.src = tile.avatar;
+              avatarImagePoolRef.current.set(tile.avatar, img);
+            }
+            if (img.complete && img.naturalWidth > 0) {
+              ctx.save();
+              ctx.beginPath();
+              ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+              ctx.clip();
+              ctx.drawImage(img, cx - radius, cy - radius, radius * 2, radius * 2);
+              ctx.restore();
+              didDrawAvatarImg = true;
+            }
+          }
 
-          // Initials
-          ctx.fillStyle = '#f1f5f9';
-          ctx.font = `bold ${Math.round(radius * 0.9)}px Inter, sans-serif`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(getInitials(tile.name), cx, cy);
-          ctx.restore();
+          if (!didDrawAvatarImg) {
+            // Initials
+            ctx.fillStyle = '#f1f5f9';
+            ctx.font = `bold ${Math.round(radius * 0.9)}px Inter, sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(getInitials(tile.name), cx, cy);
+            ctx.restore();
+          } else {
+            ctx.restore();
+          }
         }
 
         // Active speaker highlight border
@@ -753,6 +812,9 @@ export function useGDRecorder({
         const canvasStream = canvas.captureStream(20);
         const videoTrack = canvasStream.getVideoTracks()[0];
         const mixedAudioTracks = dest.stream.getAudioTracks();
+        mixedAudioTracks.forEach((t) => {
+          t.enabled = true;
+        });
 
         recordingStream = new MediaStream([videoTrack, ...mixedAudioTracks]);
         chosenMime = getBestSupportedVideoMimeType();
@@ -782,6 +844,13 @@ export function useGDRecorder({
           clearInterval(videoRenderIntervalRef.current);
           videoRenderIntervalRef.current = null;
         }
+
+        // Clean up audio source nodes
+        activeSourcesRef.current.forEach((src) => {
+          try { src.disconnect(); } catch {}
+        });
+        activeSourcesRef.current.clear();
+        connectedTracksRef.current.clear();
 
         // Clean up video elements pool
         videoPoolRef.current.forEach((el) => {

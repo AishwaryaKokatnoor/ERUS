@@ -281,6 +281,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     localVolume: rtcLocalVolume,
     toggleMute: rtcToggleMute,
     setMicEnabled: rtcSetMicEnabled,
+    localAudioStream: rtcLocalAudioStream,
     getLocalAudioStream,
     broadcastTranscript: rtcBroadcastTranscript,
     startSession: rtcStartSession,
@@ -983,7 +984,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     slotId: session.slotId || session.id || 'slot-1',
     isSessionActive: session.status === 'active',
     localStream: videoStream,
-    localAudioStream: audioStream,
+    localAudioStream: rtcLocalAudioStream || (getLocalAudioStream ? getLocalAudioStream() : null) || audioStream,
     peerStreams: rtcPeerStreams,
     recordVideo: true,
     enabled: isRecordingClient,
@@ -999,6 +1000,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       cameraActive: st.cameraActive,
       isUser: st.isUser,
       videoStream: st.isUser ? (videoStream || st.videoStream) : st.videoStream,
+      avatar: st.avatar || (st.name ? `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(st.name)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf` : ''),
     })),
     autoStartOnActive: true,
   });
@@ -2853,7 +2855,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                         >
                           <StudentPodCard 
                             student={student} 
-                            isCurrentSpeaker={session.currentSpeakerId === student.id || student.isSpeaking}
+                            isCurrentSpeaker={isSpk}
                             position={topPct < 50 ? 'top' : 'bottom'}
                             zoomLevel={zoomLevel}
                             isUserCameraOn={isCameraOn}
@@ -2863,6 +2865,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                             isFaculty={isFaculty}
                             onAddNote={handleOpenNoteModal}
                             onEnlarge={handleToggleEnlargeStudent}
+                            seatAngle={angle}
+                            leftPct={leftPct}
+                            topPct={topPct}
                           />
                         </div>
                       );
@@ -4285,6 +4290,10 @@ export const StudentVideoFrame: React.FC<{
   isListeningMic?: boolean;
   size?: 'small' | 'normal' | 'large';
   isFaculty?: boolean;
+  position?: 'top' | 'bottom';
+  seatAngle?: number;
+  leftPct?: number;
+  topPct?: number;
 }> = ({
   student,
   isCurrentSpeaker = false,
@@ -4294,6 +4303,10 @@ export const StudentVideoFrame: React.FC<{
   isListeningMic = false,
   size = 'normal',
   isFaculty = false,
+  position,
+  seatAngle,
+  leftPct,
+  topPct,
 }) => {
   const isUser = !isFaculty && !!student.isUser;
   const effectiveStream = isUser ? videoStream : student.videoStream;
@@ -4313,6 +4326,31 @@ export const StudentVideoFrame: React.FC<{
       ? `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(student.name)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`
       : ''
   );
+
+  // Inward-facing orientation for animated face avatars:
+  // Around the round conference table, participants face INWARD toward the table center (50%, 50%):
+  // Default DiceBear Lorelei portrait faces to the character's right (viewer's left).
+  // - Students on the RIGHT of the table (leftPct > 51.5 or Math.cos(seatAngle) > 0.08): Table is to their left, so avatar faces left directly into the table.
+  // - Students on the LEFT of the table (leftPct < 48.5 or Math.cos(seatAngle) < -0.08): Table is to their right, so avatar flips horizontally (scaleX(-1)) to face right into the table.
+  // - Seats near top of table angle slightly down into the table.
+  // - Seats near bottom of table angle slightly up into the table.
+  const isRightOfCenter = (leftPct !== undefined && leftPct > 51.5) || (seatAngle !== undefined && Math.cos(seatAngle) > 0.08);
+  const isLeftOfCenter = (leftPct !== undefined && leftPct < 48.5) || (seatAngle !== undefined && Math.cos(seatAngle) < -0.08);
+  const isTopOfCenter = (topPct !== undefined && topPct < 49) || position === 'top' || (seatAngle !== undefined && Math.sin(seatAngle) < -0.3);
+  const isBottomOfCenter = (topPct !== undefined && topPct > 51) || position === 'bottom' || (seatAngle !== undefined && Math.sin(seatAngle) > 0.3);
+
+  let faceTransform = '';
+  if (isLeftOfCenter) {
+    // Face right into the table with inward 2.5D perspective
+    faceTransform = 'scaleX(-1) perspective(400px) rotateY(-12deg)';
+  } else if (isRightOfCenter) {
+    // Face left into the table with inward 2.5D perspective
+    faceTransform = 'scaleX(1) perspective(400px) rotateY(-12deg)';
+  } else if (isTopOfCenter) {
+    faceTransform = 'perspective(400px) rotateX(10deg)';
+  } else if (isBottomOfCenter) {
+    faceTransform = 'perspective(400px) rotateX(-10deg)';
+  }
 
   return (
     <div className="relative w-full h-full rounded-inherit overflow-hidden bg-slate-900 flex items-center justify-center select-none">
@@ -4336,7 +4374,8 @@ export const StudentVideoFrame: React.FC<{
           <img
             src={resolvedAvatar}
             alt={student.name}
-            className="w-full h-full object-cover bg-slate-800"
+            className="w-full h-full object-cover bg-slate-800 transition-transform duration-500 ease-out"
+            style={{ transform: faceTransform }}
             referrerPolicy="no-referrer"
           />
         ) : (
@@ -4347,13 +4386,14 @@ export const StudentVideoFrame: React.FC<{
           </div>
         )
       ) : (
-        /* Camera Off Fallback Placeholder */
+        /* Camera Off Fallback Placeholder with Inward-Facing Animated Face */
         <div className="w-full h-full flex flex-col items-center justify-center bg-slate-800 text-slate-300 relative">
           {resolvedAvatar ? (
             <img
               src={resolvedAvatar}
               alt={student.name}
-              className="w-full h-full object-cover opacity-85"
+              className="w-full h-full object-cover opacity-85 transition-transform duration-500 ease-out"
+              style={{ transform: faceTransform }}
               referrerPolicy="no-referrer"
             />
           ) : (
@@ -4361,7 +4401,7 @@ export const StudentVideoFrame: React.FC<{
               {student.name.charAt(0)}
             </div>
           )}
-          <div className="absolute inset-0 bg-slate-950/40 flex items-center justify-center">
+          <div className="absolute inset-0 bg-slate-950/40 flex items-center justify-center pointer-events-none">
             <VideoOff className="w-3.5 h-3.5 text-rose-400 drop-shadow" />
           </div>
         </div>
@@ -4449,6 +4489,9 @@ export const StudentPodCard: React.FC<{
   isFaculty?: boolean;
   onAddNote?: (student: Student) => void;
   onEnlarge?: (student: Student) => void;
+  seatAngle?: number;
+  leftPct?: number;
+  topPct?: number;
 }> = ({
   student,
   isCurrentSpeaker,
@@ -4461,6 +4504,9 @@ export const StudentPodCard: React.FC<{
   isFaculty = false,
   onAddNote,
   onEnlarge,
+  seatAngle,
+  leftPct,
+  topPct,
 }) => {
   const isUser = !isFaculty && !!student.isUser;
   const isZoomedSpeaker = isCurrentSpeaker;
@@ -4535,6 +4581,10 @@ export const StudentPodCard: React.FC<{
             isListeningMic={isListeningMic}
             size="normal"
             isFaculty={isFaculty}
+            position={position}
+            seatAngle={seatAngle}
+            leftPct={leftPct}
+            topPct={topPct}
           />
 
           {!student.isEmptySeat && onEnlarge && (

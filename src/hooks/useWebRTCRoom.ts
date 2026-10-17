@@ -102,6 +102,7 @@ export function useWebRTCRoom({
   const [floorSpeakerName, setFloorSpeakerName] = useState<string | null>(null);
   const [floorSpeakerId, setFloorSpeakerId] = useState<string | null>(null);
   const [isAudioAutoplayBlocked, setIsAudioAutoplayBlocked] = useState(false);
+  const [localAudioStream, setLocalAudioStream] = useState<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
@@ -471,6 +472,7 @@ export function useWebRTCRoom({
       });
 
       localStreamRef.current = stream;
+      setLocalAudioStream(stream);
 
       // Continuous open mic: start with audio tracks active for students (no manual unmuting needed)
       const isFacultyUser = currentUserRef.current?.role === 'faculty';
@@ -1022,6 +1024,7 @@ export function useWebRTCRoom({
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((t) => t.stop());
         localStreamRef.current = null;
+        setLocalAudioStream(null);
       }
 
       if (audioContextRef.current) {
@@ -1217,6 +1220,7 @@ export function useWebRTCRoom({
     localVolume,
     toggleMute,
     setMicEnabled,
+    localAudioStream,
     getLocalAudioStream,
     broadcastTranscript,
     startSession,
