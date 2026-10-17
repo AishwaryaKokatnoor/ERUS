@@ -8390,37 +8390,109 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
 
         room.silenceTimerSeconds += 1;
 
-        // Natural GD Turn Arbitration Watchdog:
-        // Give participants ample room to discuss naturally without artificial 3s interruptions.
-        // Intervene only on genuine, prolonged room deadlock (>= 25 seconds) with at least 30s cooldown.
-        const canIntervene = (checkNow - (room.lastDeadlockAt || 0)) >= 30000;
-
-        // Broadcast current silence countdown tick to all peers (maxSilence: 25)
+        // Broadcast current silence countdown tick to all peers (3s intervals up to 9s max)
         io.to(`room-${slotId}`).emit('silence-timer-tick', {
           silenceTimerSeconds: room.silenceTimerSeconds,
           silenceStage: room.silenceStage,
-          maxSilence: 25,
+          maxSilence: 9,
         });
 
-        if (room.silenceTimerSeconds >= 25 && canIntervene) {
-          room.silenceTimerSeconds = 0;
+        const STAGE_1_PROMPTS = [
+          "Who would like to build on that point or share an alternative perspective?",
+          "Let's hear other viewpoints on this topic — anyone is welcome to jump in.",
+          "Who has a counter-argument or fresh insight to bring to the discussion?",
+          "Let's explore another angle of this issue — who would like to speak next?",
+          "Feel free to share your thoughts or provide real-world examples on this point.",
+        ];
+
+        const STAGE_2_PROMPTS = [
+          "Let's keep the discussion moving — feel free to jump in with your thoughts.",
+          "We encourage everyone to participate — please share your perspective.",
+          "Let's hear from our peers who haven't spoken recently — what is your view?",
+          "Does anyone want to add data or concrete industry examples to support our analysis?",
+          "Who would like to take the floor next to expand on this topic?",
+        ];
+
+        // Strict 3-Second Staged Turn Arbitration:
+        // Stage 0 -> 1: At 3s silence -> AI gives Stage 1 guidance (rotating prompt, never repetitive)
+        if (room.silenceStage === 0 && room.silenceTimerSeconds >= 3) {
           room.silenceStage = 1;
-          room.lastDeadlockAt = checkNow;
+          const promptIdx = (room.deadlockCount || 0) % STAGE_1_PROMPTS.length;
+          const instruction1 = STAGE_1_PROMPTS[promptIdx];
+          const interventionTx: BackendTranscript = {
+            id: `t-facilitator-silence1-${Date.now()}`,
+            sessionId: room.slotId,
+            speakerId: 'facilitator',
+            speakerName: 'AI Facilitator (ERUS)',
+            seatNumber: null,
+            isFacilitator: true,
+            timestamp: '00:00',
+            timestampSeconds: Date.now(),
+            text: instruction1,
+            type: 'intervention',
+            sentiment: 'neutral',
+          };
+          room.transcripts.push(interventionTx);
+          persistTranscriptToMongoDB(interventionTx);
+          room.facilitatorSpeakingUntil = Date.now() + 3500;
+          io.to(`room-${slotId}`).emit('facilitator-intervention', {
+            text: instruction1,
+            action: 'silence_instruction_1',
+            transcript: interventionTx,
+          });
+        }
+        // Stage 1 -> 2: At 6s silence (3s after Stage 1) -> AI gives Stage 2 guidance
+        else if (room.silenceStage === 1 && room.silenceTimerSeconds >= 6) {
+          room.silenceStage = 2;
+          const promptIdx = (room.deadlockCount || 0) % STAGE_2_PROMPTS.length;
+          const instruction2 = STAGE_2_PROMPTS[promptIdx];
+          const interventionTx: BackendTranscript = {
+            id: `t-facilitator-silence2-${Date.now()}`,
+            sessionId: room.slotId,
+            speakerId: 'facilitator',
+            speakerName: 'AI Facilitator (ERUS)',
+            seatNumber: null,
+            isFacilitator: true,
+            timestamp: '00:00',
+            timestampSeconds: Date.now(),
+            text: instruction2,
+            type: 'intervention',
+            sentiment: 'neutral',
+          };
+          room.transcripts.push(interventionTx);
+          persistTranscriptToMongoDB(interventionTx);
+          room.facilitatorSpeakingUntil = Date.now() + 3500;
+          io.to(`room-${slotId}`).emit('facilitator-intervention', {
+            text: instruction2,
+            action: 'silence_instruction_2',
+            transcript: interventionTx,
+          });
+        }
+        // Stage 2 -> 3: At 9s silence (3s after Stage 2) -> AI asks contextual question to least spoken candidate
+        else if (room.silenceStage === 2 && room.silenceTimerSeconds >= 9) {
+          room.silenceStage = 3;
+          room.lastDeadlockAt = Date.now();
           room.deadlockCount += 1;
           room.waitingForParticipantId = undefined;
           await triggerDeadlockIntervention(room);
+        }
+        // Stage 3: Question was asked; if after 15s still no response, advance to next quiet candidate
+        else if (room.silenceStage === 3 && room.silenceTimerSeconds >= 24) {
+          room.silenceStage = 2;
+          room.silenceTimerSeconds = 8;
         }
       } else {
         // Someone is actively speaking -> floor is active, reset silence and stage immediately!
         room.silenceTimerSeconds = 0;
         room.silenceStage = 0;
         room.waitingForParticipantId = undefined;
+        room.facilitatorSpeakingUntil = 0;
 
         // Broadcast active floor tick
         io.to(`room-${slotId}`).emit('silence-timer-tick', {
           silenceTimerSeconds: 0,
           silenceStage: 0,
-          maxSilence: 25,
+          maxSilence: 9,
         });
 
         // Track current speaker's continuous speaking time (no mid-speech interruptions)

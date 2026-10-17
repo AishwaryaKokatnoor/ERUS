@@ -822,6 +822,9 @@ export function useWebRTCRoom({
     // A peer updated speaking/mic/camera state
     socket.on('peer-speaking-updated', ({ socketId: peerSockId, isSpeaking, micActive, cameraActive, volumeLevel: peerVol }) => {
       if (!active) return;
+      if (isSpeaking && roomVoice.isSpeaking()) {
+        roomVoice.stop();
+      }
       if ((isSpeaking || micActive) && audioElementsRef.current.has(peerSockId)) {
         const audioEl = audioElementsRef.current.get(peerSockId);
         if (audioEl) {
@@ -876,6 +879,9 @@ export function useWebRTCRoom({
     // Synchronized Live Transcript Chunk Broadcast with Peer Turn Counts
     socket.on('new-transcript', ({ transcript, studentId, seatNumber, speakingTurns, speakingDurationSeconds }: any) => {
       if (!active) return;
+      if (roomVoice.isSpeaking() && !transcript?.isFacilitator) {
+        roomVoice.stop();
+      }
       const targetSpeakerId = transcript?.speakerId || studentId;
       const targetSeat = transcript?.seatNumber || seatNumber;
 

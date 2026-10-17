@@ -561,11 +561,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // Synchronize silenceTimerSeconds from RTC hook and local stopwatch to session state
   useEffect(() => {
     setSession((prev) => {
-      const merged = Math.max(rtcSilenceTimer, localSilenceSeconds);
+      const merged = isSocketConnected ? rtcSilenceTimer : localSilenceSeconds;
       if (prev.silenceTimerSeconds === merged) return prev;
       return { ...prev, silenceTimerSeconds: merged };
     });
-  }, [rtcSilenceTimer, localSilenceSeconds]);
+  }, [rtcSilenceTimer, localSilenceSeconds, isSocketConnected]);
 
   // Continuous real-time speaking time tracker: increments participant speaking seconds live while speaking
   useEffect(() => {
@@ -2109,24 +2109,52 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       }
     }
 
-    // 2. Natural GD Silence Watchdog (intervene only on genuine, extended silence >= 25s)
-    const currentSilence = Math.max(rtcSilenceTimer, session.silenceTimerSeconds, localSilenceSeconds);
+    // 2. 3-Second Staged Turn Arbitration Watchdog (3s Stage 1, 6s Stage 2, 9s Targeted Candidate Callout)
+    const currentSilence = isSocketConnected ? rtcSilenceTimer : Math.max(localSilenceSeconds, session.silenceTimerSeconds);
     if (
       !session.isFacilitatorSpeaking &&
       !roomVoice.isSpeaking() &&
       !aiVoicePausedMicRef.current &&
       !rtcIsSpeakingLive &&
       !isTransitioningTurnRef.current &&
-      !liveSpeechTranscript &&
-      currentSilence >= 25 &&
-      Date.now() - lastFacilitatorInterventionTimeRef.current >= 30000
+      !liveSpeechTranscript
     ) {
-      lastFacilitatorInterventionTimeRef.current = Date.now();
-      setLocalSilenceSeconds(0);
       if (!isSocketConnected) {
-        handleFacilitatorTargetedProbe();
-      } else if (rtcRequestAiIntervention) {
-        rtcRequestAiIntervention();
+        const STAGE_1_PROMPTS = [
+          "Who would like to build on that point or share an alternative perspective?",
+          "Let's hear other viewpoints on this topic — anyone is welcome to jump in.",
+          "Who has a counter-argument or fresh insight to bring to the discussion?",
+          "Let's explore another angle of this issue — who would like to speak next?",
+          "Feel free to share your thoughts or provide real-world examples on this point.",
+        ];
+        const STAGE_2_PROMPTS = [
+          "Let's keep the discussion moving — feel free to jump in with your thoughts.",
+          "We encourage everyone to participate — please share your perspective.",
+          "Let's hear from our peers who haven't spoken recently — what is your view?",
+          "Does anyone want to add data or concrete industry examples to support our analysis?",
+          "Who would like to take the floor next to expand on this topic?",
+        ];
+
+        if (clientSilenceStageRef.current === 0 && currentSilence >= 3 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
+          clientSilenceStageRef.current = 1;
+          lastFacilitatorInterventionTimeRef.current = Date.now();
+          const pIdx = Math.floor(Date.now() / 1000) % STAGE_1_PROMPTS.length;
+          speakFacilitator(STAGE_1_PROMPTS[pIdx], 'silence_instruction_1', 'turn_transition');
+        } else if (clientSilenceStageRef.current === 1 && currentSilence >= 6 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
+          clientSilenceStageRef.current = 2;
+          lastFacilitatorInterventionTimeRef.current = Date.now();
+          const pIdx = Math.floor(Date.now() / 1000) % STAGE_2_PROMPTS.length;
+          speakFacilitator(STAGE_2_PROMPTS[pIdx], 'silence_instruction_2', 'turn_transition');
+        } else if (clientSilenceStageRef.current === 2 && currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
+          clientSilenceStageRef.current = 3;
+          lastFacilitatorInterventionTimeRef.current = Date.now();
+          handleFacilitatorTargetedProbe();
+        }
+      } else if (currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 10000) {
+        lastFacilitatorInterventionTimeRef.current = Date.now();
+        if (rtcRequestAiIntervention) {
+          rtcRequestAiIntervention();
+        }
       }
     }
   }, [
