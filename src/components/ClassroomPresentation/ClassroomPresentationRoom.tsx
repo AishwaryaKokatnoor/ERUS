@@ -1187,31 +1187,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
               <div className="mt-3 w-full bg-white border border-amber-200/90 rounded-2xl p-2.5 shadow-2xs flex flex-wrap items-center justify-between gap-2">
                 
                 <div className="flex items-center gap-2 flex-wrap">
-                  {/* 1. MUTE / UNMUTE MICROPHONE */}
-                  <button
-                    type="button"
-                    onClick={handleToggleMic}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs ${
-                      isMicOn
-                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-400/40'
-                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300'
-                    }`}
-                    title={isMicOn ? 'Click to Mute Microphone' : 'Click to Unmute Microphone'}
-                  >
-                    {isMicOn ? (
-                      <>
-                        <Mic className="w-3.5 h-3.5 animate-pulse text-white" />
-                        <span>My Mic: Active</span>
-                      </>
-                    ) : (
-                      <>
-                        <MicOff className="w-3.5 h-3.5 text-rose-500" />
-                        <span>My Mic: Muted</span>
-                      </>
-                    )}
-                  </button>
-
-                  {/* 2. TURN VIDEO ON / OFF */}
+                  {/* 1. TURN VIDEO ON / OFF */}
                   <button
                     type="button"
                     onClick={handleToggleVideo}

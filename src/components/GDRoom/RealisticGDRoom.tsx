@@ -1444,8 +1444,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
         recognition.onend = () => {
           isRecognitionRunningRef.current = false;
-          // If mic is supposed to remain on (user didn't mute), revive with fresh instance
-          if (isListeningMicRef.current) {
+          // Microphone is permanently active for candidates — revive recognition instance continuously
+          if (!isFacultyRef.current || isListeningMicRef.current) {
+            isListeningMicRef.current = true;
+            setIsListeningMic(true);
             if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
             restartRecognitionTimerRef.current = setTimeout(startRecognitionInstance, 200);
             return;
@@ -1455,12 +1457,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           stopAudioAnalyserRef.current();
           stopMediaRecorderFallback();
           rtcSetMicEnabledRef.current(false);
-          if (!isFacultyRef.current) {
-            setSession((prev) => ({
-              ...prev,
-              students: prev.students.map((s) => (s.isUser ? { ...s, micActive: false } : s)),
-            }));
-          }
         };
 
         recognition.start();
@@ -3077,26 +3073,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 {/* Center Control Action Buttons */}
                 <div className="flex items-center gap-2 sm:gap-3 mx-auto sm:mx-0">
                   
-                  {/* 1. Continuous Open Microphone Status (No unmuting/muting required) */}
-                  {!isFaculty && (
-                    <div
-                      id="mic-continuous-indicator"
-                      className="relative px-3.5 py-2.5 rounded-full font-semibold shadow-md flex items-center gap-2 bg-emerald-500/20 border border-emerald-500/40 text-emerald-300"
-                      title="Continuous Open Microphone Active — Speak freely at any time"
-                    >
-                      <div className="relative flex items-center justify-center">
-                        <Mic className="w-5 h-5 text-emerald-400" />
-                        {audioLevel > 4 && (
-                          <span 
-                            className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-400 border border-slate-950 animate-ping"
-                          />
-                        )}
-                      </div>
-                      <span className="text-xs font-bold text-emerald-200 hidden sm:inline">Open Mic Active</span>
-                    </div>
-                  )}
-
-                  {/* 2. Camera Toggle (Student only) */}
+                  {/* 1. Camera Toggle (Student only) */}
                   {!isFaculty && (
                     <button
                       id="camera-toggle-btn"
@@ -3309,7 +3286,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                       </button>
                     </div>
                   </div>
-                ) : isListeningMic ? (
+                ) : (
                   <div className="w-full rounded-2xl bg-gradient-to-r from-emerald-950/80 via-slate-900 to-indigo-950/80 border-2 border-emerald-500/80 p-3 sm:p-3.5 shadow-lg shadow-emerald-950/40 transition-all animate-fadeIn">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
@@ -3395,42 +3372,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                           </button>
                         </div>
                       )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="w-full rounded-2xl bg-slate-100/90 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 p-2.5 sm:p-3 flex items-center justify-between transition-all">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-xl bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400">
-                        <MicOff className="w-4 h-4 text-rose-500" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                          <span>Microphone is Muted</span>
-                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-normal">
-                            Direct Voice Broadcast
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                          Click Unmute to speak live to the room — your voice is broadcast live to all participants.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => setShowAudioTestModal(true)}
-                        className="px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/70 dark:hover:bg-indigo-900/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-xs font-semibold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95"
-                        title="Test your microphone VU meter and speaker chime"
-                      >
-                        <Volume2 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-                        <span>Test Audio & Mic</span>
-                      </button>
-
-                      <div className="px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center gap-1.5 shadow-2xs">
-                        <Mic className="w-3.5 h-3.5 text-emerald-500" />
-                        <span>Continuous Open Mic</span>
-                      </div>
                     </div>
                   </div>
                 )}
