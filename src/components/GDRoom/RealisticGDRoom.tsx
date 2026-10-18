@@ -290,6 +290,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     notifyFacilitatorSpeechEnded: rtcNotifyFacilitatorSpeechEnded,
     requestAiIntervention: rtcRequestAiIntervention,
     broadcastFacilitatorSpeech: rtcBroadcastFacilitatorSpeech,
+    notifySpeakingStarted: rtcNotifySpeakingStarted,
     notifySpeakingFinished: rtcNotifySpeakingFinished,
     aiParticipants: rtcAiParticipants,
     simulationMode: rtcSimulationMode,
@@ -570,6 +571,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     },
   });
   notifyFacilitatorSpeechEndedRef.current = rtcNotifyFacilitatorSpeechEnded;
+  const rtcNotifySpeakingStartedRef = useRef(rtcNotifySpeakingStarted);
+  rtcNotifySpeakingStartedRef.current = rtcNotifySpeakingStarted;
 
   // Synchronized GD termination watch: if session status changes to 'completed', upload recording first then finish GD
   useEffect(() => {
@@ -1490,8 +1493,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             return;
           }
 
-          // While AI facilitator voice is actively speaking, ignore speaker audio feedback so AI can complete sentence without self-cancellation
-          if (roomVoice.isSpeaking() || session.isFacilitatorSpeaking || aiVoicePausedMicRef.current) {
+          // While AI facilitator voice is actively playing audio, ignore brief acoustic feedback
+          if (roomVoice.isSpeaking()) {
             return;
           }
 
@@ -1518,6 +1521,15 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           }
           const currentSpoken = String((liveTranscriptRef.current || '') + ' ' + interimTranscript).trim();
           setLiveSpeechTranscript(currentSpoken);
+
+          // Instantly notify server and local room that candidate is actively speaking
+          if (currentSpoken) {
+            setLocalSilenceSeconds(0);
+            clientSilenceStageRef.current = 0;
+            if (rtcNotifySpeakingStartedRef.current) {
+              rtcNotifySpeakingStartedRef.current();
+            }
+          }
 
           // Mark speaker active on floor
           if (!isFacultyRef.current) {
@@ -2276,15 +2288,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // If no one speaks initially, AI Facilitator calls upon a student or welcomes the room
   const handleInitiateOpeningSpeaker = (force: boolean = false) => {
     if (rtcSimulationMode) return;
-    if (!force && hasInitiatedOpeningRef.current) return;
-    if (!force) {
-      if (!isSessionActive || session.isFacilitatorSpeaking || session.currentSpeakerId) return;
-    }
-
-    const studentTranscripts = transcripts.filter((t) => !t.isFacilitator);
-    if (!force && studentTranscripts.length > 0) {
+    if (hasInitiatedOpeningRef.current) return;
+    const hasSpoken = transcripts.some((t) => !t.isFacilitator) || transcripts.some((t) => t.isFacilitator);
+    if (hasSpoken) {
       hasInitiatedOpeningRef.current = true;
       return;
+    }
+    if (!force) {
+      if (!isSessionActive || session.isFacilitatorSpeaking || session.currentSpeakerId) return;
     }
 
     hasInitiatedOpeningRef.current = true;
@@ -2398,27 +2409,12 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       !isTransitioningTurnRef.current &&
       !liveSpeechTranscript
     ) {
-      const STAGE_1_PROMPTS = [
-        "Three seconds of silence detected. The floor is open — anyone can jump in.",
-        "Three seconds of silence. Please share your perspective or build on this topic.",
-      ];
-      const STAGE_2_PROMPTS = [
-        "Six seconds of silence detected. Please present your arguments or counter-points.",
-        "Six seconds of silence. Let us keep the momentum going — feel free to contribute.",
-      ];
-
       // In standalone / offline mode: arbitrate through the 3 warnings and call least spoken candidate at 9s
       if (!isSocketConnected) {
-        if (clientSilenceStageRef.current === 0 && currentSilence >= 3 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
+        if (clientSilenceStageRef.current === 0 && currentSilence >= 3) {
           clientSilenceStageRef.current = 1;
-          lastFacilitatorInterventionTimeRef.current = Date.now();
-          const pIdx = Math.floor(Date.now() / 1000) % STAGE_1_PROMPTS.length;
-          speakFacilitator(STAGE_1_PROMPTS[pIdx], 'silence_instruction_1', 'turn_transition');
-        } else if (clientSilenceStageRef.current === 1 && currentSilence >= 6 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
+        } else if (clientSilenceStageRef.current === 1 && currentSilence >= 6) {
           clientSilenceStageRef.current = 2;
-          lastFacilitatorInterventionTimeRef.current = Date.now();
-          const pIdx = Math.floor(Date.now() / 1000) % STAGE_2_PROMPTS.length;
-          speakFacilitator(STAGE_2_PROMPTS[pIdx], 'silence_instruction_2', 'turn_transition');
         } else if (clientSilenceStageRef.current === 2 && currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
           clientSilenceStageRef.current = 3;
           lastFacilitatorInterventionTimeRef.current = Date.now();
@@ -2708,7 +2704,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   </div>
                   <div>
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-bold text-slate-900 dark:text-white">3s Turn Arbitration (AI Voice Intervention)</span>
+                      <span className="text-xs font-bold text-slate-900 dark:text-white">Discussion Flow & Silence Monitor</span>
                       <span className={`font-mono text-xs font-bold px-1.5 py-0.5 rounded ${
                         displaySilenceSeconds >= 6
                           ? 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 animate-pulse'
@@ -2716,15 +2712,15 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                           ? 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300'
                           : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
                       }`}>
-                        {displaySilenceSeconds > 0 ? `${displaySilenceSeconds}s / 9s` : '0s / 9s (Floor Active)'}
+                        {displaySilenceSeconds > 0 ? `${displaySilenceSeconds}s / 9s` : 'Active Floor'}
                       </span>
                     </div>
                     <p className="text-[10px] text-slate-500 dark:text-slate-400">
                       {displaySilenceSeconds >= 6
-                        ? `⚠️ Stage 3: AI calling on quietest participant in ${Math.max(0, 9 - displaySilenceSeconds)}s!`
+                        ? `Silence detected — AI facilitating participant in ${Math.max(0, 9 - displaySilenceSeconds)}s`
                         : displaySilenceSeconds >= 3
-                        ? `⚠️ Stage 1 Warning: 3s silence detected — jump in or AI will guide discussion.`
-                        : 'Floor open — speak within 3s intervals or AI facilitator will guide discussion.'}
+                        ? 'Floor is open — share your perspective or AI facilitator will invite next speaker.'
+                        : 'Floor open — participants can contribute freely.'}
                     </p>
                   </div>
                 </div>

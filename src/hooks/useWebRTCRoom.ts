@@ -554,8 +554,7 @@ export function useWebRTCRoom({
           // Detect speaking when volume exceeds threshold (open mics enabled)
           const isAiSpeaking = roomVoice.isSpeaking();
           // Never kill active AI voice on mic volume; speaker output leaks into laptop mic.
-          // While AI is speaking, ignore mic acoustic feedback so AI completes its sentence.
-          const speakingNow = !isAiSpeaking && avg > 16 && !isMicMutedRef.current;
+          const speakingNow = !isAiSpeaking && avg > 8 && !isMicMutedRef.current;
           setIsSpeakingLive(speakingNow);
 
           if (speakingNow) {
@@ -1201,6 +1200,26 @@ export function useWebRTCRoom({
     }
   }, [slotId]);
 
+  // Explicitly notify room that participant has started speaking
+  const notifySpeakingStarted = useCallback(() => {
+    if (socketRef.current) {
+      if (speakingStateTimeoutRef.current) {
+        clearTimeout(speakingStateTimeoutRef.current);
+        speakingStateTimeoutRef.current = null;
+      }
+      lastSpeakingStateEmittedRef.current = true;
+      lastSpeakingEmitTimestampRef.current = Date.now();
+      socketRef.current.emit('peer-speaking-state', {
+        slotId,
+        isSpeaking: true,
+        micActive: !isMicMutedRef.current,
+        cameraActive: Boolean(isCameraOnRef.current && videoStreamRef.current),
+        volumeLevel: 60,
+      });
+      setIsSpeakingLive(true);
+    }
+  }, [slotId]);
+
   // Explicitly notify room that participant has yielded the floor
   const notifySpeakingFinished = useCallback(() => {
     if (socketRef.current) {
@@ -1266,6 +1285,7 @@ export function useWebRTCRoom({
     notifyFacilitatorSpeechEnded,
     requestAiIntervention,
     broadcastFacilitatorSpeech,
+    notifySpeakingStarted,
     notifySpeakingFinished,
     isFloorLocked,
     floorSpeakerName,

@@ -4347,9 +4347,7 @@ app.post('/api/college/slots/:id/start', async (req, res) => {
   });
   io.emit('slot-updated', { slot: target });
 
-  const nowMs = Date.now();
-  const recentlySpokeOpening = room.facilitatorSpeakingUntil && room.facilitatorSpeakingUntil > nowMs;
-  if (!room.openingStarted || !recentlySpokeOpening) {
+  if (!room.hasAnnouncedWelcome && room.transcripts.length === 0) {
     room.openingStarted = false;
     room.initialSpeakerSelected = false;
     scheduleNextTurn(room);
@@ -8273,6 +8271,7 @@ interface LiveGDRoomState {
   askedQuestions: Set<string>;
   facilitatorSpeakingUntil?: number;
   silenceInterventionCount?: number;
+  hasAnnouncedWelcome?: boolean;
 }
 
 const LIVE_ROOMS = new Map<string, LiveGDRoomState>();
@@ -8376,7 +8375,8 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
       silenceInterventionCount: 0,
       simulationMode: AI_GD_SIMULATION_MODE,
       floorVersion: 0,
-      openingStarted: false,
+      openingStarted: liveTranscripts.some((t) => t.sessionId === slotId),
+      hasAnnouncedWelcome: liveTranscripts.some((t) => t.sessionId === slotId && t.isFacilitator) || liveTranscripts.some((t) => t.sessionId === slotId),
       facilitatorHandoffCount: 0,
       facilitatorHandoffStreak: 0,
       askedQuestions: new Set<string>(),
@@ -8442,74 +8442,16 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
           maxSilence: 9,
         });
 
-        const STAGE_1_PROMPTS = [
-          "Three seconds of silence detected. The floor is open — anyone can jump in.",
-          "Three seconds of silence. Please share your perspective or build on this topic.",
-        ];
-
-        const STAGE_2_PROMPTS = [
-          "Six seconds of silence detected. Please present your arguments or counter-points.",
-          "Six seconds of silence. Let us keep the momentum going — feel free to contribute.",
-        ];
-
-        // Strict 3-Second Staged Turn Arbitration:
-        // Stage 0 -> 1: At 3s silence -> AI gives Stage 1 guidance (rotating prompt, never repetitive)
+        // 3-Second Staged Turn Arbitration:
+        // Stage 0 -> 1: At 3s silence -> Warning 1 (silent UI countdown, no voice interruption)
         if (room.silenceStage === 0 && room.silenceTimerSeconds >= 3) {
           room.silenceStage = 1;
-          room.silenceInterventionCount = (room.silenceInterventionCount || 0) + 1;
-          const promptIdx = room.silenceInterventionCount % STAGE_1_PROMPTS.length;
-          const instruction1 = STAGE_1_PROMPTS[promptIdx];
-          const interventionTx: BackendTranscript = {
-            id: `t-facilitator-silence1-${Date.now()}`,
-            sessionId: room.slotId,
-            speakerId: 'facilitator',
-            speakerName: 'AI Facilitator (ERUS)',
-            seatNumber: null,
-            isFacilitator: true,
-            timestamp: '00:00',
-            timestampSeconds: Date.now(),
-            text: instruction1,
-            type: 'intervention',
-            sentiment: 'neutral',
-          };
-          room.transcripts.push(interventionTx);
-          persistTranscriptToMongoDB(interventionTx);
-          room.facilitatorSpeakingUntil = Date.now() + 3500;
-          io.to(`room-${slotId}`).emit('facilitator-intervention', {
-            text: instruction1,
-            action: 'silence_instruction_1',
-            transcript: interventionTx,
-          });
         }
-        // Stage 1 -> 2: At 6s silence (3s after Stage 1) -> AI gives Stage 2 guidance
+        // Stage 1 -> 2: At 6s silence (3s after Stage 1) -> Warning 2 (silent UI countdown, no voice interruption)
         else if (room.silenceStage === 1 && room.silenceTimerSeconds >= 6) {
           room.silenceStage = 2;
-          room.silenceInterventionCount = (room.silenceInterventionCount || 0) + 1;
-          const promptIdx = room.silenceInterventionCount % STAGE_2_PROMPTS.length;
-          const instruction2 = STAGE_2_PROMPTS[promptIdx];
-          const interventionTx: BackendTranscript = {
-            id: `t-facilitator-silence2-${Date.now()}`,
-            sessionId: room.slotId,
-            speakerId: 'facilitator',
-            speakerName: 'AI Facilitator (ERUS)',
-            seatNumber: null,
-            isFacilitator: true,
-            timestamp: '00:00',
-            timestampSeconds: Date.now(),
-            text: instruction2,
-            type: 'intervention',
-            sentiment: 'neutral',
-          };
-          room.transcripts.push(interventionTx);
-          persistTranscriptToMongoDB(interventionTx);
-          room.facilitatorSpeakingUntil = Date.now() + 3500;
-          io.to(`room-${slotId}`).emit('facilitator-intervention', {
-            text: instruction2,
-            action: 'silence_instruction_2',
-            transcript: interventionTx,
-          });
         }
-        // Stage 2 -> 3: At 9s silence (3s after Stage 2) -> AI asks contextual question to least spoken candidate
+        // Stage 2 -> 3: At 9s silence (after 3 silence warnings) -> AI specifically calls upon the candidate who has spoken least and asks a relevant question on the topic
         else if (room.silenceStage === 2 && room.silenceTimerSeconds >= 9) {
           room.silenceStage = 3;
           room.lastDeadlockAt = Date.now();
@@ -8517,7 +8459,7 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
           room.waitingForParticipantId = undefined;
           await triggerDeadlockIntervention(room);
         }
-        // Stage 3: Question was asked; if after 15s still no response, advance to next quiet candidate
+        // Stage 3: Question was asked; if after 15s still no response, cycle to next quiet candidate
         else if (room.silenceStage === 3 && room.silenceTimerSeconds >= 24) {
           room.silenceStage = 2;
           room.silenceTimerSeconds = 8;
@@ -8994,7 +8936,7 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
   ];
 
   const hasFacilitatorSpoken = room.transcripts.some((t) => t.isFacilitator);
-  const isOpening = !hasFacilitatorSpoken;
+  const isOpening = !room.hasAnnouncedWelcome && !room.openingStarted && !hasFacilitatorSpoken && room.transcripts.length === 0;
 
   // If no live socket student has joined yet, check if the slot has enrolled students in persistentState
   if (allParticipants.length === 0 && isOpening) {
@@ -9061,6 +9003,7 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
 
   if (isOpening) {
     room.openingStarted = true;
+    room.hasAnnouncedWelcome = true;
     if (allParticipants.length > 0) {
       const starter = allParticipants[Math.floor(Math.random() * allParticipants.length)];
       targetReal = starter;
@@ -9820,7 +9763,7 @@ io.on('connection', (socket) => {
     });
 
     const hasFacilitatorSpoken = room.transcripts.some((t) => t.isFacilitator);
-    if (!hasFacilitatorSpoken) {
+    if (!room.hasAnnouncedWelcome && !hasFacilitatorSpoken && room.transcripts.length === 0) {
       room.openingStarted = false;
       room.initialSpeakerSelected = false;
       room.deadlockCount = 0;
@@ -10221,6 +10164,8 @@ io.on('connection', (socket) => {
 
     room.transcripts.push(newTranscript);
     persistTranscriptToMongoDB(newTranscript);
+    room.hasAnnouncedWelcome = true;
+    room.openingStarted = true;
 
     // Broadcast transcript with updated turn stats to all connected students and faculty in room
     io.to(`room-${safeSlotId}`).emit('new-transcript', {
