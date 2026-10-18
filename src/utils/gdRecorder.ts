@@ -117,6 +117,9 @@ export interface GDParticipantTile {
   isUser?: boolean;
   videoStream?: MediaStream | null;
   avatar?: string;
+  turns?: number;
+  secondsSpoken?: number;
+  isMuted?: boolean;
 }
 
 export interface UseGDRecorderOptions {
@@ -128,6 +131,10 @@ export interface UseGDRecorderOptions {
   recordVideo?: boolean;
   enabled?: boolean;
   topicTitle?: string;
+  currentSpeakerId?: string | null;
+  currentSpeakerName?: string | null;
+  latestTranscriptText?: string | null;
+  layoutMode?: 'round_table' | 'grid';
   participantTiles?: GDParticipantTile[];
   autoStartOnActive?: boolean;
   onRecordingComplete?: (recordingUrl: string, blob: Blob) => void;
@@ -159,7 +166,7 @@ function drawRoundedRect(
   width: number,
   height: number,
   radius: number,
-  fill?: string,
+  fill?: string | CanvasGradient | CanvasPattern,
   stroke?: string,
   strokeWidth = 1
 ) {
@@ -209,6 +216,70 @@ function clipRoundedRect(
   ctx.clip();
 }
 
+function drawCameraOffIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number, size = 14) {
+  ctx.save();
+  ctx.strokeStyle = '#f87171'; // rose-400
+  ctx.lineWidth = 1.8;
+  const rw = size * 0.72;
+  const rh = size * 0.8;
+  ctx.strokeRect(cx - rw / 2 - 1.5, cy - rh / 2, rw, rh);
+  // Triangle lens
+  ctx.beginPath();
+  ctx.moveTo(cx + rw / 2 - 1.5, cy - rh * 0.25);
+  ctx.lineTo(cx + rw / 2 + size * 0.35, cy - rh * 0.45);
+  ctx.lineTo(cx + rw / 2 + size * 0.35, cy + rh * 0.45);
+  ctx.lineTo(cx + rw / 2 - 1.5, cy + rh * 0.25);
+  ctx.fillStyle = '#f87171';
+  ctx.fill();
+  // Diagonal strike-through line
+  ctx.beginPath();
+  ctx.moveTo(cx - size * 0.6, cy - size * 0.6);
+  ctx.lineTo(cx + size * 0.6, cy + size * 0.6);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawStatusBadges(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  isMicActive: boolean,
+  isCameraActive: boolean
+) {
+  ctx.save();
+  // Capsule container matching GD room pod bottom-left badges
+  drawRoundedRect(ctx, x, y, 40, 18, 9, 'rgba(15, 23, 42, 0.85)');
+
+  // Mic indicator (left)
+  ctx.fillStyle = isMicActive ? '#10b981' : '#ef4444';
+  ctx.beginPath();
+  ctx.arc(x + 10, y + 9, 4.5, 0, Math.PI * 2);
+  ctx.fill();
+  if (!isMicActive) {
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x + 7, y + 6);
+    ctx.lineTo(x + 13, y + 12);
+    ctx.stroke();
+  }
+
+  // Camera indicator (right)
+  ctx.fillStyle = isCameraActive ? '#10b981' : '#ef4444';
+  ctx.beginPath();
+  ctx.arc(x + 30, y + 9, 4.5, 0, Math.PI * 2);
+  ctx.fill();
+  if (!isCameraActive) {
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x + 27, y + 6);
+    ctx.lineTo(x + 33, y + 12);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function getInitials(name: string): string {
   const cleanName = String(name || '').trim();
   if (!cleanName) return 'S';
@@ -231,6 +302,10 @@ export function useGDRecorder({
   recordVideo = true,
   enabled = true,
   topicTitle = 'Group Discussion',
+  currentSpeakerId,
+  currentSpeakerName,
+  latestTranscriptText,
+  layoutMode = 'round_table',
   participantTiles = [],
   autoStartOnActive = true,
   onRecordingComplete,
@@ -268,6 +343,10 @@ export function useGDRecorder({
   const peerStreamsRef = useRef<Map<string, MediaStream> | undefined>(peerStreams);
   const localStreamRef = useRef<MediaStream | null | undefined>(localStream);
   const localAudioStreamRef = useRef<MediaStream | null | undefined>(localAudioStream);
+  const currentSpeakerIdRef = useRef<string | null | undefined>(currentSpeakerId);
+  const currentSpeakerNameRef = useRef<string | null | undefined>(currentSpeakerName);
+  const latestTranscriptTextRef = useRef<string | null | undefined>(latestTranscriptText);
+  const layoutModeRef = useRef<'round_table' | 'grid'>(layoutMode);
 
   // Keep refs in sync with latest props
   useEffect(() => {
@@ -293,6 +372,22 @@ export function useGDRecorder({
   useEffect(() => {
     localAudioStreamRef.current = localAudioStream;
   }, [localAudioStream]);
+
+  useEffect(() => {
+    currentSpeakerIdRef.current = currentSpeakerId;
+  }, [currentSpeakerId]);
+
+  useEffect(() => {
+    currentSpeakerNameRef.current = currentSpeakerName;
+  }, [currentSpeakerName]);
+
+  useEffect(() => {
+    latestTranscriptTextRef.current = latestTranscriptText;
+  }, [latestTranscriptText]);
+
+  useEffect(() => {
+    layoutModeRef.current = layoutMode;
+  }, [layoutMode]);
 
   // Format seconds to mm:ss
   const formattedDuration = `${Math.floor(recordingDurationSeconds / 60)
@@ -368,365 +463,730 @@ export function useGDRecorder({
     return () => clearInterval(watchdogInterval);
   }, [enabled, isRecording, mixStreamIntoDestination]);
 
-  // Video rendering loop for composite grid
+  // Video rendering loop for authentic GD Room Round Table & Conference Stage
   const startCanvasVideoCompositor = useCallback((canvas: HTMLCanvasElement) => {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Helper to resolve and cache the active video stream / DOM element for a tile
+    const resolveTileVideo = (tile: GDParticipantTile, isThisUser: boolean) => {
+      let resolvedStream = tile.videoStream;
+      if (isThisUser && localStreamRef.current && localStreamRef.current.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)) {
+        resolvedStream = localStreamRef.current;
+      }
+      if (!resolvedStream && isThisUser && localStreamRef.current) {
+        resolvedStream = localStreamRef.current;
+      }
+
+      if (!resolvedStream || resolvedStream.getVideoTracks().length === 0) {
+        const peers = peerStreamsRef.current;
+        if (peers && peers.size > 0) {
+          if (tile.socketId && peers.has(tile.socketId)) {
+            resolvedStream = peers.get(tile.socketId);
+          } else if (tile.id && peers.has(tile.id)) {
+            resolvedStream = peers.get(tile.id);
+          } else if (tile.userId && peers.has(tile.userId)) {
+            resolvedStream = peers.get(tile.userId);
+          } else {
+            for (const [peerKey, stream] of peers.entries()) {
+              if (
+                (tile.id && (peerKey.includes(tile.id) || tile.id.includes(peerKey))) ||
+                (tile.socketId && (peerKey.includes(tile.socketId) || tile.socketId.includes(peerKey))) ||
+                (tile.userId && (peerKey.includes(tile.userId) || tile.userId.includes(peerKey)))
+              ) {
+                resolvedStream = stream;
+                break;
+              }
+            }
+          }
+          if (!resolvedStream && !tile.id?.includes('empty') && !isThisUser) {
+            const livePeerStreams = Array.from(peers.values()).filter(
+              (s: any) => s && typeof s.getVideoTracks === 'function' && s.getVideoTracks().some((t: any) => t.readyState === 'live' || t.enabled)
+            );
+            if (livePeerStreams.length > 0) {
+              resolvedStream = livePeerStreams[0] as MediaStream;
+            }
+          }
+        }
+      }
+
+      // Look for DOM video
+      let domVideo: HTMLVideoElement | null = null;
+      if (typeof document !== 'undefined') {
+        const allDomVideos = Array.from(document.querySelectorAll<HTMLVideoElement>('video'));
+        domVideo = allDomVideos.find((v) => {
+          if (v.hasAttribute('controls') || v.closest('[data-recorder-preview]') || v.closest('.fixed.inset-0')) {
+            return false;
+          }
+          if (isThisUser && (v.getAttribute('data-is-user') === 'true' || (localStreamRef.current && v.srcObject === localStreamRef.current))) {
+            return true;
+          }
+          if (tile.id && v.getAttribute('data-participant-id') === tile.id) {
+            return true;
+          }
+          if (tile.seatNumber && v.getAttribute('data-seat-number') === String(tile.seatNumber)) {
+            return true;
+          }
+          if (resolvedStream && v.srcObject) {
+            if (v.srcObject === resolvedStream) return true;
+            if ((v.srcObject as MediaStream).id === resolvedStream.id) return true;
+            const vTrackId = (v.srcObject as MediaStream).getVideoTracks?.()[0]?.id;
+            const rTrackId = resolvedStream.getVideoTracks?.()[0]?.id;
+            if (vTrackId && rTrackId && vTrackId === rTrackId) return true;
+          }
+          return false;
+        }) || null;
+      }
+
+      // Fallback pooled video element
+      let videoEl = videoPoolRef.current.get(tile.id);
+      const streamToPlay = resolvedStream || (isThisUser ? localStreamRef.current : null);
+      const hasVideoTracks = Boolean(
+        streamToPlay && streamToPlay.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)
+      );
+
+      if (streamToPlay && hasVideoTracks && !domVideo) {
+        if (!videoEl) {
+          videoEl = document.createElement('video');
+          videoEl.muted = true;
+          videoEl.defaultMuted = true;
+          videoEl.autoplay = true;
+          videoEl.playsInline = true;
+          (videoEl as any).webkitPlaysInline = true;
+          videoEl.setAttribute('autoplay', 'true');
+          videoEl.setAttribute('playsinline', 'true');
+          videoEl.setAttribute('muted', 'true');
+          videoEl.width = 320;
+          videoEl.height = 240;
+          videoEl.style.width = '320px';
+          videoEl.style.height = '240px';
+          videoEl.style.position = 'fixed';
+          videoEl.style.left = '0px';
+          videoEl.style.top = '0px';
+          videoEl.style.pointerEvents = 'none';
+
+          if (!hiddenVideoContainerRef.current && typeof document !== 'undefined') {
+            const container = document.createElement('div');
+            container.id = 'erus-gd-recorder-hidden-pool';
+            container.style.position = 'fixed';
+            container.style.left = '0px';
+            container.style.top = '0px';
+            container.style.width = '1px';
+            container.style.height = '1px';
+            container.style.overflow = 'hidden';
+            container.style.pointerEvents = 'none';
+            container.style.zIndex = '-1';
+            document.body.appendChild(container);
+            hiddenVideoContainerRef.current = container;
+          }
+          if (hiddenVideoContainerRef.current) {
+            hiddenVideoContainerRef.current.appendChild(videoEl);
+          }
+
+          videoEl.srcObject = streamToPlay;
+          videoEl.onloadedmetadata = () => { videoEl?.play().catch(() => {}); };
+          videoEl.oncanplay = () => { videoEl?.play().catch(() => {}); };
+          videoEl.play().catch(() => {});
+          videoPoolRef.current.set(tile.id, videoEl);
+        } else if (videoEl.srcObject !== streamToPlay) {
+          videoEl.srcObject = streamToPlay;
+          videoEl.onloadedmetadata = () => { videoEl?.play().catch(() => {}); };
+          videoEl.oncanplay = () => { videoEl?.play().catch(() => {}); };
+          videoEl.play().catch(() => {});
+        } else if (videoEl.paused) {
+          videoEl.play().catch(() => {});
+        }
+      }
+
+      const activeVideoElement = domVideo || videoEl;
+      const isElementUsable = Boolean(
+        activeVideoElement &&
+        (activeVideoElement.readyState >= 1 || activeVideoElement.videoWidth > 0)
+      );
+
+      return { activeVideo: isElementUsable ? activeVideoElement : null };
+    };
+
+    // Helper to draw a complete realistic participant pod (matching RealisticGDRoom StudentPodCard)
+    const drawParticipantPod = (
+      pCtx: CanvasRenderingContext2D,
+      tile: GDParticipantTile,
+      px: number,
+      py: number,
+      w: number,
+      h: number,
+      isUser: boolean,
+      activeVideo: HTMLVideoElement | null
+    ) => {
+      const isSpeaking = Boolean(tile.isSpeaking || (tile.id && tile.id === currentSpeakerIdRef.current));
+      const seatNum = tile.seatNumber || 1;
+
+      // 1. Seat Placard Pill (Centered directly above pod card)
+      const placardW = isUser ? 94 : 76;
+      const placardH = 20;
+      const placardX = px + (w - placardW) / 2;
+      const placardY = py - 24;
+
+      pCtx.save();
+      const placardGrad = pCtx.createLinearGradient(placardX, placardY, placardX + placardW, placardY + placardH);
+      if (isSpeaking) {
+        placardGrad.addColorStop(0, '#059669');
+        placardGrad.addColorStop(1, '#047857');
+      } else if (isUser) {
+        placardGrad.addColorStop(0, '#6366f1');
+        placardGrad.addColorStop(1, '#4f46e5');
+      } else {
+        placardGrad.addColorStop(0, '#475569');
+        placardGrad.addColorStop(1, '#334155');
+      }
+      drawRoundedRect(
+        pCtx,
+        placardX,
+        placardY,
+        placardW,
+        placardH,
+        6,
+        placardGrad,
+        isSpeaking ? '#34d399' : (isUser ? '#a5b4fc' : '#64748b'),
+        1
+      );
+
+      pCtx.fillStyle = '#ffffff';
+      pCtx.font = 'bold 9.5px monospace';
+      pCtx.textAlign = 'center';
+      pCtx.textBaseline = 'middle';
+      const placardText = isSpeaking
+        ? `SEAT ${seatNum} 🎙️`
+        : (isUser ? `SEAT ${seatNum} YOU 🔖` : `SEAT ${seatNum}`);
+      pCtx.fillText(placardText, placardX + placardW / 2, placardY + placardH / 2);
+      pCtx.restore();
+
+      // 2. Speaking Glow Aura (Outside card)
+      if (isSpeaking) {
+        pCtx.save();
+        const auraPulse = Math.sin(Date.now() / 200) * 2;
+        drawRoundedRect(
+          pCtx,
+          px - 5 - auraPulse,
+          py - 5 - auraPulse,
+          w + 10 + auraPulse * 2,
+          h + 10 + auraPulse * 2,
+          20,
+          undefined,
+          'rgba(16, 185, 129, 0.45)',
+          3.5
+        );
+        pCtx.restore();
+      }
+
+      // 3. Pod Card Background & Video / Avatar Content
+      pCtx.save();
+      drawRoundedRect(pCtx, px, py, w, h, 16, '#0f172a');
+
+      let didDrawVideo = false;
+      if (activeVideo && (tile.cameraActive !== false)) {
+        try {
+          pCtx.save();
+          clipRoundedRect(pCtx, px, py, w, h, 16);
+          const vw = activeVideo.videoWidth || 640;
+          const vh = activeVideo.videoHeight || 480;
+          const scale = Math.max(w / vw, h / vh);
+          const sw = vw * scale;
+          const sh = vh * scale;
+          const sx = px + (w - sw) / 2;
+          const sy = py + (h - sh) / 2;
+
+          if (isUser) {
+            // Mirror selfie webcam feed horizontally
+            pCtx.translate(px + w, py);
+            pCtx.scale(-1, 1);
+            pCtx.drawImage(activeVideo, (w - sw) / 2, sy - py, sw, sh);
+          } else {
+            pCtx.drawImage(activeVideo, sx, sy, sw, sh);
+          }
+          pCtx.restore();
+          didDrawVideo = true;
+        } catch {}
+      }
+
+      if (!didDrawVideo) {
+        // Draw Avatar
+        pCtx.save();
+        clipRoundedRect(pCtx, px, py, w, h, 16);
+
+        // Gradient slate card background
+        const cardBgGrad = pCtx.createLinearGradient(px, py, px + w, py + h);
+        cardBgGrad.addColorStop(0, '#64748b');
+        cardBgGrad.addColorStop(1, '#475569');
+        pCtx.fillStyle = cardBgGrad;
+        pCtx.fillRect(px, py, w, h);
+
+        let didDrawImg = false;
+        if (tile.avatar) {
+          let img = avatarImagePoolRef.current.get(tile.avatar);
+          if (!img) {
+            img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.src = tile.avatar;
+            avatarImagePoolRef.current.set(tile.avatar, img);
+          }
+          if (img.complete && img.naturalWidth > 0) {
+            const iw = img.naturalWidth;
+            const ih = img.naturalHeight;
+            const scale = Math.max(w / iw, h / ih);
+            const sw = iw * scale;
+            const sh = ih * scale;
+            const sx = px + (w - sw) / 2;
+            const sy = py + (h - sh) / 2;
+            pCtx.drawImage(img, sx, sy, sw, sh);
+            didDrawImg = true;
+          }
+        }
+
+        if (!didDrawImg) {
+          // Initials circle
+          const rad = Math.min(w, h) * 0.28;
+          const cx = px + w / 2;
+          const cy = py + h / 2 - 4;
+          pCtx.beginPath();
+          pCtx.arc(cx, cy, rad, 0, Math.PI * 2);
+          pCtx.fillStyle = isUser ? '#4f46e5' : '#334155';
+          pCtx.fill();
+          pCtx.strokeStyle = isUser ? '#818cf8' : '#475569';
+          pCtx.lineWidth = 1.5;
+          pCtx.stroke();
+
+          pCtx.fillStyle = '#ffffff';
+          pCtx.font = `bold ${Math.round(rad * 0.85)}px Inter, sans-serif`;
+          pCtx.textAlign = 'center';
+          pCtx.textBaseline = 'middle';
+          pCtx.fillText(getInitials(tile.name), cx, cy);
+        }
+
+        // Camera Off watermark indicator if camera is not active
+        if (tile.cameraActive === false) {
+          pCtx.fillStyle = 'rgba(15, 23, 42, 0.4)';
+          pCtx.fillRect(px, py, w, h);
+          drawCameraOffIcon(pCtx, px + w / 2, py + h / 2, 16);
+        }
+
+        pCtx.restore();
+      }
+
+      // Card Border: Emerald when speaking, Slate/Blue when quiet
+      drawRoundedRect(
+        pCtx,
+        px,
+        py,
+        w,
+        h,
+        16,
+        undefined,
+        isSpeaking ? '#10b981' : (isUser ? '#3b82f6' : '#cbd5e1'),
+        isSpeaking ? 3.5 : 2
+      );
+
+      // Status Badges (Bottom-Left Corner of Card: Mic & Cam)
+      const isMicLive = Boolean(isSpeaking || (!tile.isMuted && isUser));
+      const isCameraLive = Boolean(didDrawVideo || tile.cameraActive !== false);
+      drawStatusBadges(pCtx, px + 6, py + h - 22, isMicLive, isCameraLive);
+
+      // Animated Equalizer Bars at bottom-center if speaking
+      if (isSpeaking) {
+        const eqX = px + w / 2 - 10;
+        const eqY = py + h - 8;
+        const t = Date.now() / 140;
+        pCtx.fillStyle = '#10b981';
+        const h1 = 3 + Math.abs(Math.sin(t)) * 9;
+        const h2 = 4 + Math.abs(Math.sin(t + 1)) * 12;
+        const h3 = 3 + Math.abs(Math.sin(t + 2)) * 8;
+        pCtx.fillRect(eqX, eqY - h1, 3.5, h1);
+        pCtx.fillRect(eqX + 6, eqY - h2, 3.5, h2);
+        pCtx.fillRect(eqX + 12, eqY - h3, 3.5, h3);
+      }
+      pCtx.restore();
+
+      // 4. Candidate Name & Stats (Below the pod card)
+      pCtx.save();
+      pCtx.textAlign = 'center';
+      pCtx.textBaseline = 'middle';
+
+      // Candidate Name
+      pCtx.fillStyle = isUser ? '#4338ca' : '#0f172a';
+      pCtx.font = 'bold 13px Inter, system-ui, sans-serif';
+      const shortName = tile.name.split(' ')[0] || tile.name;
+      pCtx.fillText(shortName, px + w / 2, py + h + 14);
+
+      // Turns and Speaking Duration
+      pCtx.fillStyle = '#64748b';
+      pCtx.font = '10.5px monospace';
+      const turnsCount = tile.turns ?? 0;
+      const secsSpoken = tile.secondsSpoken ?? 0;
+      pCtx.fillText(`${turnsCount} turns • ${secsSpoken}s`, px + w / 2, py + h + 28);
+      pCtx.restore();
+    };
+
     const renderFrame = () => {
       const width = canvas.width;
       const height = canvas.height;
-      const tiles = participantTilesRef.current.filter((t) => !t.id.includes('empty'));
+      const rawTiles = participantTilesRef.current.filter((t) => !t.id.includes('empty'));
+      const tiles = rawTiles.length > 0 ? rawTiles : [
+        {
+          id: 'user',
+          name: 'Candidate',
+          isUser: true,
+          seatNumber: 1,
+          cameraActive: false,
+          turns: 0,
+          secondsSpoken: 0,
+        }
+      ];
       const activeTopic = topicTitleRef.current || 'Group Discussion';
+      const N = tiles.length;
 
-      // 1. Canvas Background
-      ctx.fillStyle = '#080d1a';
+      // 1. Studio Backdrop (Modern Light Conference Studio matching GD Room)
+      const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
+      bgGrad.addColorStop(0, '#f8fafc');   // clean off-white
+      bgGrad.addColorStop(0.5, '#f1f5f9'); // slate-100
+      bgGrad.addColorStop(1, '#e2e8f0');   // slate-200
+      ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, width, height);
 
-      // 2. Room Header Bar (top 64px)
-      ctx.fillStyle = '#0f172a';
-      ctx.fillRect(0, 0, width, 64);
-
-      ctx.strokeStyle = '#1e293b';
-      ctx.lineWidth = 1.5;
+      // Soft ambient radial spotlight behind the central round table
+      const radialGrad = ctx.createRadialGradient(width / 2, height / 2, 40, width / 2, height / 2, 390);
+      radialGrad.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
+      radialGrad.addColorStop(0.7, 'rgba(241, 245, 249, 0.6)');
+      radialGrad.addColorStop(1, 'rgba(226, 232, 240, 0)');
+      ctx.fillStyle = radialGrad;
       ctx.beginPath();
-      ctx.moveTo(0, 64);
-      ctx.lineTo(width, 64);
+      ctx.arc(width / 2, height / 2, 390, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 2. Room Header Bar (Top 52px)
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, width, 52);
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, 52);
+      ctx.lineTo(width, 52);
       ctx.stroke();
 
-      // Brand badge
-      drawRoundedRect(ctx, 20, 16, 175, 32, 8, '#064e3b', '#10b981', 1);
-      ctx.fillStyle = '#34d399';
-      ctx.font = 'bold 12px Inter, system-ui, sans-serif';
-      ctx.fillText('🎙️ ERUS ACADEMY GD', 30, 36);
+      // Brand badge (Left)
+      const brandIconGrad = ctx.createLinearGradient(16, 10, 48, 42);
+      brandIconGrad.addColorStop(0, '#3b82f6');
+      brandIconGrad.addColorStop(1, '#2563eb');
+      drawRoundedRect(ctx, 16, 10, 32, 32, 8, brandIconGrad);
 
-      // Topic Title
       ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 15px Inter, system-ui, sans-serif';
-      const truncatedTopic =
-        activeTopic.length > 60 ? activeTopic.substring(0, 57) + '...' : activeTopic;
-      ctx.fillText(`Topic: ${truncatedTopic}`, 215, 37);
+      ctx.font = 'bold 14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('✦', 32, 26);
 
-      // Timer & Live REC Badge
+      ctx.fillStyle = '#0f172a';
+      ctx.font = 'bold 15px Inter, system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('ERUS-AIGDF', 56, 22);
+
+      // Role tag: STUDENT
+      drawRoundedRect(ctx, 160, 13, 62, 18, 5, '#e0e7ff', '#c7d2fe', 1);
+      ctx.fillStyle = '#4338ca';
+      ctx.font = 'bold 9px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('STUDENT', 191, 22);
+
+      // Candidate info subtitle
+      ctx.fillStyle = '#64748b';
+      ctx.font = '11px Inter, sans-serif';
+      ctx.textAlign = 'left';
+      const firstUser = tiles.find((t) => t.isUser) || tiles[0];
+      const candidateInfo = firstUser
+        ? `${firstUser.name}${firstUser.college ? ` • ${firstUser.college}` : ''}`
+        : 'Group Discussion Session';
+      ctx.fillText(candidateInfo, 56, 38);
+
+      // Center navigation pill: ((•)) Live GD Room
+      drawRoundedRect(ctx, width / 2 - 80, 11, 160, 30, 15, '#059669', '#10b981', 1);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 12px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('((•)) Live GD Room', width / 2, 26);
+
+      // Right: Live REC Indicator & Slot info
       const timerSecs = durationCounterRef.current;
       const timerText = `${Math.floor(timerSecs / 60)
         .toString()
         .padStart(2, '0')}:${(timerSecs % 60).toString().padStart(2, '0')}`;
 
-      drawRoundedRect(ctx, width - 185, 16, 165, 32, 8, '#1e293b');
-      // Red pulsing dot
-      ctx.fillStyle = '#ef4444';
+      drawRoundedRect(ctx, width - 170, 11, 154, 30, 8, '#f8fafc', '#e2e8f0', 1);
+      const isBlinkOn = Math.floor(Date.now() / 600) % 2 === 0;
+      ctx.fillStyle = isBlinkOn ? '#ef4444' : '#f87171';
       ctx.beginPath();
-      ctx.arc(width - 165, 32, 5, 0, Math.PI * 2);
+      ctx.arc(width - 152, 26, 4.5, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle = '#f87171';
-      ctx.font = 'bold 12px monospace';
-      ctx.fillText(`REC ${timerText}`, width - 150, 36);
+      ctx.fillStyle = '#dc2626';
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(`REC ${timerText}`, width - 140, 26);
 
-      // Participant count
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '11px Inter, sans-serif';
-      ctx.fillText(`(${tiles.length} Participants)`, width - 85, 36);
+      ctx.fillStyle = '#64748b';
+      ctx.font = '10px Inter, sans-serif';
+      ctx.fillText(`(${tiles.length} P)`, width - 58, 26);
 
-      // 3. Grid Layout calculation
-      const margin = 20;
-      const gap = 14;
-      const headerH = 64;
-      const gridW = width - margin * 2;
-      const gridH = height - headerH - margin * 2;
+      // 3. Stage Layout: Round Table (Default) vs Grid
+      const isRoundTable = layoutModeRef.current !== 'grid';
 
-      const N = Math.max(1, tiles.length);
-      let cols = 2;
-      let rows = 1;
-      if (N <= 2) {
-        cols = 2;
-        rows = 1;
-      } else if (N <= 4) {
-        cols = 2;
-        rows = 2;
-      } else if (N <= 6) {
-        cols = 3;
-        rows = 2;
-      } else if (N <= 8) {
-        cols = 4;
-        rows = 2;
+      if (isRoundTable) {
+        // --- 3A. ROUND TABLE CONFERENCE STAGE ---
+        const CX = width / 2;
+        const CY = 362;
+
+        // Determine dynamic table radius and orbit
+        const rOuter = N > 8 ? 160 : N > 4 ? 168 : 175;
+        const rDashed = rOuter - 14;
+        const rInner = rDashed - 12;
+
+        // Outer Table Rim with drop shadow
+        ctx.save();
+        ctx.shadowColor = 'rgba(15, 23, 42, 0.08)';
+        ctx.shadowBlur = 24;
+        ctx.shadowOffsetY = 6;
+        const tableRimGrad = ctx.createLinearGradient(CX, CY - rOuter, CX, CY + rOuter);
+        tableRimGrad.addColorStop(0, '#f1f5f9');
+        tableRimGrad.addColorStop(0.5, '#e2e8f0');
+        tableRimGrad.addColorStop(1, '#cbd5e1');
+        ctx.fillStyle = tableRimGrad;
+        ctx.beginPath();
+        ctx.arc(CX, CY, rOuter, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#cbd5e1';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+        ctx.restore();
+
+        // Concentric dashed perimeter accent ring
+        ctx.save();
+        ctx.strokeStyle = 'rgba(165, 180, 252, 0.7)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.arc(CX, CY, rDashed, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+
+        // Inner clean white conference table surface
+        ctx.save();
+        const tableTopGrad = ctx.createRadialGradient(CX, CY, 10, CX, CY, rInner);
+        tableTopGrad.addColorStop(0, '#ffffff');
+        tableTopGrad.addColorStop(0.85, '#ffffff');
+        tableTopGrad.addColorStop(1, '#f8fafc');
+        ctx.fillStyle = tableTopGrad;
+        ctx.beginPath();
+        ctx.arc(CX, CY, rInner, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#e2e8f0';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+
+        // Information inside Round Table Center
+        // Text 1: ROUND TABLE (N PARTICIPANT(S))
+        ctx.fillStyle = '#64748b';
+        ctx.font = 'bold 10px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const partLabel = `ROUND TABLE (${N} ${N === 1 ? 'PARTICIPANT' : 'PARTICIPANTS'})`;
+        ctx.fillText(partLabel, CX, CY - 42);
+
+        // Text 2: Topic Title (Multi-line wrap)
+        ctx.fillStyle = '#0f172a';
+        ctx.font = 'bold 17px Inter, system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        const words = activeTopic.split(' ');
+        const lines: string[] = [];
+        let curLine = '';
+        for (const w of words) {
+          const test = curLine ? `${curLine} ${w}` : w;
+          if (ctx.measureText(test).width > 220 && curLine) {
+            lines.push(curLine);
+            curLine = w;
+          } else {
+            curLine = test;
+          }
+        }
+        if (curLine) lines.push(curLine);
+        const displayLines = lines.slice(0, 2);
+        if (lines.length > 2) {
+          displayLines[1] = displayLines[1].substring(0, 18) + '...';
+        }
+
+        if (displayLines.length === 1) {
+          ctx.fillText(displayLines[0], CX, CY - 10);
+        } else {
+          ctx.fillText(displayLines[0], CX, CY - 18);
+          ctx.fillText(displayLines[1], CX, CY + 4);
+        }
+
+        // Text 3: Floor Status Pill
+        const floorPillY = CY + 36;
+        const activeSpeakerTile = tiles.find((t) => t.isSpeaking || t.id === currentSpeakerIdRef.current);
+        const floorText = activeSpeakerTile
+          ? `Floor: ${activeSpeakerTile.name.split(' ')[0]}`
+          : (currentSpeakerNameRef.current ? `Floor: ${currentSpeakerNameRef.current.split(' ')[0]}` : 'Floor: Open');
+        const floorPillW = 126;
+        drawRoundedRect(ctx, CX - floorPillW / 2, floorPillY - 12, floorPillW, 24, 12, '#f1f5f9', '#cbd5e1', 1);
+
+        ctx.fillStyle = '#10b981';
+        ctx.beginPath();
+        ctx.arc(CX - floorPillW / 2 + 16, floorPillY, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#334155';
+        ctx.font = 'bold 11px Inter, system-ui, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(floorText, CX - floorPillW / 2 + 26, floorPillY);
+
+        // --- Seating Perimeter: Radially Positioned Around Round Table ---
+        const userIdx = tiles.findIndex(
+          (t) => t.isUser || t.name === 'You' || t.id?.includes('user') || t.id === 'speaker-user'
+        );
+        const baseOffset = userIdx >= 0 ? userIdx : 0;
+
+        let podW = 140;
+        let podH = 124;
+        let rOrbit = 246;
+
+        if (N <= 2) {
+          podW = 136;
+          podH = 120;
+          rOrbit = 240;
+        } else if (N <= 4) {
+          podW = 124;
+          podH = 110;
+          rOrbit = 226;
+        } else if (N <= 8) {
+          podW = 104;
+          podH = 92;
+          rOrbit = 220;
+        } else {
+          podW = 88;
+          podH = 78;
+          rOrbit = 215;
+        }
+
+        tiles.forEach((tile, idx) => {
+          const isThisUser = Boolean(
+            tile.isUser ||
+            tile.name === 'You' ||
+            tile.id?.includes('user') ||
+            tile.id === 'speaker-user' ||
+            (tiles.length === 1 && !tile.id?.startsWith('peer-'))
+          );
+
+          let angle: number;
+          if (N === 1) {
+            angle = Math.PI / 2; // Anchored directly at bottom center
+          } else {
+            const relativeIdx = (idx - baseOffset + N) % N;
+            angle = Math.PI / 2 + (relativeIdx * 2 * Math.PI) / N;
+          }
+
+          const px = CX + rOrbit * Math.cos(angle) - podW / 2;
+          const py = CY + rOrbit * Math.sin(angle) - podH / 2;
+
+          const { activeVideo } = resolveTileVideo(tile, isThisUser);
+          drawParticipantPod(ctx, tile, px, py, podW, podH, isThisUser, activeVideo);
+        });
       } else {
-        cols = 4;
-        rows = 3;
+        // --- 3B. BALANCED GRID STAGE FALLBACK ---
+        const margin = 28;
+        const gap = 16;
+        const headerH = 64;
+        const gridW = width - margin * 2;
+        const gridH = height - headerH - margin * 2;
+
+        let cols = 1;
+        let rows = 1;
+        if (N === 1) {
+          cols = 1;
+          rows = 1;
+        } else if (N <= 2) {
+          cols = 2;
+          rows = 1;
+        } else if (N <= 4) {
+          cols = 2;
+          rows = 2;
+        } else if (N <= 6) {
+          cols = 3;
+          rows = 2;
+        } else {
+          cols = 4;
+          rows = 2;
+        }
+
+        const tileW = Math.min(360, (gridW - (cols - 1) * gap) / cols);
+        const tileH = Math.min(260, (gridH - (rows - 1) * gap) / rows);
+        const totalGridW = cols * tileW + (cols - 1) * gap;
+        const totalGridH = rows * tileH + (rows - 1) * gap;
+        const offsetX = margin + (gridW - totalGridW) / 2;
+        const offsetY = headerH + margin + (gridH - totalGridH) / 2;
+
+        tiles.forEach((tile, idx) => {
+          const col = idx % cols;
+          const row = Math.floor(idx / cols);
+          const px = offsetX + col * (tileW + gap);
+          const py = offsetY + row * (tileH + gap);
+          const isThisUser = Boolean(
+            tile.isUser ||
+            tile.name === 'You' ||
+            tile.id?.includes('user') ||
+            tile.id === 'speaker-user' ||
+            (tiles.length === 1 && !tile.id?.startsWith('peer-'))
+          );
+          const { activeVideo } = resolveTileVideo(tile, isThisUser);
+          drawParticipantPod(ctx, tile, px, py, tileW, tileH - 36, isThisUser, activeVideo);
+        });
       }
 
-      const tileW = (gridW - (cols - 1) * gap) / cols;
-      const tileH = (gridH - (rows - 1) * gap) / rows;
+      // 4. Live Discussion Closed Caption / Subtitle Bar (Bottom Center)
+      const currentSpeaker = tiles.find(
+        (t) => t.isSpeaking || (t.id && t.id === currentSpeakerIdRef.current)
+      );
+      const speechText =
+        latestTranscriptTextRef.current ||
+        (currentSpeaker ? `${currentSpeaker.name.split(' ')[0]} is speaking...` : null);
 
-      // 4. Render Each Participant Tile
-      tiles.forEach((tile, idx) => {
-        const col = idx % cols;
-        const row = Math.floor(idx / cols);
-        const x = margin + col * (tileW + gap);
-        const y = headerH + margin + row * (tileH + gap);
+      if (speechText) {
+        const capW = Math.min(840, width - 48);
+        const capH = 34;
+        const capX = (width - capW) / 2;
+        const capY = height - 42;
 
-        // Tile base background
-        drawRoundedRect(ctx, x, y, tileW, tileH, 12, '#1e293b');
+        drawRoundedRect(ctx, capX, capY, capW, capH, 17, 'rgba(15, 23, 42, 0.9)', 'rgba(255, 255, 255, 0.18)', 1);
 
-        // Resolve stream for this tile:
-        const isThisUser = Boolean(
-          tile.isUser ||
-          tile.name === 'You' ||
-          tile.id?.includes('user') ||
-          tile.id === 'speaker-user' ||
-          (tiles.length === 1 && !tile.id?.startsWith('peer-'))
-        );
-
-        let resolvedStream = tile.videoStream;
-        if (isThisUser && localStreamRef.current && localStreamRef.current.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)) {
-          resolvedStream = localStreamRef.current;
-        }
-        if (!resolvedStream && isThisUser && localStreamRef.current) {
-          resolvedStream = localStreamRef.current;
-        }
-
-        if (!resolvedStream || resolvedStream.getVideoTracks().length === 0) {
-          const peers = peerStreamsRef.current;
-          if (peers && peers.size > 0) {
-            if (tile.socketId && peers.has(tile.socketId)) {
-              resolvedStream = peers.get(tile.socketId);
-            } else if (tile.id && peers.has(tile.id)) {
-              resolvedStream = peers.get(tile.id);
-            } else if (tile.userId && peers.has(tile.userId)) {
-              resolvedStream = peers.get(tile.userId);
-            } else {
-              for (const [peerKey, stream] of peers.entries()) {
-                if (
-                  (tile.id && (peerKey.includes(tile.id) || tile.id.includes(peerKey))) ||
-                  (tile.socketId && (peerKey.includes(tile.socketId) || tile.socketId.includes(peerKey))) ||
-                  (tile.userId && (peerKey.includes(tile.userId) || tile.userId.includes(peerKey)))
-                ) {
-                  resolvedStream = stream;
-                  break;
-                }
-              }
-            }
-            // Fallback for real peer participants (not user themselves and not empty seat)
-            if (!resolvedStream && !tile.id?.includes('empty') && !isThisUser) {
-              const livePeerStreams = Array.from(peers.values()).filter(
-                (s: any) => s && typeof s.getVideoTracks === 'function' && s.getVideoTracks().some((t: any) => t.readyState === 'live' || t.enabled)
-              );
-              if (livePeerStreams.length > 0) {
-                resolvedStream = livePeerStreams[0] as MediaStream;
-              }
-            }
-          }
-        }
-
-        // Look for an active, hardware-accelerated <video> element in the DOM
-        let domVideo: HTMLVideoElement | null = null;
-        if (typeof document !== 'undefined') {
-          const allDomVideos = Array.from(document.querySelectorAll<HTMLVideoElement>('video'));
-          domVideo = allDomVideos.find((v) => {
-            if (v.hasAttribute('controls') || v.closest('[data-recorder-preview]') || v.closest('.fixed.inset-0')) {
-              return false;
-            }
-            if (isThisUser && (v.getAttribute('data-is-user') === 'true' || (localStreamRef.current && v.srcObject === localStreamRef.current))) {
-              return true;
-            }
-            if (tile.id && v.getAttribute('data-participant-id') === tile.id) {
-              return true;
-            }
-            if (tile.seatNumber && v.getAttribute('data-seat-number') === String(tile.seatNumber)) {
-              return true;
-            }
-            if (resolvedStream && v.srcObject) {
-              if (v.srcObject === resolvedStream) return true;
-              if ((v.srcObject as MediaStream).id === resolvedStream.id) return true;
-              const vTrackId = (v.srcObject as MediaStream).getVideoTracks?.()[0]?.id;
-              const rTrackId = resolvedStream.getVideoTracks?.()[0]?.id;
-              if (vTrackId && rTrackId && vTrackId === rTrackId) return true;
-            }
-            return false;
-          }) || null;
-        }
-
-        // Look up or initialize pooled fallback video element if DOM video isn't found
-        let videoEl = videoPoolRef.current.get(tile.id);
-        const streamToPlay = resolvedStream || (isThisUser ? localStreamRef.current : null);
-        const hasVideoTracks = Boolean(
-          streamToPlay && streamToPlay.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)
-        );
-
-        if (streamToPlay && hasVideoTracks && !domVideo) {
-          if (!videoEl) {
-            videoEl = document.createElement('video');
-            videoEl.muted = true;
-            videoEl.defaultMuted = true;
-            videoEl.autoplay = true;
-            videoEl.playsInline = true;
-            (videoEl as any).webkitPlaysInline = true;
-            videoEl.setAttribute('autoplay', 'true');
-            videoEl.setAttribute('playsinline', 'true');
-            videoEl.setAttribute('muted', 'true');
-            videoEl.width = 320;
-            videoEl.height = 240;
-            videoEl.style.width = '320px';
-            videoEl.style.height = '240px';
-            videoEl.style.position = 'fixed';
-            videoEl.style.left = '0px';
-            videoEl.style.top = '0px';
-            videoEl.style.pointerEvents = 'none';
-
-            if (!hiddenVideoContainerRef.current && typeof document !== 'undefined') {
-              const container = document.createElement('div');
-              container.id = 'erus-gd-recorder-hidden-pool';
-              container.style.position = 'fixed';
-              container.style.left = '0px';
-              container.style.top = '0px';
-              container.style.width = '1px';
-              container.style.height = '1px';
-              container.style.overflow = 'hidden';
-              container.style.pointerEvents = 'none';
-              container.style.zIndex = '-1';
-              document.body.appendChild(container);
-              hiddenVideoContainerRef.current = container;
-            }
-            if (hiddenVideoContainerRef.current) {
-              hiddenVideoContainerRef.current.appendChild(videoEl);
-            }
-
-            videoEl.srcObject = streamToPlay;
-            videoEl.onloadedmetadata = () => { videoEl?.play().catch(() => {}); };
-            videoEl.oncanplay = () => { videoEl?.play().catch(() => {}); };
-            videoEl.play().catch(() => {});
-            videoPoolRef.current.set(tile.id, videoEl);
-          } else if (videoEl.srcObject !== streamToPlay) {
-            videoEl.srcObject = streamToPlay;
-            videoEl.onloadedmetadata = () => { videoEl?.play().catch(() => {}); };
-            videoEl.oncanplay = () => { videoEl?.play().catch(() => {}); };
-            videoEl.play().catch(() => {});
-          } else if (videoEl.paused) {
-            videoEl.play().catch(() => {});
-          }
-        }
-
-        const activeVideoElement = domVideo || videoEl;
-        const isElementUsable = Boolean(
-          activeVideoElement &&
-          (activeVideoElement.readyState >= 1 || activeVideoElement.videoWidth > 0)
-        );
-
-        let didDrawVideo = false;
-        if (isElementUsable && activeVideoElement) {
-          try {
-            ctx.save();
-            clipRoundedRect(ctx, x, y, tileW, tileH, 12);
-            const vw = activeVideoElement.videoWidth || 640;
-            const vh = activeVideoElement.videoHeight || 480;
-            const scale = Math.max(tileW / vw, tileH / vh);
-            const sw = vw * scale;
-            const sh = vh * scale;
-            const sx = x + (tileW - sw) / 2;
-            const sy = y + (tileH - sh) / 2;
-            ctx.drawImage(activeVideoElement, sx, sy, sw, sh);
-            ctx.restore();
-            didDrawVideo = true;
-          } catch (drawErr) {
-            didDrawVideo = false;
-          }
-        }
-
-        if (!didDrawVideo) {
-          // Draw elegant avatar tile
-          ctx.save();
-          clipRoundedRect(ctx, x, y, tileW, tileH, 12);
-          const grad = ctx.createLinearGradient(x, y, x + tileW, y + tileH);
-          grad.addColorStop(0, '#1e293b');
-          grad.addColorStop(1, '#0f172a');
-          ctx.fillStyle = grad;
-          ctx.fillRect(x, y, tileW, tileH);
-
-          // Avatar circle
-          const radius = Math.min(tileW, tileH) * 0.22;
-          const cx = x + tileW / 2;
-          const cy = y + tileH / 2 - 12;
-
-          ctx.beginPath();
-          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-          ctx.fillStyle = '#334155';
-          ctx.fill();
-          ctx.strokeStyle = '#475569';
-          let didDrawAvatarImg = false;
-          if (tile.avatar) {
-            let img = avatarImagePoolRef.current.get(tile.avatar);
-            if (!img) {
-              img = new Image();
-              img.crossOrigin = 'anonymous';
-              img.src = tile.avatar;
-              avatarImagePoolRef.current.set(tile.avatar, img);
-            }
-            if (img.complete && img.naturalWidth > 0) {
-              ctx.save();
-              ctx.beginPath();
-              ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-              ctx.clip();
-              ctx.drawImage(img, cx - radius, cy - radius, radius * 2, radius * 2);
-              ctx.restore();
-              didDrawAvatarImg = true;
-            }
-          }
-
-          if (!didDrawAvatarImg) {
-            // Initials
-            ctx.fillStyle = '#f1f5f9';
-            ctx.font = `bold ${Math.round(radius * 0.9)}px Inter, sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(getInitials(tile.name), cx, cy);
-            ctx.restore();
-          } else {
-            ctx.restore();
-          }
-        }
-
-        // Active speaker highlight border
-        if (tile.isSpeaking) {
-          drawRoundedRect(ctx, x, y, tileW, tileH, 12, undefined, '#10b981', 3.5);
-        } else {
-          drawRoundedRect(ctx, x, y, tileW, tileH, 12, undefined, '#334155', 1);
-        }
-
-        // Bottom student details pill
-        const pillH = 34;
-        const pillY = y + tileH - pillH;
-        ctx.save();
-        clipRoundedRect(ctx, x, y, tileW, tileH, 12);
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
-        ctx.fillRect(x, pillY, tileW, pillH);
-
-        // Student name and seat
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 12px Inter, system-ui, sans-serif';
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = 'bold 11px Inter, sans-serif';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        const displayName = `${tile.seatNumber ? `[Seat ${tile.seatNumber}] ` : ''}${tile.name}`;
-        ctx.fillText(displayName, x + 10, pillY + pillH / 2);
+        const spkTag = currentSpeaker ? `🎙️ ${currentSpeaker.name.split(' ')[0]}: ` : '🎙️ Live: ';
+        ctx.fillText(spkTag, capX + 16, capY + capH / 2);
 
-        // Speaking badge or college tag
-        if (tile.isSpeaking) {
-          const badgeX = x + tileW - 90;
-          drawRoundedRect(ctx, badgeX, pillY + 6, 82, 22, 6, '#065f46', '#10b981', 1);
-          ctx.fillStyle = '#6ee7b7';
-          ctx.font = 'bold 10px Inter, sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText('🎙️ Speaking', badgeX + 41, pillY + 17);
-        } else if (tile.college) {
-          ctx.fillStyle = '#94a3b8';
-          ctx.font = '10px Inter, sans-serif';
-          ctx.textAlign = 'right';
-          const shortCollege =
-            tile.college.length > 20 ? tile.college.substring(0, 18) + '..' : tile.college;
-          ctx.fillText(shortCollege, x + tileW - 10, pillY + pillH / 2);
-        }
-        ctx.restore();
-      });
+        const tagW = ctx.measureText(spkTag).width;
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = '11px Inter, sans-serif';
+        const cleanSpeech = speechText.replace(/^[\s"']+|[\s"']+$/g, '');
+        const maxQuoteW = capW - tagW - 32;
+        const truncatedSpeech =
+          ctx.measureText(cleanSpeech).width > maxQuoteW
+            ? cleanSpeech.substring(0, 95) + '...'
+            : cleanSpeech;
+        ctx.fillText(`"${truncatedSpeech}"`, capX + 16 + tagW, capY + capH / 2);
+      }
     };
 
     // Render the initial frame synchronously so the canvas has valid content immediately

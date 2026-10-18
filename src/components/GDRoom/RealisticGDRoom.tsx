@@ -1093,6 +1093,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   const [isFinalizingRecording, setIsFinalizingRecording] = useState(false);
 
+  const latestSpeakerTranscript = transcripts.slice().reverse().find((t) => !t.isFacilitator);
+
   // Automated Live Discussion Multi-Stream Video/Audio Recorder
   // Runs on Faculty/Admin or active Student client so EVERY GD is recorded reliably
   const isRecordingClient = useMemo(() => {
@@ -1115,12 +1117,19 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       name: st.name,
       college: st.college,
       seatNumber: st.seatNumber,
-      isSpeaking: st.isSpeaking,
-      cameraActive: st.cameraActive,
+      isSpeaking: st.isSpeaking || (st.id === session.currentSpeakerId),
+      cameraActive: st.isUser ? isCameraOn : (st.cameraActive ?? true),
       isUser: st.isUser,
       videoStream: st.isUser ? (videoStream || st.videoStream) : st.videoStream,
       avatar: st.avatar || (st.name ? `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(st.name)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf` : ''),
+      turns: st.speakingTurns ?? (st as any).turns ?? 0,
+      secondsSpoken: st.speakingDurationSeconds ?? (st as any).secondsSpoken ?? 0,
+      isMuted: st.isUser ? (rtcIsMicMuted || !isListeningMic) : (st.isMuted ?? false),
     })),
+    currentSpeakerId: session.currentSpeakerId,
+    currentSpeakerName: filledStudents.find((s) => s.id === session.currentSpeakerId)?.name || (session.isFacilitatorSpeaking ? 'AI Facilitator' : null),
+    latestTranscriptText: latestSpeakerTranscript?.text || (transcripts[transcripts.length - 1]?.text ?? null),
+    layoutMode: currentLayout === 'round_table' ? 'round_table' : 'grid',
     autoStartOnActive: true,
   });
   gdRecorderRef.current = gdRecorder;
@@ -1169,7 +1178,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     onFinishSession();
   }, [gdRecorder, session.slotId, session.id, isFacultyOrAdmin, rtcFinishSession, onFinishSession, liveSpeechTranscript, setSession]);
 
-  const latestSpeakerTranscript = transcripts.slice().reverse().find((t) => !t.isFacilitator);
   const activeStudentUser = !isFaculty ? activeDisplayStudents.find((s) => s.isUser) : null;
   const isUserSpeakingLive = !isFaculty && !rtcIsMicMuted && isListeningMic && (rtcIsSpeakingLive || Boolean(liveSpeechTranscript));
   const currentSpeakerStudent = activeDisplayStudents.find((s) => s.id === session.currentSpeakerId) ||
