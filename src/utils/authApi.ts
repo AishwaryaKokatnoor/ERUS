@@ -828,9 +828,11 @@ export function hasStudentParticipatedInSlot(slot: any, user: any, reportHistory
   const effectiveHistory = reportHistory || getStudentReportHistory(studentKey);
 
   // 1. Check if student has a recorded evaluation report for this exact slot
-  if (Array.isArray(effectiveHistory)) {
+  if (Array.isArray(effectiveHistory) && slot.id) {
+    const normSlotId = String(slot.id).replace('session-', 'slot-').toLowerCase();
     const hasReport = effectiveHistory.some((r) => {
-      return r.sessionId === slot.id || r.id === slot.id || (r as any).slotId === slot.id;
+      const rId = String(r.sessionId || (r as any).slotId || r.id || '').replace('session-', 'slot-').toLowerCase();
+      return rId === normSlotId;
     });
     if (hasReport) return true;
   }

@@ -1167,14 +1167,13 @@ function GDAppContent() {
         ];
       }
 
-      // Check student history first matching cleanSlotId or topic
+      // Check student history first matching cleanSlotId
+      const normClean = cleanSlotId.replace('session-', 'slot-');
       const uHistory = getStudentReportHistory(currentUser.studentId || currentUser.id || currentUser.name || 'student');
-      // A report belongs to a specific session, not just a matching topic.
-      // Reusing a same-topic report from an earlier slot displayed stale scores.
-      let foundReport: any = uHistory.find((r) =>
-        (r.sessionId === cleanSlotId || (r as any).slotId === cleanSlotId || r.id === cleanSlotId) &&
-        (!targetSlot.topic || !r.topic || String(r.topic).trim().toLowerCase() === String(targetSlot.topic).trim().toLowerCase())
-      );
+      let foundReport: any = uHistory.find((r) => {
+        const rId = String(r.sessionId || (r as any).slotId || r.id || '').replace('session-', 'slot-');
+        return rId === normClean;
+      });
 
       const userStudent = updatedTargetStudents.find((s) => s.isUser) || updatedTargetStudents[0];
 
@@ -1207,7 +1206,7 @@ function GDAppContent() {
             (t.speakerName && userStudent.name && String(t.speakerName).toLowerCase() === String(userStudent.name).toLowerCase()) ||
             (t.seatNumber != null && t.seatNumber === userStudent.seatNumber))
         );
-        const observedWords = evidenceTranscripts.map((t) => String(t.text || '')).join(' ').split(/\\s+/).filter(Boolean).length;
+        const observedWords = evidenceTranscripts.map((t) => String(t.text || '')).join(' ').split(/\s+/).filter(Boolean).length;
         const wordsDuration = observedWords > 0 ? Math.round((observedWords / 130) * 60) : 0;
         const actualDuration = Math.max(
           Number(studentReport.speakingTimeSeconds || 0),
@@ -1253,10 +1252,9 @@ function GDAppContent() {
         if (data.success && Array.isArray(data.reports)) {
           const matched = data.reports.find(
             (r: any) =>
-              (r.studentId === currentUser.id ||
+              r.studentId === currentUser.id ||
               r.studentId === (currentUser as any).studentId ||
-              (r.studentName && currentUser.name && String(r.studentName || '').toLowerCase() === String(currentUser.name || '').toLowerCase())) &&
-              (!targetSlot.topic || !r.topic || String(r.topic || '').toLowerCase() === String(targetSlot.topic || '').toLowerCase())
+              (r.studentName && currentUser.name && String(r.studentName || '').toLowerCase() === String(currentUser.name || '').toLowerCase())
           );
           if (matched) {
             foundReport = matched;
@@ -1270,11 +1268,14 @@ function GDAppContent() {
       if (!foundReport) {
         try {
           const sRes = await fetch(
-            `/api/student/reports?studentId=${encodeURIComponent(currentUser.id)}&studentName=${encodeURIComponent(currentUser.name || '')}&sessionId=${encodeURIComponent(cleanSlotId)}&topic=${encodeURIComponent(targetSlot.topic || '')}`
+            `/api/student/reports?studentId=${encodeURIComponent(currentUser.id)}&studentName=${encodeURIComponent(currentUser.name || '')}&sessionId=${encodeURIComponent(cleanSlotId)}`
           );
           const sData = await sRes.json();
           if (sData.success && Array.isArray(sData.reports) && sData.reports.length > 0) {
-            const matched = sData.reports.find((r: any) => !targetSlot.topic || r.topic === targetSlot.topic);
+            const matched = sData.reports.find((r: any) => {
+              const rId = String(r.sessionId || (r as any).slotId || r.id || '').replace('session-', 'slot-');
+              return rId === normClean;
+            }) || sData.reports[0];
             if (matched) {
               foundReport = matched;
               applyReportAndState(foundReport);
@@ -1673,7 +1674,9 @@ function GDAppContent() {
     const targetStudentId = studentId || viewingStudentId || session.students?.find((s) => !s.isEmptySeat)?.id || session.students?.[0]?.id;
     if (targetStudentId) {
       setViewingStudentId(targetStudentId);
-      if (activeReport && activeReport.studentId === targetStudentId && (activeReport.overallScore || 0) > 0) {
+      const normCurSession = session.id.replace('session-', 'slot-');
+      const normRepSession = (activeReport?.sessionId || '').replace('session-', 'slot-');
+      if (activeReport && activeReport.studentId === targetStudentId && (activeReport.overallScore || 0) > 0 && normRepSession === normCurSession) {
         setCurrentTab('report');
         return;
       }

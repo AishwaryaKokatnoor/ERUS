@@ -3455,8 +3455,48 @@ app.get('/api/college/slots', async (req, res) => {
   if (studentId || userRole === 'student') {
     const targetStudentId = studentId.toLowerCase();
     const targetEmail = studentEmail.toLowerCase();
+
+    // Check MongoDB for all slot/session IDs where this student has assessment reports
+    const studentReportSlotIds = new Set<string>();
+    if (isMongoConnected() && (studentId || studentEmail)) {
+      try {
+        const reportOrConditions: any[] = [];
+        if (studentId) {
+          reportOrConditions.push({ studentId });
+          const userObj = await UserModel.findOne({ $or: [{ id: studentId }, { 'studentProfile.studentId': studentId }] });
+          if (userObj) {
+            if (userObj.name) reportOrConditions.push({ studentName: new RegExp(`^${userObj.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+            if (userObj.studentProfile?.studentId) reportOrConditions.push({ studentId: userObj.studentProfile.studentId });
+          }
+        }
+        if (studentEmail) {
+          const userByEmail = await UserModel.findOne({ email: studentEmail });
+          if (userByEmail) {
+            reportOrConditions.push({ studentId: userByEmail.id });
+            if (userByEmail.name) reportOrConditions.push({ studentName: new RegExp(`^${userByEmail.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+          }
+        }
+        if (reportOrConditions.length > 0) {
+          const dbReports = await AssessmentReportModel.find({ $or: reportOrConditions }, { sessionId: 1 }).lean();
+          for (const rep of dbReports) {
+            if (rep.sessionId) {
+              const sid = String(rep.sessionId);
+              studentReportSlotIds.add(sid);
+              studentReportSlotIds.add(sid.replace('session-', 'slot-'));
+              studentReportSlotIds.add(sid.replace('slot-', 'session-'));
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn('[Slots API] Failed to fetch student report slot IDs:', err.message);
+      }
+    }
+
     const studentSlots = finalSlots.filter((slot) => {
-      // 0. Check if slot has an assigned faculty evaluator/in-charge
+      // 0. Include if student has an assessment report for this slot
+      if (studentReportSlotIds.has(slot.id)) return true;
+
+      // 1. Check if slot has an assigned faculty evaluator/in-charge
       const facId = String(slot.assignedFacultyId || '').trim();
       const facName = String(slot.assignedFacultyName || '').trim();
       const allotted = String((slot as any).allottedFaculty || '').trim();
@@ -3473,7 +3513,7 @@ app.get('/api/college/slots', async (req, res) => {
         return true;
       }
 
-      // 1. Check slot.students list
+      // 2. Check slot.students list
       if (Array.isArray(slot.students)) {
         if (slot.students.some((s: any) => {
           if (!s) return false;
@@ -3488,9 +3528,9 @@ app.get('/api/college/slots', async (req, res) => {
           return true;
         }
       }
-      // 2. Check persistent student bookings
+      // 3. Check persistent student bookings
       if (studentId && persistentState.studentBookings[studentId] === slot.id) return true;
-      // 3. Check topic bookings
+      // 4. Check topic bookings
       if (studentId && persistentState.studentTopicBookings[studentId]) {
         if (Object.values(persistentState.studentTopicBookings[studentId]).includes(slot.id)) return true;
       }
@@ -7360,10 +7400,21 @@ app.get('/api/student/reports', async (req, res) => {
         orConditions.push({ studentName: new RegExp(`^${studentName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
       }
       const filter: any = orConditions.length > 1 ? { $or: orConditions } : (orConditions[0] || {});
-      if (sessionId) filter.sessionId = sessionId;
-      if (topic) filter.topic = new RegExp(`^${topic.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+      if (sessionId) {
+        const altSessionId = sessionId.startsWith('session-')
+          ? sessionId.replace('session-', 'slot-')
+          : sessionId.startsWith('slot-')
+          ? sessionId.replace('slot-', 'session-')
+          : sessionId;
+        filter.$and = filter.$and || [];
+        filter.$and.push({
+          $or: [{ sessionId }, { sessionId: altSessionId }]
+        });
+      } else if (topic) {
+        filter.topic = new RegExp(`^${topic.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+      }
 
-      const mongoReports = await AssessmentReportModel.find(filter).sort({ overallScore: -1, createdAt: -1 }).maxTimeMS(2000);
+      const mongoReports = await AssessmentReportModel.find(filter).sort({ createdAt: -1, overallScore: -1 }).maxTimeMS(2000);
       if (mongoReports.length > 0) {
         const mappedReports = mongoReports.map((r: any) => {
             const raw = r.fullReportJson || {};
@@ -7485,7 +7536,14 @@ app.get('/api/faculty/sessions/:id/reports', async (req, res) => {
   }
   if (!slot && isMongoConnected()) {
     try {
-      const dbSlot = await GDSessionModel.findOne({ id: sessionId }).lean();
+      const altSessionId = sessionId.startsWith('session-')
+        ? sessionId.replace('session-', 'slot-')
+        : sessionId.startsWith('slot-')
+        ? sessionId.replace('slot-', 'session-')
+        : sessionId;
+      const dbSlot = await GDSessionModel.findOne({
+        $or: [{ id: sessionId }, { id: altSessionId }]
+      }).lean();
       if (dbSlot) slot = dbSlot;
     } catch {}
   }
@@ -7531,7 +7589,14 @@ app.get('/api/faculty/sessions/:id/reports', async (req, res) => {
   // Query MongoDB Sub-Table: assessment_reports
   if (isMongoConnected()) {
     try {
-      const mongoReports = await AssessmentReportModel.find({ sessionId }).sort({ createdAt: 1 }).maxTimeMS(2000);
+      const altSessionId = sessionId.startsWith('session-')
+        ? sessionId.replace('session-', 'slot-')
+        : sessionId.startsWith('slot-')
+        ? sessionId.replace('slot-', 'session-')
+        : sessionId;
+      const mongoReports = await AssessmentReportModel.find({
+        $or: [{ sessionId }, { sessionId: altSessionId }]
+      }).sort({ createdAt: 1 }).maxTimeMS(2000);
       const reportStudentIds = mongoReports.map((r) => r.studentId);
       const mongoUsers = reportStudentIds.length > 0
         ? await UserModel.find({ id: { $in: reportStudentIds } })
@@ -7703,7 +7768,14 @@ app.get(['/api/college/slots/:id/reports', '/api/admin/sessions/:id/reports'], a
 
   if (!targetSlot && isMongoConnected()) {
     try {
-      const dbSlot = await GDSessionModel.findOne({ id: sessionId });
+      const altSessionId = sessionId.startsWith('session-')
+        ? sessionId.replace('session-', 'slot-')
+        : sessionId.startsWith('slot-')
+        ? sessionId.replace('slot-', 'session-')
+        : sessionId;
+      const dbSlot = await GDSessionModel.findOne({
+        $or: [{ id: sessionId }, { id: altSessionId }]
+      });
       if (dbSlot) {
         targetSlot = {
           id: dbSlot.id,
@@ -7820,7 +7892,14 @@ app.get(['/api/college/slots/:id/reports', '/api/admin/sessions/:id/reports'], a
   let existingReports: any[] = [];
   if (isMongoConnected()) {
     try {
-      const mongoReports = await AssessmentReportModel.find({ sessionId }).sort({ createdAt: 1 }).maxTimeMS(2000);
+      const altSessionId = sessionId.startsWith('session-')
+        ? sessionId.replace('session-', 'slot-')
+        : sessionId.startsWith('slot-')
+        ? sessionId.replace('slot-', 'session-')
+        : sessionId;
+      const mongoReports = await AssessmentReportModel.find({
+        $or: [{ sessionId }, { sessionId: altSessionId }]
+      }).sort({ createdAt: 1 }).maxTimeMS(2000);
       if (mongoReports.length > 0) {
         const reportStudentIds = mongoReports.map((r) => r.studentId);
         const mongoUsers = reportStudentIds.length > 0

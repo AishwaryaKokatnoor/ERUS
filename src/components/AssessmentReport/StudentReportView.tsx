@@ -407,7 +407,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
       list = [...availableSlots];
     }
     // Ensure the session currently being inspected is always in the switcher list
-    if (session && !list.some((s) => s.id === session.id)) {
+    if (session && !list.some((s) => s.id === session.id || s.id.replace('session-', 'slot-') === session.id.replace('session-', 'slot-'))) {
       list.unshift(session);
     }
     return list;
@@ -485,11 +485,18 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
   // Helper: check if a report matches the current session ID or topic
   const isMatchingReport = (rep?: StudentAssessmentReport | null): boolean => {
     if (!rep) return false;
-    if (session?.id && rep.sessionId && rep.sessionId === session.id) return true;
-    if (session?.topic && rep.topic && rep.topic.trim().toLowerCase() === session.topic.trim().toLowerCase()) return true;
-    const sameSession = session?.id ? rep.sessionId === session.id : true;
-    const sameTopic = session?.topic ? rep.topic === session.topic : true;
-    return sameSession && sameTopic;
+    const currentSessionId = session?.id;
+    const repSessionId = rep.sessionId || (rep as any).slotId;
+    if (currentSessionId && repSessionId) {
+      const normCur = currentSessionId.replace('session-', 'slot-');
+      const normRep = repSessionId.replace('session-', 'slot-');
+      return normCur === normRep;
+    }
+    if (currentSessionId && !repSessionId) return false;
+    if (session?.topic && rep.topic) {
+      return rep.topic.trim().toLowerCase() === session.topic.trim().toLowerCase();
+    }
+    return false;
   };
 
   // Lookup any saved non-zero report for this student across in-memory history
@@ -520,12 +527,14 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
         const exactMatch = hist.find((r) => (r.overallScore || 0) > 0 && isMatchingReport(r));
         if (exactMatch) return exactMatch;
       }
-      for (const key of candidateKeys) {
-        const hist = getStudentReportHistory(key);
-        const anyNonZero = hist.find((r) => (r.overallScore || 0) > 0);
-        if (anyNonZero) return anyNonZero;
+      // ONLY if there is NO specific session.id, allow fallback to topic-matched report
+      if (!session?.id) {
+        for (const key of candidateKeys) {
+          const hist = getStudentReportHistory(key);
+          const topicMatch = hist.find((r) => (r.overallScore || 0) > 0 && isMatchingReport(r));
+          if (topicMatch) return topicMatch;
+        }
       }
-      if (activeRep && (activeRep.overallScore || 0) > 0) return activeRep;
     } catch {}
     return null;
   };
@@ -667,19 +676,34 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
         const studentQuery = encodeURIComponent(currentUser?.id || userStudent?.id || '');
         const nameQuery = encodeURIComponent(currentUser?.name || userStudent?.name || '');
         const sessionQuery = encodeURIComponent(session?.id || '');
-        const topicQuery = encodeURIComponent(session?.topic || '');
-        const res = await fetch(`/api/student/reports?studentId=${studentQuery}&studentName=${nameQuery}&sessionId=${sessionQuery}&topic=${topicQuery}`);
+        const res = await fetch(`/api/student/reports?studentId=${studentQuery}&studentName=${nameQuery}&sessionId=${sessionQuery}`);
         const data = await res.json().catch(() => ({}));
         const allReports: any[] = Array.isArray(data.reports) ? data.reports : [];
-        let persisted =
-          allReports.find(
-            (r: any) =>
-              (r.overallScore || 0) > 0 &&
-              ((session?.id && r.sessionId === session.id) || (!session?.topic || r.topic === session.topic))
-          ) ||
-          allReports.find((r: any) => (r.overallScore || 0) > 0) ||
-          allReports.find((r: any) => (!session?.topic || r.topic === session.topic) && (!session?.id || r.sessionId === session.id)) ||
-          null;
+        let persisted: any = null;
+        if (session?.id) {
+          const normCur = session.id.replace('session-', 'slot-');
+          persisted =
+            allReports.find(
+              (r: any) =>
+                r.sessionId &&
+                r.sessionId.replace('session-', 'slot-') === normCur &&
+                (r.overallScore || 0) > 0
+            ) ||
+            allReports.find(
+              (r: any) =>
+                r.sessionId &&
+                r.sessionId.replace('session-', 'slot-') === normCur
+            ) ||
+            null;
+        } else if (session?.topic) {
+          persisted =
+            allReports.find(
+              (r: any) =>
+                r.topic &&
+                r.topic.trim().toLowerCase() === session.topic.trim().toLowerCase() &&
+                (r.overallScore || 0) > 0
+            ) || null;
+        }
 
         if ((!persisted || (persisted.overallScore || 0) <= 0) && session?.id) {
           try {
@@ -707,7 +731,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
                       r.studentId === userStudent?.id ||
                       (r.studentName && r.studentName.toLowerCase() === (currentUser?.name || userStudent?.name || '').toLowerCase())
                   );
-                if (slotMatched && ((slotMatched.overallScore || 0) > 0 || !persisted)) {
+                if (slotMatched) {
                   persisted = slotMatched;
                 }
               }
@@ -753,7 +777,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
       const savedNonZero = findBestSavedStudentReport();
       if (savedNonZero && (savedNonZero.overallScore || 0) > 0) {
         setCurrentReport((prev) => {
-          if ((prev?.overallScore || 0) > (savedNonZero.overallScore || 0) && isMatchingReport(prev)) {
+          if (prev && isMatchingReport(prev) && prev.sessionId === savedNonZero.sessionId && (prev.overallScore || 0) > (savedNonZero.overallScore || 0)) {
             return prev;
           }
           return normalizeReport(savedNonZero, prev);
@@ -769,7 +793,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
         setCurrentReport(normalizeReport(initialReport));
       } else {
         setCurrentReport((prev) => {
-          if (prev && ((prev.overallScore || 0) > 0 || prev.speakingTurns > 0 || prev.speakingTimeSeconds > 0)) {
+          if (prev && isMatchingReport(prev) && ((prev.overallScore || 0) > 0 || prev.speakingTurns > 0 || prev.speakingTimeSeconds > 0)) {
             return prev;
           }
           return normalizeReport(generateStudentReport(userStudent, session?.topic || 'Group Discussion', session?.durationMinutes || 15, undefined, session?.id));
@@ -777,7 +801,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
       }
     } else {
       // Faculty and Admins: synchronize report and participant when session or initialReport changes
-      if (initialReport && (initialReport.sessionId === session?.id || !initialReport.sessionId || initialReport.topic === session?.topic)) {
+      if (initialReport && isMatchingReport(initialReport)) {
         if (initialReport.studentId) {
           setSelectedStudentId(initialReport.studentId);
         }
@@ -1265,7 +1289,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
                 {isStudent ? 'Your Other Participated Sessions:' : 'View Other Slot Reports:'}
               </span>
               {studentParticipatedSlots.map((sl) => {
-                const isSelected = sl.id === session.id;
+                const isSelected = sl.id === session.id || sl.id.replace('session-', 'slot-') === session.id.replace('session-', 'slot-');
                 const isCompleted = sl.status === 'completed';
 
                 return (
@@ -1469,7 +1493,11 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center gap-2 self-start sm:self-center">
+            <div className="flex items-center gap-2 self-start sm:self-center flex-wrap">
+              <span className="text-xs px-3 py-1 rounded-full font-bold bg-purple-100 dark:bg-purple-950/80 text-purple-800 dark:text-purple-300 border border-purple-200 dark:border-purple-800 shadow-xs flex items-center gap-1.5">
+                <span className="text-[10px] uppercase tracking-wider text-purple-600 dark:text-purple-400 font-semibold">Slot:</span>
+                <span className="font-extrabold">{session?.slotName || currentReport.sessionId}</span>
+              </span>
               <span className="text-[10px] px-2.5 py-1 rounded-full font-mono font-bold bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
                 REF: {currentReport.sessionId}
               </span>
@@ -1484,7 +1512,7 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
               <h2 className="text-2xl sm:text-3xl font-heading font-bold text-slate-900 dark:text-white tracking-tight">
                 Student Performance Evaluation Sheet
               </h2>
-              <div className="mt-2.5 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-xs sm:text-sm text-slate-700 dark:text-slate-300">
+              <div className="mt-2.5 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-xs sm:text-sm text-slate-700 dark:text-slate-300">
                 <p>
                   <strong>Candidate Name:</strong> {currentReport.studentName}
                 </p>
@@ -1492,10 +1520,16 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
                   <strong>Seat / Participant ID:</strong> Seat {currentStudentObj?.seatNumber || 1} ({currentReport.studentId})
                 </p>
                 <p>
+                  <strong>Discussion Slot:</strong> <span className="font-bold text-purple-700 dark:text-purple-300">{session?.slotName || currentReport.sessionId}</span>
+                </p>
+                <p>
                   <strong>Discussion Topic:</strong> {currentReport.topic}
                 </p>
                 <p>
                   <strong>Session Duration:</strong> {currentReport.durationMinutes} Minutes
+                </p>
+                <p>
+                  <strong>Candidate Speech:</strong> <span className="font-semibold text-slate-900 dark:text-white font-mono">{currentReport.speakingTimeFormatted}</span> ({currentReport.speakingTurns} {currentReport.speakingTurns === 1 ? 'turn' : 'turns'})
                 </p>
               </div>
             </div>
