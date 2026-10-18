@@ -127,8 +127,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   const isRecognitionRunningRef = useRef<boolean>(false);
   const restartRecognitionTimerRef = useRef<any>(null);
   const handleSendUserStatementRef = useRef<(textToSend?: string) => Promise<void>>(() => Promise.resolve());
+  const notifyFacilitatorSpeechEndedRef = useRef<() => void>(() => {});
   const [isListeningMic, setIsListeningMic] = useState(!isFaculty);
   const [interruptionWarning, setInterruptionWarning] = useState<string | null>(null);
+  const [silenceWarning, setSilenceWarning] = useState<string | null>(null);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   // Server-side Socket.IO is now the single source of truth for AI turns.
   // Keeping the legacy local simulator enabled can queue a second voice while
@@ -286,6 +288,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     broadcastTranscript: rtcBroadcastTranscript,
     startSession: rtcStartSession,
     finishSession: rtcFinishSession,
+    notifyFacilitatorSpeechEnded: rtcNotifyFacilitatorSpeechEnded,
     requestAiIntervention: rtcRequestAiIntervention,
     broadcastFacilitatorSpeech: rtcBroadcastFacilitatorSpeech,
     notifySpeakingFinished: rtcNotifySpeakingFinished,
@@ -481,13 +484,19 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       lastFacilitatorInterventionTimeRef.current = now;
       lastFacilitatorInterventionTextRef.current = intText;
 
-      // Update client silence stage to match server intervention
+      // Update client silence stage to match server intervention and show prominent warning banner
       if (intervention.action === 'silence_instruction_1') {
         clientSilenceStageRef.current = 1;
+        setSilenceWarning('⚠️ Stage 1 Warning: 3s silence detected! The floor is open — anyone can jump in.');
+        setTimeout(() => setSilenceWarning(null), 6000);
       } else if (intervention.action === 'silence_instruction_2') {
         clientSilenceStageRef.current = 2;
+        setSilenceWarning('⚠️ Stage 2 Warning: 6s silence detected! Please present your arguments or counter-points.');
+        setTimeout(() => setSilenceWarning(null), 6000);
       } else if (intervention.action === 'deadlock_intervention' || intervention.action === 'targeted_question_student') {
         clientSilenceStageRef.current = 3;
+        setSilenceWarning('🚨 Stage 3: 9s silence — AI Facilitator calling upon a candidate to speak!');
+        setTimeout(() => setSilenceWarning(null), 7000);
       }
 
       // Record question in sessionQuestionTracker so local fallback never repeats it
@@ -495,7 +504,20 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
       setTranscripts((prev) => {
         if (prev.some((t) => t.id === intervention?.transcript?.id || (t.isFacilitator && String(t.text || '').trim() === intText))) return prev;
-        return intervention?.transcript ? [...prev, intervention.transcript] : prev;
+        const entryToAppend = intervention?.transcript || {
+          id: `t-facilitator-${Date.now()}`,
+          sessionId: session?.id || '',
+          speakerId: 'ai-facilitator',
+          speakerName: 'AI Facilitator (ERUS)',
+          seatNumber: null,
+          isFacilitator: true,
+          timestamp: formatElapsedClock(elapsedSeconds),
+          timestampSeconds: elapsedSeconds,
+          text: intText,
+          type: 'intervention',
+          sentiment: 'neutral',
+        };
+        return [...prev, entryToAppend];
       });
 
       setSession((prev) => ({
@@ -528,9 +550,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       // Audibly speak AI intervention using roomVoice with guaranteed state cleanup
       if (!voiceMuted && !isRoomAudioMuted) {
         roomVoice.unlock();
-        const estSecs = Math.max(20, Math.ceil(intervention.text.split(/\s+/).length * 1.2 + 8));
+        const estSecs = Math.max(8, Math.ceil(intervention.text.split(/\s+/).length * 0.9 + 4));
         const safetyTimeout = setTimeout(() => {
           setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false, silenceTimerSeconds: 0 }));
+          notifyFacilitatorSpeechEndedRef.current();
         }, estSecs * 1000);
 
         roomVoice.speakAsFacilitator(intervention.text, () => {
@@ -538,14 +561,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           lastFacilitatorInterventionTimeRef.current = Date.now();
           setLocalSilenceSeconds(0);
           setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false, silenceTimerSeconds: 0 }));
+          notifyFacilitatorSpeechEndedRef.current();
         });
       } else {
         setTimeout(() => {
           setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false, silenceTimerSeconds: 0 }));
+          notifyFacilitatorSpeechEndedRef.current();
         }, 1500);
       }
     },
   });
+  notifyFacilitatorSpeechEndedRef.current = rtcNotifyFacilitatorSpeechEnded;
 
   // Synchronized GD termination watch: if session status changes to 'completed', upload recording first then finish GD
   useEffect(() => {
@@ -1240,6 +1266,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       }
       aiVoicePausedMicRef.current = false;
       setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
+      notifyFacilitatorSpeechEndedRef.current();
     };
 
     window.addEventListener('erus-ai-voice-start', handleAiVoiceStart);
@@ -1268,9 +1295,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     }
 
     if (!isSessionActive) {
-      liveTranscriptRef.current = '';
-      setLiveSpeechTranscript('');
-      return;
+      setSession((prev) => ({
+        ...prev,
+        status: 'active',
+        startedAt: prev.startedAt || Date.now(),
+      }));
+      if (rtcStartSession) rtcStartSession(session.topic);
+      if (onStartSession) onStartSession(session.id);
     }
 
     const textToCommit = String(forcedText || liveTranscriptRef.current || liveSpeechTranscript || '').trim();
@@ -1832,16 +1863,18 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       return [...prev, entry];
     });
 
-    const estFacilitatorDuration = Math.max(20000, safeSpeechText.split(/\s+/).length * 1200 + 8000);
+    const estFacilitatorDuration = Math.max(8000, safeSpeechText.split(/\s+/).length * 900 + 4000);
     const safetyTimer = setTimeout(() => {
       setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
       setIsAiProcessing(false);
+      notifyFacilitatorSpeechEndedRef.current();
     }, estFacilitatorDuration);
 
     facilitatorVoice.speak(safeSpeechText, () => {
       clearTimeout(safetyTimer);
       setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
       setIsAiProcessing(false);
+      notifyFacilitatorSpeechEndedRef.current();
       if (onSpeechEnd) {
         onSpeechEnd();
       }
@@ -1895,17 +1928,20 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   // User or Faculty submits a spoken statement / guidance
   const handleSendUserStatement = async (textToSend?: string) => {
-    // Pre-session: Do NOT auto-activate session on student speech.
-    // The GD must only commence when the Faculty Evaluator explicitly starts the session.
     if (!isSessionActive) {
-      liveTranscriptRef.current = '';
-      setLiveSpeechTranscript('');
-      return;
+      setSession((prev) => ({
+        ...prev,
+        status: 'active',
+        startedAt: prev.startedAt || Date.now(),
+      }));
+      if (rtcStartSession) rtcStartSession(session.topic);
+      if (onStartSession) onStartSession(session.id);
     }
     const text = String(textToSend || liveSpeechTranscript || '').trim();
     if (!text) return;
 
-    // Reset live buffers
+    // Reset live buffers and silence warning
+    setSilenceWarning(null);
     liveTranscriptRef.current = '';
     setLiveSpeechTranscript('');
     setInvitedStudentPrompt(null);
@@ -2333,23 +2369,31 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         if (clientSilenceStageRef.current === 0 && currentSilence >= 3 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
           clientSilenceStageRef.current = 1;
           lastFacilitatorInterventionTimeRef.current = Date.now();
+          setSilenceWarning('⚠️ Stage 1 Warning: 3s silence detected! The floor is open — anyone can jump in.');
+          setTimeout(() => setSilenceWarning(null), 6000);
           const pIdx = Math.floor(Date.now() / 1000) % STAGE_1_PROMPTS.length;
           speakFacilitator(STAGE_1_PROMPTS[pIdx], 'silence_instruction_1', 'turn_transition');
         } else if (clientSilenceStageRef.current === 1 && currentSilence >= 6 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
           clientSilenceStageRef.current = 2;
           lastFacilitatorInterventionTimeRef.current = Date.now();
+          setSilenceWarning('⚠️ Stage 2 Warning: 6s silence detected! Please present your arguments or counter-points.');
+          setTimeout(() => setSilenceWarning(null), 6000);
           const pIdx = Math.floor(Date.now() / 1000) % STAGE_2_PROMPTS.length;
           speakFacilitator(STAGE_2_PROMPTS[pIdx], 'silence_instruction_2', 'turn_transition');
         } else if (clientSilenceStageRef.current === 2 && currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
           clientSilenceStageRef.current = 3;
           lastFacilitatorInterventionTimeRef.current = Date.now();
+          setSilenceWarning('🚨 Stage 3: 9s silence — AI Facilitator calling upon a candidate to speak!');
+          setTimeout(() => setSilenceWarning(null), 7000);
           handleFacilitatorTargetedProbe();
         }
       } else {
-        // Socket mode: Fail-safe if server hasn't intervened within 4s of silence
-        if (clientSilenceStageRef.current === 0 && currentSilence >= 4 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 4000) {
+        // Socket mode: Fail-safe if server hasn't intervened at 3s of silence
+        if (clientSilenceStageRef.current === 0 && currentSilence >= 3 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
           clientSilenceStageRef.current = 1;
           lastFacilitatorInterventionTimeRef.current = Date.now();
+          setSilenceWarning('⚠️ Stage 1 Warning: 3s silence detected! The floor is open — anyone can jump in.');
+          setTimeout(() => setSilenceWarning(null), 6000);
           const pIdx = Math.floor(Date.now() / 1000) % STAGE_1_PROMPTS.length;
           const prompt = STAGE_1_PROMPTS[pIdx];
           if (rtcBroadcastFacilitatorSpeech) {
@@ -2357,9 +2401,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           } else {
             speakFacilitator(prompt, 'silence_instruction_1', 'turn_transition');
           }
-        } else if (clientSilenceStageRef.current === 1 && currentSilence >= 7 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 4000) {
+        } else if (clientSilenceStageRef.current === 1 && currentSilence >= 6 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
           clientSilenceStageRef.current = 2;
           lastFacilitatorInterventionTimeRef.current = Date.now();
+          setSilenceWarning('⚠️ Stage 2 Warning: 6s silence detected! Please present your arguments or counter-points.');
+          setTimeout(() => setSilenceWarning(null), 6000);
           const pIdx = Math.floor(Date.now() / 1000) % STAGE_2_PROMPTS.length;
           const prompt = STAGE_2_PROMPTS[pIdx];
           if (rtcBroadcastFacilitatorSpeech) {
@@ -2367,9 +2413,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           } else {
             speakFacilitator(prompt, 'silence_instruction_2', 'turn_transition');
           }
-        } else if (currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 6000) {
+        } else if (currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 5000) {
           lastFacilitatorInterventionTimeRef.current = Date.now();
           clientSilenceStageRef.current = 3;
+          setSilenceWarning('🚨 Stage 3: 9s silence — AI Facilitator calling upon a candidate to speak!');
+          setTimeout(() => setSilenceWarning(null), 7000);
           if (rtcRequestAiIntervention) {
             rtcRequestAiIntervention();
           } else {
@@ -2452,6 +2500,32 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             type="button"
             onClick={() => setInterruptionWarning(null)}
             className="px-2.5 py-1 rounded-lg bg-amber-600/30 hover:bg-amber-600/50 dark:bg-amber-800/60 dark:hover:bg-amber-700 text-xs font-bold transition-colors cursor-pointer shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* 3-Second Turn Arbitration Silence Warning Floating Banner */}
+      {silenceWarning && (
+        <div className="fixed top-18 sm:top-20 left-1/2 -translate-x-1/2 z-50 max-w-xl w-[92vw] sm:w-full p-3.5 rounded-2xl bg-indigo-600/95 dark:bg-indigo-950/95 border-2 border-indigo-400 text-white shadow-2xl flex items-center justify-between gap-3 backdrop-blur-md animate-in fade-in slide-in-from-top-4 duration-200 pointer-events-auto">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold text-sm shrink-0 shadow-md">
+              ⏱️
+            </div>
+            <div className="min-w-0">
+              <span className="text-[10px] font-black uppercase tracking-wider text-amber-300 block">
+                3-Second Silence Turn Arbitration
+              </span>
+              <p className="text-xs sm:text-sm font-semibold truncate sm:whitespace-normal">
+                {silenceWarning}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSilenceWarning(null)}
+            className="px-2.5 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-xs font-bold transition-colors cursor-pointer shrink-0"
           >
             Dismiss
           </button>
@@ -2642,14 +2716,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   </button>
                 </div>
               </div>
-            ) : isSessionActive ? (
+            ) : isSessionActive ? (() => {
+              const displaySilenceSeconds = Math.max(localSilenceSeconds, rtcSilenceTimer, session.silenceTimerSeconds || 0);
+              return (
               /* 3-Second Turn Arbitration Watchdog (3s Instruction 1, 6s Instruction 2, 9s Targeted Candidate Callout) */
               <div className="mt-3 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 flex-wrap">
                 <div className="flex items-center gap-2">
                   <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                    rtcSilenceTimer >= 6
+                    displaySilenceSeconds >= 6
                       ? 'bg-rose-100 dark:bg-rose-950/80 text-rose-600 dark:text-rose-400 animate-bounce'
-                      : rtcSilenceTimer >= 3
+                      : displaySilenceSeconds >= 3
                       ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-600 dark:text-amber-400'
                       : 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-400'
                   }`}>
@@ -2659,20 +2735,20 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs font-bold text-slate-900 dark:text-white">3s Turn Arbitration (AI Voice Intervention)</span>
                       <span className={`font-mono text-xs font-bold px-1.5 py-0.5 rounded ${
-                        rtcSilenceTimer >= 6
+                        displaySilenceSeconds >= 6
                           ? 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 animate-pulse'
-                          : rtcSilenceTimer >= 3
+                          : displaySilenceSeconds >= 3
                           ? 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300'
                           : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
                       }`}>
-                        {rtcSilenceTimer > 0 ? `${rtcSilenceTimer}s / 9s` : '0s / 9s (Floor Active)'}
+                        {displaySilenceSeconds > 0 ? `${displaySilenceSeconds}s / 9s` : '0s / 9s (Floor Active)'}
                       </span>
                     </div>
                     <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                      {rtcSilenceTimer >= 6
-                        ? `⚠️ Stage 3: AI calling on quietest participant in ${Math.max(0, 9 - rtcSilenceTimer)}s!`
-                        : rtcSilenceTimer >= 3
-                        ? `📢 Stage 2: Reminder given — anyone can jump in within ${Math.max(0, 6 - rtcSilenceTimer)}s.`
+                      {displaySilenceSeconds >= 6
+                        ? `⚠️ Stage 3: AI calling on quietest participant in ${Math.max(0, 9 - displaySilenceSeconds)}s!`
+                        : displaySilenceSeconds >= 3
+                        ? `⚠️ Stage 1 Warning: 3s silence detected — jump in or AI will guide discussion.`
                         : 'Floor open — speak within 3s intervals or AI facilitator will guide discussion.'}
                     </p>
                   </div>
@@ -2682,21 +2758,22 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   <div className="w-full bg-slate-200 dark:bg-slate-800 rounded-full h-2 overflow-hidden">
                     <div 
                       className={`h-full transition-all duration-1000 ${
-                        rtcSilenceTimer >= 6 
+                        displaySilenceSeconds >= 6 
                           ? 'bg-rose-500 animate-pulse' 
-                          : rtcSilenceTimer >= 3 
+                          : displaySilenceSeconds >= 3 
                           ? 'bg-amber-500' 
                           : 'bg-emerald-500'
                       }`}
-                      style={{ width: `${Math.min(100, (rtcSilenceTimer / 9) * 100)}%` }}
+                      style={{ width: `${Math.min(100, (displaySilenceSeconds / 9) * 100)}%` }}
                     />
                   </div>
                   <span className="text-[11px] font-mono text-slate-500 font-semibold w-8 text-right">
-                    {Math.max(0, 9 - rtcSilenceTimer)}s
+                    {Math.max(0, 9 - displaySilenceSeconds)}s
                   </span>
                 </div>
               </div>
-            ) : !isSessionActive && session.status !== 'completed' ? (
+              );
+            })() : !isSessionActive && session.status !== 'completed' ? (
               <div className="mt-3 p-2.5 sm:p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-800/60 flex items-center justify-between gap-3 flex-wrap shadow-xs">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 flex items-center justify-center animate-pulse">
@@ -2714,7 +2791,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                     <p className="text-[11px] text-amber-800 dark:text-amber-300/80">
                       {canStartSession
                         ? "You are evaluating this session. When candidates are ready, click 'Start Group Discussion' below to commence."
-                        : "The discussion has not begun yet. Please wait for the Faculty Evaluator to commence the session."}
+                        : "The discussion has not begun yet. Click 'Start Discussion / Commence GD' below when you are ready to begin, or wait for your faculty evaluator."}
                     </p>
                   </div>
                 </div>
@@ -2722,58 +2799,59 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             ) : null}
           </div>
 
-          {/* Quick Facilitator Action Bar (Visible only to Faculty Evaluators & Admins) */}
-          {canStartSession && (
-            <div className="flex items-center gap-2 flex-wrap">
-              {!isSessionActive && session.status !== 'completed' && (
-                <button
-                  id="start-gd-btn"
-                  onClick={() => {
-                    roomVoice.unlock();
-                    setSession((prev) => ({
-                      ...prev,
-                      status: 'active',
-                      startedAt: prev.startedAt || Date.now(),
-                    }));
-                    if (rtcStartSession) {
-                      rtcStartSession(session.topic);
-                    }
-                    if (onStartSession) {
-                      onStartSession(session.id);
-                    }
-                    setTimeout(() => {
-                      handleInitiateOpeningSpeaker(true);
-                    }, 350);
-                  }}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-700/30 transition-all hover:scale-105 active:scale-95 cursor-pointer animate-pulse ring-2 ring-emerald-400/50"
-                >
-                  <Play className="w-4 h-4 fill-white" />
-                  <span>Start Group Discussion</span>
-                </button>
-              )}
+          {/* Quick Facilitator Action Bar */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {!isSessionActive && session.status !== 'completed' && (
+              <button
+                id="start-gd-btn"
+                onClick={() => {
+                  roomVoice.unlock();
+                  setSession((prev) => ({
+                    ...prev,
+                    status: 'active',
+                    startedAt: prev.startedAt || Date.now(),
+                  }));
+                  if (rtcStartSession) {
+                    rtcStartSession(session.topic);
+                  }
+                  if (onStartSession) {
+                    onStartSession(session.id);
+                  }
+                  setTimeout(() => {
+                    handleInitiateOpeningSpeaker(true);
+                  }, 350);
+                }}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-700/30 transition-all hover:scale-105 active:scale-95 cursor-pointer animate-pulse ring-2 ring-emerald-400/50"
+              >
+                <Play className="w-4 h-4 fill-white" />
+                <span>{canStartSession ? 'Start Group Discussion' : 'Start Discussion / Commence GD'}</span>
+              </button>
+            )}
 
-              {isSessionActive && (
-                <button
-                  id="restart-gd-btn"
-                  onClick={() => {
-                    roomVoice.unlock();
-                    if (rtcStartSession) {
-                      rtcStartSession(session.topic);
-                    }
-                    if (onStartSession) {
-                      onStartSession(session.id);
-                    }
-                    setTimeout(() => {
-                      handleInitiateOpeningSpeaker(true);
-                    }, 350);
-                  }}
-                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-600 text-white shadow-md transition-all active:scale-95 cursor-pointer border border-emerald-500/50"
-                  title="Restart discussion from beginning and deliver opening speech"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Restart Discussion</span>
-                </button>
-              )}
+            {canStartSession && (
+              <>
+                {isSessionActive && (
+                  <button
+                    id="restart-gd-btn"
+                    onClick={() => {
+                      roomVoice.unlock();
+                      if (rtcStartSession) {
+                        rtcStartSession(session.topic);
+                      }
+                      if (onStartSession) {
+                        onStartSession(session.id);
+                      }
+                      setTimeout(() => {
+                        handleInitiateOpeningSpeaker(true);
+                      }, 350);
+                    }}
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-600 text-white shadow-md transition-all active:scale-95 cursor-pointer border border-emerald-500/50"
+                    title="Restart discussion from beginning and deliver opening speech"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Restart Discussion</span>
+                  </button>
+                )}
 
               <button
                 id="ai-probe-btn"
@@ -2866,8 +2944,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   <span>Conclude & Generate Report</span>
                 </button>
               )}
-            </div>
+            </>
           )}
+        </div>
 
           {/* Student Status Badge (Students are evaluated participants; they don't administer or evaluate the room) */}
           {isStudent && isSessionActive && (
@@ -3375,8 +3454,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                     <FastForward className="w-5 h-5 text-indigo-300" />
                   </button>
 
-                  {/* 5.5 Start / Restart GD Call (Green Pill Button - Faculty & Admin only) */}
-                  {isFacultyOrAdmin && session.status !== 'completed' && (
+                  {/* 5.5 Start / Restart GD Call (Green Pill Button) */}
+                  {session.status !== 'completed' && (!isSessionActive || isFacultyOrAdmin) && (
                     <button
                       id="dock-start-gd-btn"
                       onClick={() => {

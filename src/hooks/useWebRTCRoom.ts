@@ -1221,6 +1221,13 @@ export function useWebRTCRoom({
     }
   }, [slotId]);
 
+  // Immediately notify server that AI facilitator has finished vocalizing so silence watchdog ticks right away
+  const notifyFacilitatorSpeechEnded = useCallback(() => {
+    if (socketRef.current) {
+      socketRef.current.emit('facilitator-speech-ended', { slotId });
+    }
+  }, [slotId]);
+
   const getLocalAudioStream = useCallback(() => localStreamRef.current, []);
 
   // Explicit audio unblocker for browser autoplay policies
@@ -1256,6 +1263,7 @@ export function useWebRTCRoom({
     broadcastTranscript,
     startSession,
     finishSession,
+    notifyFacilitatorSpeechEnded,
     requestAiIntervention,
     broadcastFacilitatorSpeech,
     notifySpeakingFinished,

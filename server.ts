@@ -9002,7 +9002,8 @@ async function scheduleNextTurn(room: LiveGDRoomState, completedUserId?: string)
     })),
   ];
 
-  const isOpening = !room.openingStarted;
+  const hasFacilitatorSpoken = room.transcripts.some((t) => t.isFacilitator);
+  const isOpening = !hasFacilitatorSpoken;
 
   // If no live socket student has joined yet, check if the slot has enrolled students in persistentState
   if (allParticipants.length === 0 && isOpening) {
@@ -9795,11 +9796,6 @@ io.on('connection', (socket) => {
   socket.on('start-session', ({ slotId, topic }: { slotId: string; topic?: string }) => {
     const safeSlotId = slotId || 'session-101';
     const room = getOrCreateLiveRoom(safeSlotId, topic);
-    const peer = room.peers.get(socket.id);
-    if (peer && peer.role !== 'faculty' && peer.role !== 'college_admin' && peer.role !== 'super_admin') {
-      console.warn(`[start-session] Non-evaluator user (${peer.userId}, role: ${peer.role}) attempted to start session ${safeSlotId}`);
-      return;
-    }
 
     let targetSlot: any = null;
     for (const [, list] of Object.entries(persistentState.slots)) {
@@ -9813,6 +9809,7 @@ io.on('connection', (socket) => {
     if (topic) room.topic = topic;
     room.status = 'active';
     room.silenceTimerSeconds = 0;
+    room.silenceStage = 0;
     syncAiParticipants(room);
     io.to(`room-${safeSlotId}`).emit('session-started', {
       slotId: safeSlotId,
@@ -9828,11 +9825,20 @@ io.on('connection', (socket) => {
     });
 
     const hasFacilitatorSpoken = room.transcripts.some((t) => t.isFacilitator);
-    if (!room.openingStarted && !hasFacilitatorSpoken) {
-      room.openingStarted = true;
+    if (!hasFacilitatorSpoken) {
+      room.openingStarted = false;
       room.initialSpeakerSelected = false;
       room.deadlockCount = 0;
       scheduleNextTurn(room);
+    }
+  });
+
+  // 1.55 Notification that AI Facilitator speech audio concluded on client
+  socket.on('facilitator-speech-ended', ({ slotId }: { slotId?: string }) => {
+    const safeSlotId = slotId || 'session-101';
+    const room = LIVE_ROOMS.get(safeSlotId);
+    if (room) {
+      room.facilitatorSpeakingUntil = 0;
     }
   });
 

@@ -734,9 +734,25 @@ function GDAppContent() {
       } : s))
     );
 
-    // The synchronized opening speech and transcript are delivered authoritatively across all connected
-    // participants (students and faculty) via the server's facilitator-intervention broadcast.
-    setTranscripts([]);
+    // Synchronized opening transcript: preserve existing or initialize fresh welcome entry so transcript stream is never blank
+    setTranscripts((prev) => {
+      if (prev.length > 0) return prev;
+      return [
+        {
+          id: `t-opening-${Date.now()}`,
+          sessionId: targetSlotId,
+          speakerId: 'ai-facilitator',
+          speakerName: 'AI Facilitator (ERUS)',
+          seatNumber: null,
+          isFacilitator: true,
+          timestamp: '00:00',
+          timestampSeconds: 0,
+          text: `Welcome participants to today's group discussion on "${targetSlot.topic || 'the assigned topic'}". The floor is now officially open. Please share your opening thoughts.`,
+          type: 'opening',
+          sentiment: 'constructive',
+        },
+      ];
+    });
 
     // Emit live WebRTC socket event so all room participants transition immediately
     // Validate authorization with the backend before broadcasting a session start.
