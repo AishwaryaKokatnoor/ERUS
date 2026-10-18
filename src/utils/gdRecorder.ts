@@ -1048,7 +1048,9 @@ export function useGDRecorder({
       }
 
       // 3. Stage Layout: Presentation Seminar Hall vs Round Table vs Grid
-      if (layoutModeRef.current === 'presentation') {
+      const isPresentation = layoutModeRef.current === 'presentation';
+      const isRoundTable = layoutModeRef.current === 'round_table' || !layoutModeRef.current || (layoutModeRef.current as any) === 'round-table';
+      if (isPresentation) {
         // --- 3A. CLASSROOM PRESENTATION SEMINAR HALL STAGE ---
         // (Matching ClassroomPresentationRoom layout: Projector Screen / Slides on Left, Presenter Podium on Right, Audience Desks on Bottom)
         const presInfo = presentationInfoRef.current;
@@ -2170,7 +2172,7 @@ export function useGDRecorder({
 
       console.log(
         `[GD Recorder] Live ${recordVideo ? 'Video Grid' : 'Audio'} recording started (format: ${
-          chosenMime || 'default'
+          usedMime || mimeTypeRef.current || 'default'
         })`
       );
       return true;
