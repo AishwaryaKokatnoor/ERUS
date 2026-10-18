@@ -945,10 +945,35 @@ export async function fetchCollegeSlots(collegeCode: string = 'DIT'): Promise<an
     console.warn('Error fetching college slots:', e);
   }
 
-  // Backend is authoritative.
+  // Backend is authoritative, but preserve freshly allotted topics/faculty from local state
   if (backendSlots !== null) {
-    saveLocalSlots(code, backendSlots);
-    return backendSlots;
+    const local = getLocalSlots(code);
+    const localMap = new Map(local.map((s: any) => [s.id, s]));
+    const merged = backendSlots.map((b: any) => {
+      const l = localMap.get(b.id);
+      if (!l) return b;
+      const bTopic = (b.topic || '').trim();
+      const lTopic = (l.topic || '').trim();
+      const hasLTopic = Boolean(lTopic && !lTopic.toLowerCase().includes('pending') && !/^slot\s+\d+\s*$/i.test(lTopic));
+      const hasBTopic = Boolean(bTopic && !bTopic.toLowerCase().includes('pending') && !/^slot\s+\d+\s*$/i.test(bTopic));
+
+      const hasLFac = Boolean(l.assignedFacultyName && l.assignedFacultyName !== 'Unassigned' && !l.assignedFacultyName.toLowerCase().includes('unassigned'));
+      const hasBFac = Boolean(b.assignedFacultyName && b.assignedFacultyName !== 'Unassigned' && !b.assignedFacultyName.toLowerCase().includes('unassigned'));
+
+      return {
+        ...b,
+        topic: hasBTopic ? b.topic : (hasLTopic ? l.topic : b.topic),
+        slotName: (hasBTopic && b.slotName) ? b.slotName : (hasLTopic && l.slotName ? l.slotName : b.slotName),
+        description: (hasBTopic && b.description) ? b.description : (hasLTopic && l.description ? l.description : b.description),
+        assignedFacultyId: hasBFac ? b.assignedFacultyId : (hasLFac ? l.assignedFacultyId : b.assignedFacultyId),
+        assignedFacultyName: hasBFac ? b.assignedFacultyName : (hasLFac ? l.assignedFacultyName : b.assignedFacultyName),
+        assignedFacultyDept: hasBFac ? b.assignedFacultyDept : (hasLFac ? l.assignedFacultyDept : b.assignedFacultyDept),
+        assignedFacultyEmail: hasBFac ? b.assignedFacultyEmail : (hasLFac ? l.assignedFacultyEmail : b.assignedFacultyEmail),
+        activityType: b.activityType || l.activityType || 'gd',
+      };
+    });
+    saveLocalSlots(code, merged);
+    return merged;
   }
 
   return getLocalSlots(code);
@@ -1220,43 +1245,69 @@ export async function allotSlotTopicAndFaculty(
   // Update local slots cache immediately
   try {
     const local = getLocalSlots(code);
-    const updated = local.map((s: any) => {
-      if (s.id === slotId) {
-        const slotNumMatch = (data.slotName || s.slotName || '').match(/^(Slot\s+\d+)/i) || (s.id || '').match(/slot-.*?-(\d+)/i);
-        const prefix = slotNumMatch ? (slotNumMatch[1].startsWith('Slot') ? slotNumMatch[1] : `Slot ${slotNumMatch[1]}`) : 'Slot';
-        const syncedSlotName = data.topic ? `${prefix}: ${data.topic}` : (data.slotName || s.slotName || prefix);
+    const exists = local.some((s: any) => s.id === slotId || s.id?.toLowerCase() === slotId.toLowerCase());
+    const slotNumMatch = (data.slotName || '').match(/^(Slot\s+\d+)/i) || (slotId || '').match(/slot-.*?-(\d+)/i);
+    const prefix = slotNumMatch ? (slotNumMatch[1].startsWith('Slot') ? slotNumMatch[1] : `Slot ${slotNumMatch[1]}`) : 'Slot';
+    const syncedSlotName = data.topic ? `${prefix}: ${data.topic}` : (data.slotName || prefix);
+    const isPresentation = data.activityType === 'presentation';
+    const capacity = isPresentation ? 6 : (data.maxCapacity || 15);
+    const resolvedDesc = data.description || (data.topic
+      ? (isPresentation ? 'Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates.' : `Autonomous AI evaluated discussion on "${data.topic}".`)
+      : '');
 
-        const isPresentation = data.activityType === 'presentation' || s.activityType === 'presentation';
-        const capacity = isPresentation ? 6 : (data.maxCapacity || s.maxCapacity || 15);
-        const students = Array.isArray(s.students) 
-          ? (isPresentation && s.students.length > 6 ? s.students.slice(0, 6) : s.students)
-          : [];
-
-        const resolvedDesc = data.description || (data.topic
-          ? (isPresentation ? 'Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates.' : `Autonomous AI evaluated discussion on "${data.topic}".`)
-          : s.description);
-
-        return {
-          ...s,
+    let updated: any[] = [];
+    if (exists) {
+      updated = local.map((s: any) => {
+        if (s.id === slotId || s.id?.toLowerCase() === slotId.toLowerCase()) {
+          const students = Array.isArray(s.students) 
+            ? (isPresentation && s.students.length > 6 ? s.students.slice(0, 6) : s.students)
+            : [];
+          return {
+            ...s,
+            ...data,
+            activityType: data.activityType || s.activityType || 'gd',
+            maxCapacity: capacity,
+            durationMinutes: data.durationMinutes || s.durationMinutes || (isPresentation ? 60 : 15),
+            enrolledCount: Math.min(students.length || capacity, capacity),
+            students,
+            topic: data.topic,
+            description: resolvedDesc || s.description,
+            slotName: syncedSlotName,
+            assignedFacultyId: data.assignedFacultyId,
+            assignedFacultyName: data.assignedFacultyName,
+            assignedFacultyEmail: data.assignedFacultyEmail || s.assignedFacultyEmail,
+            assignedFacultyDept: data.assignedFacultyDept || s.assignedFacultyDept,
+            slotTiming: data.slotTiming || s.slotTiming,
+            slotDate: data.slotDate || s.slotDate,
+          };
+        }
+        return s;
+      });
+    } else {
+      updated = [
+        {
+          id: slotId,
           ...data,
-          activityType: data.activityType || s.activityType || 'gd',
+          activityType: data.activityType || 'gd',
           maxCapacity: capacity,
-          durationMinutes: data.durationMinutes || s.durationMinutes || (isPresentation ? 60 : 15),
-          enrolledCount: Math.min(students.length || capacity, capacity),
-          students,
+          durationMinutes: data.durationMinutes || (isPresentation ? 60 : 15),
+          enrolledCount: 0,
+          students: [],
           topic: data.topic,
           description: resolvedDesc,
           slotName: syncedSlotName,
           assignedFacultyId: data.assignedFacultyId,
           assignedFacultyName: data.assignedFacultyName,
-          assignedFacultyEmail: data.assignedFacultyEmail || s.assignedFacultyEmail,
-          assignedFacultyDept: data.assignedFacultyDept || s.assignedFacultyDept,
-          slotTiming: data.slotTiming || s.slotTiming,
-          slotDate: data.slotDate || s.slotDate,
-        };
-      }
-      return s;
-    });
+          assignedFacultyEmail: data.assignedFacultyEmail || '',
+          assignedFacultyDept: data.assignedFacultyDept || '',
+          slotTiming: data.slotTiming || '10:00 AM - 10:15 AM',
+          slotDate: data.slotDate || new Date().toISOString().split('T')[0],
+          collegeCode: code,
+          status: 'scheduled',
+        },
+        ...local,
+      ];
+    }
     saveLocalSlots(code, updated);
   } catch {}
 
@@ -1269,12 +1320,15 @@ export async function allotSlotTopicAndFaculty(
     if (res.ok) {
       const resData = await res.json();
       return resData;
+    } else {
+      const errData = await res.json().catch(() => ({}));
+      console.warn('Backend allot error response:', res.status, errData);
+      return { success: false, error: errData.error || `Server returned error (${res.status}) saving allotment.` };
     }
-  } catch (e) {
+  } catch (e: any) {
     console.warn('Error allotting slot topic and faculty:', e);
+    return { success: false, error: e?.message || 'Network error while saving slot allotment.' };
   }
-
-  return { success: true };
 }
 
 // ==========================================

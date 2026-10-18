@@ -272,11 +272,17 @@ function GDAppContent() {
           setAvailableSlots((prev) => {
             if (prev.length === mappedSlots.length) {
               const isDiff = mappedSlots.some((ns, idx) => {
-                const ps = prev[idx];
+                const ps = prev.find((p) => p.id === ns.id) || prev[idx];
+                if (!ps) return true;
                 return (
                   ps.id !== ns.id ||
                   ps.status !== ns.status ||
                   ps.topic !== ns.topic ||
+                  ps.slotName !== ns.slotName ||
+                  ps.description !== ns.description ||
+                  ps.assignedFacultyName !== ns.assignedFacultyName ||
+                  ps.assignedFacultyId !== ns.assignedFacultyId ||
+                  ps.activityType !== ns.activityType ||
                   ps.slotTiming !== ns.slotTiming ||
                   ps.recordingUrl !== ns.recordingUrl ||
                   ps.enrolledCount !== ns.enrolledCount ||

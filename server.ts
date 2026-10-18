@@ -3218,7 +3218,17 @@ app.post('/api/college/dispatch-credentials', async (req, res) => {
 
 app.get('/api/college/slots', async (req, res) => {
   const code = resolveEffectiveCollegeCode(req.query.collegeCode as string);
-  const facultyList = persistentState.faculty[code] || [];
+  const facultyList: any[] = [];
+  for (const [fCode, fList] of Object.entries(persistentState.faculty || {})) {
+    if (normalizeCollegeCode(fCode) === code || areCollegeCodesEquivalent(fCode, code)) {
+      for (const f of (fList || [])) {
+        if (!facultyList.some((existing) => existing.facultyId === f.facultyId || existing.id === f.id)) {
+          facultyList.push(f);
+        }
+      }
+    }
+  }
+
   const slotMap = new Map<string, any>();
   const deletedSet = new Set(persistentState.deletedSlotIds || []);
   const hasDeletedSlotsForCollege = Array.from(deletedSet).some((id) =>
@@ -3243,18 +3253,37 @@ app.get('/api/college/slots', async (req, res) => {
   // Authoritative MongoDB lookup (enrich existing initialized slots, or hydrate if never initialized)
   if (isMongoConnected()) {
     try {
-      const dbSlots = await GDSessionModel.find({ collegeCode: code }).maxTimeMS(1500);
+      const equivCodes = [code, code.split('-')[0], code.replace(/-\d+$/, '')].filter(Boolean);
+      const dbSlots = await GDSessionModel.find({
+        $or: [
+          { collegeCode: code },
+          { collegeCode: { $in: equivCodes } },
+          { collegeCode: new RegExp(`^${code.split('-')[0]}`, 'i') },
+        ],
+      }).maxTimeMS(1500);
+
       for (const s of dbSlots) {
         if (!s?.id || deletedSet.has(s.id)) {
           continue;
         }
         const existing = slotMap.get(s.id) || {};
+        const hasExistingTopic = Boolean(existing.topic && !existing.topic.toLowerCase().includes('pending') && !/^slot\s+\d+\s*$/i.test(existing.topic));
+        const hasDbTopic = Boolean(s.topic && !s.topic.toLowerCase().includes('pending') && !/^slot\s+\d+\s*$/i.test(s.topic));
+        const resolvedTopic = hasExistingTopic ? existing.topic : (hasDbTopic ? s.topic : (existing.topic || s.topic || ''));
+
+        const hasExistingFac = Boolean(existing.assignedFacultyName && existing.assignedFacultyName !== 'Unassigned' && !existing.assignedFacultyName.toLowerCase().includes('unassigned'));
+        const hasDbFac = Boolean(s.assignedFacultyName && s.assignedFacultyName !== 'Unassigned' && !s.assignedFacultyName.toLowerCase().includes('unassigned'));
+        const resolvedFacName = hasExistingFac ? existing.assignedFacultyName : (hasDbFac ? s.assignedFacultyName : (existing.assignedFacultyName || s.assignedFacultyName || 'Unassigned'));
+        const resolvedFacId = hasExistingFac ? (existing.assignedFacultyId || s.assignedFacultyId) : (hasDbFac ? (s.assignedFacultyId || existing.assignedFacultyId) : (existing.assignedFacultyId || s.assignedFacultyId || ''));
+        const resolvedFacEmail = hasExistingFac ? (existing.assignedFacultyEmail || s.assignedFacultyEmail) : (hasDbFac ? (s.assignedFacultyEmail || existing.assignedFacultyEmail) : (existing.assignedFacultyEmail || s.assignedFacultyEmail || ''));
+        const resolvedFacDept = hasExistingFac ? (existing.assignedFacultyDept || s.assignedFacultyDept) : (hasDbFac ? (s.assignedFacultyDept || existing.assignedFacultyDept) : (existing.assignedFacultyDept || s.assignedFacultyDept || ''));
+
         slotMap.set(s.id, {
           ...existing,
           id: s.id,
-          slotName: existing.slotName || s.slotName || s.topic,
-          topic: existing.topic ?? s.topic,
-          description: existing.description ?? s.description ?? '',
+          slotName: existing.slotName || s.slotName || resolvedTopic || 'Slot',
+          topic: resolvedTopic,
+          description: existing.description || s.description || '',
           durationMinutes: existing.durationMinutes || s.durationMinutes,
           difficulty: (s as any).difficulty || 'Intermediate',
           status: ((existing as any)?.status === 'completed' || s.status === 'completed') ? 'completed' : ((existing as any)?.status === 'active' || s.status === 'active') ? 'active' : (existing.status || s.status || 'waiting'),
@@ -3262,10 +3291,10 @@ app.get('/api/college/slots', async (req, res) => {
           slotDate: existing.slotDate || s.slotDate || 'Today',
           maxCapacity: existing.maxCapacity || s.maxCapacity,
           enrolledCount: (existing.students || (s as any).students)?.length ?? existing.enrolledCount ?? s.enrolledCount ?? 0,
-          assignedFacultyId: existing.assignedFacultyId || s.assignedFacultyId || '',
-          assignedFacultyName: existing.assignedFacultyName || s.assignedFacultyName || '',
-          assignedFacultyEmail: existing.assignedFacultyEmail || s.assignedFacultyEmail || '',
-          assignedFacultyDept: existing.assignedFacultyDept || s.assignedFacultyDept || '',
+          assignedFacultyId: resolvedFacId,
+          assignedFacultyName: resolvedFacName,
+          assignedFacultyEmail: resolvedFacEmail,
+          assignedFacultyDept: resolvedFacDept,
           collegeCode: code,
           students: (Array.isArray(existing.students) && existing.students.length > 0) ? existing.students : (s.students || []),
           recordingUrl: persistentState.recordings?.[s.id]?.recordingUrl || (s as any).recordingUrl || existing.recordingUrl || '',
@@ -3367,7 +3396,9 @@ app.get('/api/college/slots', async (req, res) => {
       topic: currentTopic,
       description: slot.description,
       assignedFacultyId: faculty?.facultyId || slot.assignedFacultyId || '',
-      assignedFacultyName: faculty?.name || slot.assignedFacultyName || 'Unassigned',
+      assignedFacultyName: (faculty?.name && faculty.name !== 'Unassigned')
+        ? faculty.name
+        : (slot.assignedFacultyName && slot.assignedFacultyName !== 'Unassigned' ? slot.assignedFacultyName : 'Unassigned'),
       assignedFacultyEmail: faculty?.email || slot.assignedFacultyEmail || '',
       assignedFacultyDept: faculty?.department || slot.assignedFacultyDept || '',
     };
@@ -3597,8 +3628,9 @@ app.post('/api/college/slots', async (req, res) => {
   res.json({ success: true, slot: newSlot });
 });
 
-app.put(['/api/college/slots/:id/allot', '/api/college/slots/:id'], async (req, res) => {
-  const slotId = req.params.id;
+const handleSlotAllotment = async (req: express.Request, res: express.Response) => {
+  const rawId = req.params.id;
+  const slotId = decodeURIComponent(rawId).trim();
   const {
     topic,
     slotName,
@@ -3619,8 +3651,14 @@ app.put(['/api/college/slots/:id/allot', '/api/college/slots/:id'], async (req, 
   let targetSlot: BackendCollegeSlotItem | null = null;
   let collegeCode = '';
 
-  for (const [code, list] of Object.entries(persistentState.slots)) {
-    const found = list.find((s) => s.id === slotId);
+  for (const [code, list] of Object.entries(persistentState.slots || {})) {
+    const found = (list || []).find(
+      (s) =>
+        s.id === slotId ||
+        s.id === rawId ||
+        s.id?.toLowerCase() === slotId.toLowerCase() ||
+        (s as any)._id?.toString() === slotId
+    );
     if (found) {
       targetSlot = found;
       collegeCode = code;
@@ -3630,9 +3668,15 @@ app.put(['/api/college/slots/:id/allot', '/api/college/slots/:id'], async (req, 
 
   if (!targetSlot && isMongoConnected()) {
     try {
-      const dbSlot = await GDSessionModel.findOne({ id: slotId });
+      const dbSlot = await GDSessionModel.findOne({
+        $or: [
+          { id: slotId },
+          { id: rawId },
+          { id: new RegExp(`^${slotId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+        ],
+      });
       if (dbSlot) {
-        collegeCode = normalizeCollegeCode(dbSlot.collegeCode || 'DIT');
+        collegeCode = resolveEffectiveCollegeCode(dbSlot.collegeCode || req.body.collegeCode || 'DIT');
         targetSlot = {
           id: dbSlot.id,
           slotName: dbSlot.slotName,
@@ -3651,7 +3695,7 @@ app.put(['/api/college/slots/:id/allot', '/api/college/slots/:id'], async (req, 
           assignedFacultyEmail: dbSlot.assignedFacultyEmail || '',
           assignedFacultyDept: dbSlot.assignedFacultyDept || '',
           collegeCode,
-          createdAt: new Date().toISOString(),
+          createdAt: dbSlot.createdAt ? new Date(dbSlot.createdAt).toISOString() : new Date().toISOString(),
           students: dbSlot.students || [],
         };
         if (!persistentState.slots[collegeCode]) persistentState.slots[collegeCode] = [];
@@ -3660,8 +3704,33 @@ app.put(['/api/college/slots/:id/allot', '/api/college/slots/:id'], async (req, 
     } catch {}
   }
 
+  // UPSERT fallback: If not found anywhere, create targetSlot under the requested collegeCode
   if (!targetSlot) {
-    return res.status(404).json({ success: false, error: 'GD slot not found' });
+    const effCode = resolveEffectiveCollegeCode(req.body.collegeCode || (req.query.collegeCode as string) || 'DIT');
+    collegeCode = effCode;
+    targetSlot = {
+      id: slotId,
+      slotName: slotName || `Slot: ${topic || ''}`,
+      topic: topic || '',
+      description: description || '',
+      activityType: activityType || 'gd',
+      presentationTopics: presentationTopics || [],
+      slotTiming: slotTiming || '10:00 AM - 10:15 AM',
+      slotDate: slotDate || new Date().toISOString().split('T')[0],
+      status: status || 'scheduled',
+      durationMinutes: Number(durationMinutes) || (activityType === 'presentation' ? 60 : 15),
+      enrolledCount: 0,
+      maxCapacity: Number(maxCapacity) || (activityType === 'presentation' ? 6 : 15),
+      assignedFacultyId: assignedFacultyId || '',
+      assignedFacultyName: assignedFacultyName || '',
+      assignedFacultyEmail: assignedFacultyEmail || '',
+      assignedFacultyDept: assignedFacultyDept || '',
+      collegeCode,
+      createdAt: new Date().toISOString(),
+      students: [],
+    };
+    if (!persistentState.slots[collegeCode]) persistentState.slots[collegeCode] = [];
+    persistentState.slots[collegeCode].push(targetSlot);
   }
 
   if (activityType !== undefined) {
@@ -3724,14 +3793,44 @@ app.put(['/api/college/slots/:id/allot', '/api/college/slots/:id'], async (req, 
   if (slotDate !== undefined) targetSlot.slotDate = String(slotDate).trim();
   if (status !== undefined) targetSlot.status = String(status).trim();
 
-  if (assignedFacultyId !== undefined) {
-    targetSlot.assignedFacultyId = String(assignedFacultyId).trim();
-    const fac = (persistentState.faculty[collegeCode] || []).find(
-      (f) => f.facultyId === assignedFacultyId || f.id === assignedFacultyId
-    );
+  if (assignedFacultyId !== undefined || assignedFacultyName !== undefined) {
+    if (assignedFacultyId !== undefined) {
+      targetSlot.assignedFacultyId = String(assignedFacultyId).trim();
+    }
+    let fac: any = null;
+    for (const [fCode, fList] of Object.entries(persistentState.faculty || {})) {
+      if (normalizeCollegeCode(fCode) === collegeCode || areCollegeCodesEquivalent(fCode, collegeCode)) {
+        fac = (fList || []).find(
+          (f: any) =>
+            (assignedFacultyId && (f.facultyId === assignedFacultyId || f.id === assignedFacultyId)) ||
+            (assignedFacultyName && f.name?.toLowerCase() === String(assignedFacultyName).trim().toLowerCase())
+        );
+        if (fac) break;
+      }
+    }
     targetSlot.assignedFacultyName = assignedFacultyName || fac?.name || targetSlot.assignedFacultyName || 'Assigned Faculty';
     targetSlot.assignedFacultyEmail = assignedFacultyEmail || fac?.email || targetSlot.assignedFacultyEmail || '';
     targetSlot.assignedFacultyDept = assignedFacultyDept || fac?.department || targetSlot.assignedFacultyDept || '';
+    if (fac && !targetSlot.assignedFacultyId) {
+      targetSlot.assignedFacultyId = fac.facultyId || fac.id;
+    }
+  }
+
+  // Synchronize across all equivalent college code buckets
+  for (const [c, list] of Object.entries(persistentState.slots || {})) {
+    if (areCollegeCodesEquivalent(c, collegeCode) || normalizeCollegeCode(c) === collegeCode) {
+      const idx = (list || []).findIndex((s) => s.id === targetSlot!.id);
+      if (idx >= 0) {
+        list[idx] = { ...list[idx], ...targetSlot };
+      }
+    }
+  }
+  if (!persistentState.slots[collegeCode]) persistentState.slots[collegeCode] = [];
+  const canonicalIdx = persistentState.slots[collegeCode].findIndex((s) => s.id === targetSlot!.id);
+  if (canonicalIdx >= 0) {
+    persistentState.slots[collegeCode][canonicalIdx] = { ...persistentState.slots[collegeCode][canonicalIdx], ...targetSlot };
+  } else {
+    persistentState.slots[collegeCode].push(targetSlot);
   }
 
   savePersistentState();
@@ -3756,126 +3855,14 @@ app.put(['/api/college/slots/:id/allot', '/api/college/slots/:id'], async (req, 
   }
 
   try {
-    io.emit('slot-updated', targetSlot);
+    io.emit('slot-updated', { success: true, slot: targetSlot, ...targetSlot });
   } catch {}
 
   res.json({ success: true, slot: targetSlot });
-});
+};
 
-app.post('/api/college/slots/:id/allot', async (req, res) => {
-  const slotId = req.params.id;
-  const {
-    topic,
-    slotName,
-    description,
-    assignedFacultyId,
-    assignedFacultyName,
-    assignedFacultyEmail,
-    assignedFacultyDept,
-    slotTiming,
-    slotDate,
-    status,
-    activityType,
-    durationMinutes,
-    maxCapacity,
-    presentationTopics,
-  } = req.body;
-
-  let targetSlot: BackendCollegeSlotItem | null = null;
-  let collegeCode = '';
-
-  for (const [code, list] of Object.entries(persistentState.slots)) {
-    const found = list.find((s) => s.id === slotId);
-    if (found) {
-      targetSlot = found;
-      collegeCode = code;
-      break;
-    }
-  }
-
-  if (!targetSlot) {
-    return res.status(404).json({ success: false, error: 'GD slot not found' });
-  }
-
-  if (activityType !== undefined) {
-    targetSlot.activityType = activityType;
-  }
-  if (presentationTopics !== undefined) {
-    targetSlot.presentationTopics = presentationTopics;
-  }
-  if (durationMinutes !== undefined) {
-    targetSlot.durationMinutes = Number(durationMinutes);
-  }
-
-  if (targetSlot.activityType === 'presentation') {
-    targetSlot.maxCapacity = 6;
-    if (targetSlot.students && targetSlot.students.length > 0) {
-      if (targetSlot.students.length > 6) {
-        targetSlot.students = targetSlot.students.slice(0, 6);
-      }
-      targetSlot.students.forEach((st: any, idx: number) => {
-        st.seatNumber = idx + 1;
-      });
-    }
-    targetSlot.enrolledCount = Math.min(targetSlot.students?.length || 6, 6);
-    if (!durationMinutes) targetSlot.durationMinutes = 60;
-  } else {
-    if (maxCapacity !== undefined) {
-      targetSlot.maxCapacity = Number(maxCapacity);
-    } else if (!targetSlot.maxCapacity || targetSlot.maxCapacity < 15) {
-      targetSlot.maxCapacity = 15;
-    }
-    if (!durationMinutes && (!targetSlot.durationMinutes || targetSlot.durationMinutes >= 60)) {
-      targetSlot.durationMinutes = 15;
-    }
-  }
-
-  if (topic !== undefined) {
-    targetSlot.topic = String(topic).trim();
-  }
-
-  if (description !== undefined && String(description).trim()) {
-    targetSlot.description = String(description).trim();
-  } else if (targetSlot.topic) {
-    targetSlot.description = targetSlot.activityType === 'presentation'
-      ? 'Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates.'
-      : `Autonomous AI evaluated discussion on "${targetSlot.topic}".`;
-  }
-
-  const proposedSlotName = slotName !== undefined ? String(slotName).trim() : (targetSlot.slotName || '');
-  const cleanProposed = cleanSlotName(proposedSlotName);
-  const slotNumMatch = cleanProposed.match(/^(Slot\s+\d+)/i) || 
-                       (targetSlot.slotName || '').match(/^(Slot\s+\d+)/i) ||
-                       (targetSlot.id || '').match(/slot-.*?-(\d+)/i);
-  const prefix = slotNumMatch 
-    ? (slotNumMatch[1].startsWith('Slot') ? slotNumMatch[1] : `Slot ${slotNumMatch[1]}`) 
-    : (cleanProposed.split(':')[0].trim() || 'Slot');
-
-  const validTopic = targetSlot.topic && !targetSlot.topic.toLowerCase().includes('pending') ? targetSlot.topic : '';
-  targetSlot.slotName = validTopic ? `${prefix}: ${validTopic}` : prefix;
-  if (slotTiming !== undefined) targetSlot.slotTiming = String(slotTiming).trim();
-  if (slotDate !== undefined) targetSlot.slotDate = String(slotDate).trim();
-  if (status !== undefined) targetSlot.status = String(status).trim();
-
-  if (assignedFacultyId !== undefined) {
-    targetSlot.assignedFacultyId = String(assignedFacultyId).trim();
-    const fac = (persistentState.faculty[collegeCode] || []).find(
-      (f) => f.facultyId === assignedFacultyId || f.id === assignedFacultyId
-    );
-    targetSlot.assignedFacultyName = assignedFacultyName || fac?.name || targetSlot.assignedFacultyName || 'Assigned Faculty';
-    targetSlot.assignedFacultyEmail = assignedFacultyEmail || fac?.email || targetSlot.assignedFacultyEmail || '';
-    targetSlot.assignedFacultyDept = assignedFacultyDept || fac?.department || targetSlot.assignedFacultyDept || '';
-  }
-
-  savePersistentState();
-  await persistSlotToMongoDB(targetSlot);
-
-  try {
-    io.emit('slot-updated', targetSlot);
-  } catch {}
-
-  res.json({ success: true, slot: targetSlot });
-});
+app.put(['/api/college/slots/:id/allot', '/api/college/slots/:id'], handleSlotAllotment);
+app.post('/api/college/slots/:id/allot', handleSlotAllotment);
 
 app.post('/api/college/generate-slots', async (req, res) => {
   const code = normalizeCollegeCode(req.body.collegeCode || 'DIT');

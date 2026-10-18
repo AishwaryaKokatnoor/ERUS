@@ -204,7 +204,9 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
       return true;
     })
     .map((s, idx) => {
-      const rawTopic = s.topic ? String(s.topic).trim() : '';
+      const topicFromSlotName = (s.slotName || '').includes(':') ? s.slotName.split(':').slice(1).join(':').trim() : '';
+      const fallbackTopic = (s.rawSession?.topic || topicFromSlotName || '').trim();
+      const rawTopic = s.topic ? String(s.topic).trim() : fallbackTopic;
       const isTopicAllotted =
         rawTopic !== '' &&
         !rawTopic.toLowerCase().includes('pending') &&
@@ -225,27 +227,33 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
       const cleanName = cleanTopic ? `${prefix}: ${cleanTopic}` : prefix;
       const resolvedStatus = s.status === 'completed' || isSlotCompletedLocally(s.id) ? 'completed' : (s.status || 'scheduled');
 
-      const actType = s.activityType || 'gd';
+      const actType = s.activityType || s.rawSession?.activityType || 'gd';
       const isPresentation = actType === 'presentation';
       const maxCap = isPresentation ? 6 : (s.maxCapacity || 15);
       const enrolled = isPresentation 
         ? Math.min(s.enrolledCount ?? s.students?.length ?? 6, 6)
         : (s.enrolledCount ?? s.students?.length ?? (s.rawSession?.students?.length ?? 15));
 
+      const rawFacName = (s as any).assignedFacultyName || (s as any).rawSession?.assignedFacultyName || '';
+      const resolvedFacName = rawFacName && rawFacName !== 'Unassigned' && !rawFacName.toLowerCase().includes('unassigned')
+        ? rawFacName
+        : 'Unassigned';
+      const resolvedFacId = (s as any).assignedFacultyId || (s as any).rawSession?.assignedFacultyId || '';
+
       return {
         id: s.id,
         activityType: actType,
         slotName: cleanName,
         topic: cleanTopic,
-        description: s.description || '',
-        slotTiming: s.slotTiming || '',
+        description: s.description || s.rawSession?.description || '',
+        slotTiming: s.slotTiming || s.rawSession?.slotTiming || '',
         slotDate: s.slotDate || (s as any).scheduledTime || (s as any).rawSession?.slotDate || 'Today',
         status: resolvedStatus,
-        durationMinutes: s.durationMinutes || (isPresentation ? 60 : 15),
+        durationMinutes: s.durationMinutes || s.rawSession?.durationMinutes || (isPresentation ? 60 : 15),
         enrolledCount: enrolled,
         maxCapacity: maxCap,
-        assignedFacultyName: (s as any).assignedFacultyName || 'Unassigned',
-        assignedFacultyId: (s as any).assignedFacultyId || '',
+        assignedFacultyName: resolvedFacName,
+        assignedFacultyId: resolvedFacId,
         students: isPresentation && (s.students?.length > 6) ? s.students.slice(0, 6) : (s.students || s.rawSession?.students || []),
         recordingUrl: s.recordingUrl || (s as any).rawSession?.recordingUrl || '',
         recordingDurationSeconds: s.recordingDurationSeconds || (s as any).rawSession?.recordingDurationSeconds || 0,
@@ -334,7 +342,31 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
       if (slotData) {
         const deletedIds = getDeletedSlotIds();
         const filtered = slotData.filter((s: any) => !deletedIds.has(s.id) && !deletedSlotIds.has(s.id));
-        setSlots(filtered);
+        setSlots((prev) => {
+          const prevMap = new Map(prev.map((ps) => [ps.id, ps]));
+          return filtered.map((s: any) => {
+            const p = prevMap.get(s.id);
+            if (!p) return s;
+            const pTopic = (p.topic || '').trim();
+            const sTopic = (s.topic || '').trim();
+            const hasPTopic = Boolean(pTopic && !pTopic.toLowerCase().includes('pending') && !/^slot\s+\d+\s*$/i.test(pTopic));
+            const hasSTopic = Boolean(sTopic && !sTopic.toLowerCase().includes('pending') && !/^slot\s+\d+\s*$/i.test(sTopic));
+
+            const hasPFac = Boolean(p.assignedFacultyName && p.assignedFacultyName !== 'Unassigned' && !p.assignedFacultyName.toLowerCase().includes('unassigned'));
+            const hasSFac = Boolean(s.assignedFacultyName && s.assignedFacultyName !== 'Unassigned' && !s.assignedFacultyName.toLowerCase().includes('unassigned'));
+
+            return {
+              ...s,
+              topic: hasSTopic ? s.topic : (hasPTopic ? p.topic : s.topic),
+              slotName: hasSTopic && s.slotName ? s.slotName : (hasPTopic && p.slotName ? p.slotName : s.slotName),
+              description: hasSTopic && s.description ? s.description : (hasPTopic && p.description ? p.description : s.description),
+              assignedFacultyId: hasSFac ? s.assignedFacultyId : (hasPFac ? p.assignedFacultyId : s.assignedFacultyId),
+              assignedFacultyName: hasSFac ? s.assignedFacultyName : (hasPFac ? p.assignedFacultyName : s.assignedFacultyName),
+              assignedFacultyDept: hasSFac ? s.assignedFacultyDept : (hasPFac ? p.assignedFacultyDept : s.assignedFacultyDept),
+              activityType: s.activityType || p.activityType || 'gd',
+            };
+          });
+        });
         setHasLoadedSlots(true);
         if (stData) {
           setStats((prev) => ({
@@ -391,11 +423,12 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
       loadAllData(true);
     });
     socket.on('slot-updated', (data: any) => {
-      if (data?.slot?.id) {
-        if (data.slot.status === 'completed') {
-          markSlotCompletedLocally(data.slot.id);
+      const slotObj = data?.slot || data;
+      if (slotObj?.id) {
+        if (slotObj.status === 'completed') {
+          markSlotCompletedLocally(slotObj.id);
         }
-        setSlots((prev) => prev.map((s) => (s.id === data.slot.id ? { ...s, ...data.slot } : s)));
+        setSlots((prev) => prev.map((s) => (s.id === slotObj.id ? { ...s, ...slotObj } : s)));
       }
       loadAllData(true);
     });
@@ -515,10 +548,12 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
       const modeLabel = isPresentation ? 'Classroom Presentation (6 Seats)' : 'GD (15 Seats)';
       setBannerMsg(`Successfully allotted ${modeLabel} topic "${chosenTopic}" and faculty ${allotForm.assignedFacultyName} to ${newSlotName}.`);
       setAllottingSlot(null);
+      const targetId = allottingSlot.id;
       // Immediately reflect updates in local slot state
-      setSlots((prev) =>
-        prev.map((s) => {
-          if (s.id === allottingSlot.id) {
+      setSlots((prev) => {
+        const found = prev.some((s) => s.id === targetId || s.id?.toLowerCase() === targetId.toLowerCase());
+        const mapped = prev.map((s) => {
+          if (s.id === targetId || s.id?.toLowerCase() === targetId.toLowerCase()) {
             return {
               ...s,
               ...payload,
@@ -531,6 +566,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
               description: payload.description,
               assignedFacultyName: payload.assignedFacultyName,
               assignedFacultyId: payload.assignedFacultyId,
+              assignedFacultyDept: payload.assignedFacultyDept,
               rawSession: {
                 ...(s.rawSession || {}),
                 ...payload,
@@ -538,20 +574,71 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
                 slotName: newSlotName,
                 topic: payload.topic,
                 description: payload.description,
+                assignedFacultyName: payload.assignedFacultyName,
+                assignedFacultyId: payload.assignedFacultyId,
+                assignedFacultyDept: payload.assignedFacultyDept,
               },
             };
           }
           return s;
-        })
-      );
+        });
+        if (!found) {
+          mapped.unshift({
+            ...allottingSlot,
+            ...payload,
+            activityType: allotForm.activityType,
+            maxCapacity: isPresentation ? 6 : 15,
+            durationMinutes: isPresentation ? 60 : 15,
+            enrolledCount: isPresentation ? 6 : 15,
+            slotName: newSlotName,
+            topic: payload.topic,
+            description: payload.description,
+            assignedFacultyName: payload.assignedFacultyName,
+            assignedFacultyId: payload.assignedFacultyId,
+            assignedFacultyDept: payload.assignedFacultyDept,
+            rawSession: {
+              ...(allottingSlot.rawSession || {}),
+              ...payload,
+              slotName: newSlotName,
+            },
+          });
+        }
+        return mapped;
+      });
+
       try {
         const local = getLocalSlots(collegeCode);
-        const updated = local.map((s: any) =>
-          s.id === allottingSlot.id
-            ? { ...s, ...payload, topic: payload.topic, description: payload.description, slotName: newSlotName }
-            : s
-        );
+        const exists = local.some((s: any) => s.id === targetId || s.id?.toLowerCase() === targetId.toLowerCase());
+        let updated: any[] = [];
+        if (exists) {
+          updated = local.map((s: any) =>
+            (s.id === targetId || s.id?.toLowerCase() === targetId.toLowerCase())
+              ? { ...s, ...payload, topic: payload.topic, description: payload.description, slotName: newSlotName }
+              : s
+          );
+        } else {
+          updated = [
+            {
+              ...allottingSlot,
+              ...payload,
+              topic: payload.topic,
+              description: payload.description,
+              slotName: newSlotName,
+            },
+            ...local,
+          ];
+        }
         saveLocalSlots(collegeCode, updated);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('erus-slots-updated', {
+              detail: {
+                collegeCode,
+                slots: updated,
+              },
+            })
+          );
+        }
       } catch {}
       await loadAllData(true);
     } else {
