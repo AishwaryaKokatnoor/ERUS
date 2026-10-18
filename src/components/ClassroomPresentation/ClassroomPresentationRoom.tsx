@@ -132,6 +132,9 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   const isMicOnRef = useRef<boolean>(false);
   const [isRoomAudioMuted, setIsRoomAudioMuted] = useState<boolean>(voiceMuted);
   const [isSharingScreen, setIsSharingScreen] = useState<boolean>(false);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [slideMode, setSlideMode] = useState<'screen' | 'deck'>('deck');
+  const [currentSlideIndex, setCurrentSlideIndex] = useState<number>(0);
   const [presenterSeconds, setPresenterSeconds] = useState<number>(0);
   const [activeStudentIndex, setActiveStudentIndex] = useState<number>(0);
 
@@ -435,10 +438,6 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   const [isPeerQASilenceTriggered, setIsPeerQASilenceTriggered] = useState<boolean>(false);
   const [qaTimerSeconds, setQaTimerSeconds] = useState<number>(0);
 
-  // Real Screen Sharing & Topic Slide Deck
-  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
-  const [currentSlideIndex, setCurrentSlideIndex] = useState<number>(0);
-  const [slideMode, setSlideMode] = useState<'screen' | 'deck'>('deck');
 
   // Presentation slides generated for currentTopic
   const topicSlides = useMemo(() => {
@@ -553,7 +552,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
     enabled: true,
     topicTitle: currentTopic || session.topic || 'Classroom Presentation',
     layoutMode: 'presentation',
-    screenStream: isSharingScreen && slideMode === 'screen' ? screenStream : null,
+    screenStream: (typeof screenStream !== 'undefined' && isSharingScreen && slideMode === 'screen') ? screenStream : null,
     presentationInfo: {
       badge: activeSlide?.badge,
       title: activeSlide?.title,

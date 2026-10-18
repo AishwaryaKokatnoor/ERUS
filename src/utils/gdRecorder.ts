@@ -1869,8 +1869,9 @@ export function useGDRecorder({
         }
       }
 
-      if (screenStream && screenStream.getAudioTracks().length > 0) {
-        mixStreamIntoDestination(screenStream);
+      const activeScreen = screenStreamRef.current || (typeof screenStream !== 'undefined' ? screenStream : null);
+      if (activeScreen && typeof activeScreen.getAudioTracks === 'function' && activeScreen.getAudioTracks().length > 0) {
+        mixStreamIntoDestination(activeScreen);
       }
 
       // If no tracks connected yet, create an oscillator silence track so MediaRecorder doesn't error
