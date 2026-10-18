@@ -6147,10 +6147,22 @@ app.post('/api/session/speak', (req, res) => {
   liveTranscripts.push(newTranscript);
   persistTranscriptToMongoDB(newTranscript);
 
-  // Update student stats
-  student.speakingTurns += 1;
-  student.speakingDurationSeconds += Math.max(15, Math.round(text.length / 7));
-  student.lastSpokenAt = Date.now();
+  // Update student stats if substantive points were made
+  const cleanWords = text.trim().split(/\s+/).filter(Boolean);
+  const fillerTokens = new Set([
+    'ok', 'okay', 'yes', 'yeah', 'yep', 'no', 'nope', 'sure', 'fine', 'alright',
+    'right', 'agree', 'thank', 'thanks', 'you', 'done', 'finished', 'thats', 'that',
+    'is', 'it', 'all', 'hmm', 'well', 'got', 'understood', 'cool', 'sir', 'maam',
+    'actually', 'basically', 'so', 'like', 'hello', 'hlo', 'hi', 'hey', 'am', 'i', 'audible', 'clear'
+  ]);
+  const substantiveWords = cleanWords.filter((w) => !fillerTokens.has(w.toLowerCase().replace(/[^a-z0-9]/g, '')));
+  const isGoodPoint = cleanWords.length >= 3 && substantiveWords.length >= 2;
+
+  if (isGoodPoint) {
+    student.speakingTurns += 1;
+    student.speakingDurationSeconds += Math.max(3, Math.round(cleanWords.length / 2.1));
+    student.lastSpokenAt = Date.now();
+  }
   currentLiveSession.currentSpeakerId = student.id;
   currentLiveSession.silenceTimerSeconds = 0;
 
@@ -8471,20 +8483,12 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
         room.waitingForParticipantId = undefined;
         room.facilitatorSpeakingUntil = 0;
 
-        // Broadcast active floor tick
+        // Active floor broadcast while someone is speaking
         io.to(`room-${slotId}`).emit('silence-timer-tick', {
           silenceTimerSeconds: 0,
           silenceStage: 0,
           maxSilence: 9,
         });
-
-        // Track current speaker's continuous speaking time (no mid-speech interruptions)
-        if (room.currentSpeakerSocketId) {
-          const spkPeer = room.peers.get(room.currentSpeakerSocketId);
-          if (spkPeer) {
-            spkPeer.speakingDurationSeconds += 1;
-          }
-        }
       }
     }, 1000);
 
@@ -9890,42 +9894,16 @@ io.on('connection', (socket) => {
     if (cameraActive !== undefined) peer.cameraActive = cameraActive;
 
     if (peer.isSpeaking) {
-      if (!wasSpeaking) {
-        peer.speakingStartedAt = Date.now();
-        peer.speakingTurns = (peer.speakingTurns || 0) + 1;
-        peer.floorTurnCounted = true;
-        io.to(`room-${safeSlotId}`).emit('peer-stats-updated', {
-          socketId: socket.id,
-          userId: peer.userId,
-          seatNumber: peer.seatNumber,
-          speakingTurns: peer.speakingTurns,
-          speakingDurationSeconds: peer.speakingDurationSeconds || 0,
-        });
-      }
       peer.lastSpokeAt = Date.now();
-      // Reset silence watchdog whenever anyone speaks
+      // Reset silence watchdog while candidate is actively uttering speech words
       room.silenceTimerSeconds = 0;
       room.silenceStage = 0;
-      room.facilitatorSpeakingUntil = 0; // Human speaker immediately cuts off facilitator speech
+      room.facilitatorSpeakingUntil = 0;
       if (room.turnTimer) {
         clearTimeout(room.turnTimer);
         room.turnTimer = undefined;
       }
       room.waitingForParticipantId = undefined;
-    } else if (wasSpeaking && !peer.isSpeaking) {
-      if (peer.speakingStartedAt) {
-        const spokenSecs = Math.max(1, Math.round((Date.now() - peer.speakingStartedAt) / 1000));
-        peer.speakingDurationSeconds = (peer.speakingDurationSeconds || 0) + spokenSecs;
-        peer.speakingStartedAt = undefined;
-      }
-      peer.floorTurnCounted = false;
-      io.to(`room-${safeSlotId}`).emit('peer-stats-updated', {
-        socketId: socket.id,
-        userId: peer.userId,
-        seatNumber: peer.seatNumber,
-        speakingTurns: peer.speakingTurns,
-        speakingDurationSeconds: peer.speakingDurationSeconds,
-      });
     }
 
     // Identify all student peers currently speaking with active mics
@@ -10135,13 +10113,22 @@ io.on('connection', (socket) => {
       });
     }
 
-    if (!peer.floorTurnCounted) {
-      peer.speakingTurns += 1;
-      peer.floorTurnCounted = true;
+    const cleanWords = text.trim().split(/\s+/).filter(Boolean);
+    const fillerTokens = new Set([
+      'ok', 'okay', 'yes', 'yeah', 'yep', 'no', 'nope', 'sure', 'fine', 'alright',
+      'right', 'agree', 'thank', 'thanks', 'you', 'done', 'finished', 'thats', 'that',
+      'is', 'it', 'all', 'hmm', 'well', 'got', 'understood', 'cool', 'sir', 'maam',
+      'actually', 'basically', 'so', 'like', 'hello', 'hlo', 'hi', 'hey', 'am', 'i', 'audible', 'clear'
+    ]);
+    const substantiveWords = cleanWords.filter((w) => !fillerTokens.has(w.toLowerCase().replace(/[^a-z0-9]/g, '')));
+    const isGoodPoint = cleanWords.length >= 3 && substantiveWords.length >= 2;
+
+    if (isGoodPoint) {
+      peer.speakingTurns = (peer.speakingTurns || 0) + 1;
+      const turnSeconds = Math.max(3, Math.round(cleanWords.length / 2.1));
+      peer.speakingDurationSeconds = (peer.speakingDurationSeconds || 0) + turnSeconds;
+      peer.lastSpokeAt = Date.now();
     }
-    const estimatedDuration = Math.max(6, Math.round(text.trim().split(/\s+/).filter(Boolean).length / 2.1));
-    peer.speakingDurationSeconds = (peer.speakingDurationSeconds || 0) + estimatedDuration;
-    peer.lastSpokeAt = Date.now();
     room.silenceTimerSeconds = 0;
     room.silenceStage = 0;
 

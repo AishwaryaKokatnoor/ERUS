@@ -106,6 +106,8 @@ export function useWebRTCRoom({
   const [silenceTimerSeconds, setSilenceTimerSeconds] = useState(0);
   const [isMicMuted, setIsMicMuted] = useState(currentUser?.role === 'faculty');
   const [isSpeakingLive, setIsSpeakingLive] = useState(false);
+  const isSpeakingLiveRef = useRef(false);
+  isSpeakingLiveRef.current = isSpeakingLive;
   const [localVolume, setLocalVolume] = useState(0);
   const [isFloorLocked, setIsFloorLocked] = useState(false);
   const [floorSpeakerName, setFloorSpeakerName] = useState<string | null>(null);
@@ -551,46 +553,17 @@ export function useWebRTCRoom({
             setLocalVolume(normVol);
           }
 
-          // Detect speaking when volume exceeds threshold (open mics enabled)
-          const isAiSpeaking = roomVoice.isSpeaking();
-          // Never kill active AI voice on mic volume; speaker output leaks into laptop mic.
-          const speakingNow = !isAiSpeaking && avg > 8 && !isMicMutedRef.current;
-          setIsSpeakingLive(speakingNow);
-
-          if (speakingNow) {
-            if (speakingStateTimeoutRef.current) {
-              clearTimeout(speakingStateTimeoutRef.current);
-              speakingStateTimeoutRef.current = null;
-            }
-            // Emit immediately if speaking status just switched to true, or throttle periodic updates to ~350ms
-            const stateChanged = !lastSpeakingStateEmittedRef.current;
-            const timeSinceEmit = now - lastSpeakingEmitTimestampRef.current;
-            if (socketRef.current && (stateChanged || timeSinceEmit > 350)) {
-              lastSpeakingStateEmittedRef.current = true;
-              lastSpeakingEmitTimestampRef.current = now;
-              socketRef.current.emit('peer-speaking-state', {
-                slotId,
-                isSpeaking: true,
-                micActive: !isMicMutedRef.current,
-                cameraActive: Boolean(isCameraOnRef.current && videoStreamRef.current),
-                volumeLevel: Math.round(avg),
-              });
-            }
-          } else {
-            if (lastSpeakingStateEmittedRef.current && !speakingStateTimeoutRef.current && socketRef.current) {
-              speakingStateTimeoutRef.current = setTimeout(() => {
-                lastSpeakingStateEmittedRef.current = false;
-                lastSpeakingEmitTimestampRef.current = Date.now();
-                socketRef.current?.emit('peer-speaking-state', {
-                  slotId,
-                  isSpeaking: false,
-                  micActive: !isMicMutedRef.current,
-                  cameraActive: Boolean(isCameraOnRef.current && videoStreamRef.current),
-                  volumeLevel: 0,
-                });
-                speakingStateTimeoutRef.current = null;
-              }, 600);
-            }
+          // Broadcast volume level for UI visualizers without falsely declaring speaking turns from ambient noise
+          const timeSinceEmit = now - lastSpeakingEmitTimestampRef.current;
+          if (socketRef.current && (timeSinceEmit > 350 || Math.abs(normVol - lastVolumeStateEmittedRef.current) >= 12)) {
+            lastSpeakingEmitTimestampRef.current = now;
+            socketRef.current.emit('peer-speaking-state', {
+              slotId,
+              isSpeaking: isSpeakingLiveRef.current,
+              micActive: !isMicMutedRef.current,
+              cameraActive: Boolean(isCameraOnRef.current && videoStreamRef.current),
+              volumeLevel: normVol,
+            });
           }
 
           animFrameRef.current = requestAnimationFrame(checkVolume);
@@ -1202,6 +1175,8 @@ export function useWebRTCRoom({
 
   // Explicitly notify room that participant has started speaking
   const notifySpeakingStarted = useCallback(() => {
+    isSpeakingLiveRef.current = true;
+    setIsSpeakingLive(true);
     if (socketRef.current) {
       if (speakingStateTimeoutRef.current) {
         clearTimeout(speakingStateTimeoutRef.current);
@@ -1216,12 +1191,13 @@ export function useWebRTCRoom({
         cameraActive: Boolean(isCameraOnRef.current && videoStreamRef.current),
         volumeLevel: 60,
       });
-      setIsSpeakingLive(true);
     }
   }, [slotId]);
 
   // Explicitly notify room that participant has yielded the floor
   const notifySpeakingFinished = useCallback(() => {
+    isSpeakingLiveRef.current = false;
+    setIsSpeakingLive(false);
     if (socketRef.current) {
       socketRef.current.emit('peer-speaking-state', {
         slotId,

@@ -623,27 +623,28 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       return;
     }
     const interval = setInterval(() => {
-      const curAudio = audioLevelRef.current;
       const curTranscript = liveSpeechTranscriptRef.current;
       const curSpeakingLive = rtcIsSpeakingLiveRef.current;
       const curSession = sessionRef.current;
 
+      // Crucial: Only consider talking if recognized words are actively being uttered
+      // Ambient microphone noise, fan, or breath MUST NOT reset silence!
+      const hasSpokenWords = Boolean(curTranscript && curTranscript.trim().length > 1);
       const isUserTalking =
         !rtcIsMicMutedRef.current &&
         isListeningMicRef.current &&
-        (curSpeakingLive || curAudio > 16 || Boolean(curTranscript));
+        (curSpeakingLive || hasSpokenWords);
 
       const isAnyActive =
         curSession.isFacilitatorSpeaking ||
         roomVoice.isSpeaking() ||
-        aiVoicePausedMicRef.current ||
-        isUserTalking ||
-        (curSession.students || []).some((s) => s.isSpeaking);
+        isUserTalking;
 
       if (isAnyActive) {
         setLocalSilenceSeconds(0);
         clientSilenceStageRef.current = 0;
       } else {
+        // Microphones remain open, but no candidate is uttering points -> silence ticks!
         setLocalSilenceSeconds((prev) => prev + 1);
       }
     }, 1000);
@@ -659,12 +660,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     });
   }, [rtcSilenceTimer, localSilenceSeconds]);
 
-  // Continuous real-time speaking time tracker: increments participant speaking seconds live while speaking
-  const activeSpeakersTrackerRef = useRef<Set<string>>(new Set());
+  // Active speaker visual state monitor (turns and duration update on substantive speech transcripts)
   useEffect(() => {
     if (!isSessionActive) return;
     const interval = setInterval(() => {
-      const curAudio = audioLevelRef.current;
       const curTranscript = liveSpeechTranscriptRef.current;
       const curSpeakingLive = rtcIsSpeakingLiveRef.current;
       const curPeers = rtcPeersRef.current;
@@ -673,7 +672,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         !isFaculty &&
         !rtcIsMicMutedRef.current &&
         isListeningMicRef.current &&
-        (curSpeakingLive || curAudio > 18 || Boolean(curTranscript));
+        (curSpeakingLive || Boolean(curTranscript && curTranscript.trim().length > 1));
 
       setSession((prev) => {
         let hasChanges = false;
@@ -684,28 +683,22 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           const isAiSpeaking = Boolean(s.isDemoAI && s.isSpeaking);
 
           const isCurrentlySpeaking = isThisUserSpeaking || isRemotePeerSpeaking || isAiSpeaking;
-          const speakerKey = s.id || `seat-${s.seatNumber}`;
 
-          if (isCurrentlySpeaking) {
+          if (s.isSpeaking !== isCurrentlySpeaking) {
             hasChanges = true;
-            let newTurns = s.speakingTurns || 0;
-            if (!activeSpeakersTrackerRef.current.has(speakerKey)) {
-              activeSpeakersTrackerRef.current.add(speakerKey);
-              newTurns += 1;
-            }
             return {
               ...s,
-              isSpeaking: true,
-              speakingTurns: newTurns,
-              speakingDurationSeconds: (s.speakingDurationSeconds || 0) + 1,
-              lastSpokeAt: Date.now(),
+              isSpeaking: isCurrentlySpeaking,
+              speakingDurationSeconds: isAiSpeaking ? (s.speakingDurationSeconds || 0) + 1 : s.speakingDurationSeconds,
             };
-          } else {
-            if (activeSpeakersTrackerRef.current.has(speakerKey)) {
-              activeSpeakersTrackerRef.current.delete(speakerKey);
-            }
-            return s;
+          } else if (isAiSpeaking) {
+            hasChanges = true;
+            return {
+              ...s,
+              speakingDurationSeconds: (s.speakingDurationSeconds || 0) + 1,
+            };
           }
+          return s;
         });
         return hasChanges ? { ...prev, students: updated } : prev;
       });
@@ -1324,6 +1317,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     // Broadcast directly to room transcript & peers
     if (handleSendUserStatementRef.current) {
       handleSendUserStatementRef.current(textToCommit);
+    }
+
+    if (rtcNotifySpeakingFinished) {
+      rtcNotifySpeakingFinished();
     }
 
     // Refresh SpeechRecognition instance cleanly so resultIndex resets to 0 and Chrome buffers don't get stuck
@@ -2086,7 +2083,19 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     // Broadcast live to all connected peers in the room via WebRTC Socket.IO (PDF Page 5, FR-1)
     rtcBroadcastTranscript(text, elapsedSeconds, newEntry.id);
 
-    // Update user stats and mark speaking while delivering statement
+    // Check if the statement consists of substantive points (not just noise or 1-word filler)
+    const cleanWords = text.trim().split(/\s+/).filter(Boolean);
+    const fillerTokens = new Set([
+      'ok', 'okay', 'yes', 'yeah', 'yep', 'no', 'nope', 'sure', 'fine', 'alright',
+      'right', 'agree', 'thank', 'thanks', 'you', 'done', 'finished', 'thats', 'that',
+      'is', 'it', 'all', 'hmm', 'well', 'got', 'understood', 'cool', 'sir', 'maam',
+      'actually', 'basically', 'so', 'like', 'hello', 'hlo', 'hi', 'hey', 'am', 'i', 'audible', 'clear'
+    ]);
+    const substantiveWords = cleanWords.filter((w) => !fillerTokens.has(w.toLowerCase().replace(/[^a-z0-9]/g, '')));
+    const isGoodPoint = cleanWords.length >= 3 && substantiveWords.length >= 2;
+    const addedSpeakingSeconds = isGoodPoint ? Math.max(3, Math.round(cleanWords.length / 2.1)) : 0;
+
+    // Update user stats: ONLY increment turns and seconds if transcript consists of good points!
     setSession((prev) => ({
       ...prev,
       silenceTimerSeconds: 0,
@@ -2096,11 +2105,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           ? {
               ...s,
               isSpeaking: true,
-              speakingTurns: s.speakingTurns + 1,
-              speakingDurationSeconds: Math.max(
-                s.speakingDurationSeconds + 1,
-                s.speakingDurationSeconds + Math.max(8, Math.round(text.split(/\s+/).filter(Boolean).length / 2.1))
-              ),
+              speakingTurns: isGoodPoint ? (s.speakingTurns || 0) + 1 : s.speakingTurns,
+              speakingDurationSeconds: isGoodPoint
+                ? (s.speakingDurationSeconds || 0) + addedSpeakingSeconds
+                : s.speakingDurationSeconds,
               lastSpokenAt: Date.now(),
             }
           : { ...s, isSpeaking: false }
