@@ -354,7 +354,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     onSessionEnded: () => {
       // Synchronized GD termination: faculty has completed the GD, so student view automatically finishes & evaluates
       if (gdRecorderRef.current?.isRecording) {
-        gdRecorderRef.current.stopAndUploadRecording(session.slotId || session.id).catch(() => {});
+        gdRecorderRef.current.stopAndUploadRecording(session.id || session.slotId || 'slot-1').catch(() => {});
       }
       onFinishSession();
     },
@@ -600,7 +600,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       const finishWithRecording = async () => {
         if (gdRecorderRef.current?.isRecording) {
           try {
-            await gdRecorderRef.current.stopAndUploadRecording(session.slotId || session.id);
+            await gdRecorderRef.current.stopAndUploadRecording(session.id || session.slotId || 'slot-1');
           } catch (err) {
             console.warn('[GD Room] Student recording upload on completion notice:', err);
           }
@@ -614,7 +614,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         cancelled = true;
       };
     }
-  }, [session.status, currentUser?.role, onFinishSession, session.slotId, session.id]);
+  }, [session.status, currentUser?.role, onFinishSession, session.id, session.slotId]);
 
   // Continuous local silence stopwatch fallback to ensure 3s triggers even during socket network lag
   const [localSilenceSeconds, setLocalSilenceSeconds] = useState(0);
@@ -1121,7 +1121,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   }, []);
 
   const gdRecorder = useGDRecorder({
-    slotId: session.slotId || session.id || 'slot-1',
+    slotId: session.id || session.slotId || 'slot-1',
     isSessionActive: session.status === 'active',
     localStream: videoStream,
     localAudioStream: rtcLocalAudioStream || (getLocalAudioStream ? getLocalAudioStream() : null) || audioStream,
@@ -1156,14 +1156,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   useEffect(() => {
     if (typeof window !== 'undefined') {
       (window as any).__erusStopAndUploadRecording = () =>
-        gdRecorderRef.current?.stopAndUploadRecording(session.slotId || session.id);
+        gdRecorderRef.current?.stopAndUploadRecording(session.id || session.slotId || 'slot-1');
     }
     return () => {
       if (typeof window !== 'undefined') {
         delete (window as any).__erusStopAndUploadRecording;
       }
     };
-  }, [session.slotId, session.id]);
+  }, [session.id, session.slotId]);
 
   // Conclude or leave GD discussion with automatic video recording preservation
   const handleConcludeOrLeaveSession = useCallback(async () => {
@@ -1180,7 +1180,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       setIsFinalizingRecording(true);
       try {
         const uploadResult = await Promise.race([
-          gdRecorder.stopAndUploadRecording(session.slotId || session.id),
+          gdRecorder.stopAndUploadRecording(session.id || session.slotId || 'slot-1'),
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
         ]);
         if (uploadResult?.recordingUrl) {
@@ -1195,7 +1195,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     }
     // Session completion and report persistence are handled by the authorized onFinishSession callback.
     onFinishSession();
-  }, [gdRecorder, session.slotId, session.id, isFacultyOrAdmin, rtcFinishSession, onFinishSession, liveSpeechTranscript, setSession]);
+  }, [gdRecorder, session.id, session.slotId, isFacultyOrAdmin, rtcFinishSession, onFinishSession, liveSpeechTranscript, setSession]);
 
   const activeStudentUser = !isFaculty ? activeDisplayStudents.find((s) => s.isUser) : null;
   const isUserSpeakingLive = !isFaculty && !rtcIsMicMuted && isListeningMic && (rtcIsSpeakingLive || Boolean(liveSpeechTranscript));

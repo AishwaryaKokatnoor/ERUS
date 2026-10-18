@@ -150,7 +150,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
     setMicEnabled: rtcSetMicEnabled,
     localAudioStream: rtcLocalAudioStream,
   } = useWebRTCRoom({
-    slotId: session.slotId || session.id || 'slot-presentation-1',
+    slotId: session.id || session.slotId || 'slot-presentation-1',
     currentUser,
     videoStream,
     isCameraOn,
@@ -543,7 +543,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
 
   // Automated Presentation Video/Audio Recorder (Saved to Faculty Dashboard with presentation stage layout)
   const gdRecorder = useGDRecorder({
-    slotId: session.slotId || session.id || 'slot-1',
+    slotId: session.id || session.slotId || 'slot-1',
     isSessionActive: session.status === 'active',
     localStream: videoStream,
     localAudioStream: audioStream || rtcLocalAudioStream,
@@ -588,14 +588,14 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   useEffect(() => {
     if (typeof window !== 'undefined') {
       (window as any).__erusStopAndUploadRecording = () =>
-        gdRecorder.stopAndUploadRecording(session.slotId || session.id);
+        gdRecorder.stopAndUploadRecording(session.id || session.slotId || 'slot-1');
     }
     return () => {
       if (typeof window !== 'undefined') {
         delete (window as any).__erusStopAndUploadRecording;
       }
     };
-  }, [gdRecorder, session.slotId, session.id]);
+  }, [gdRecorder, session.id, session.slotId]);
 
   // Append entry to live activity transcript feed
   const addTranscriptEntry = (speakerName: string, text: string, isFacilitator = false) => {
@@ -766,7 +766,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   const handleFinalizeAllPresentations = async () => {
     if (gdRecorder.isRecording) {
       try {
-        const uploadResult = await gdRecorder.stopAndUploadRecording(session.slotId || session.id);
+        const uploadResult = await gdRecorder.stopAndUploadRecording(session.id || session.slotId || 'slot-1');
         if (uploadResult?.recordingUrl) {
           session.recordingUrl = uploadResult.recordingUrl;
         }

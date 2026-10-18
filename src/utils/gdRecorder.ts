@@ -1918,9 +1918,30 @@ export function useGDRecorder({
         chosenMime = getBestSupportedAudioMimeType();
       }
 
-      mimeTypeRef.current = chosenMime;
-      const recorderOptions: MediaRecorderOptions = chosenMime ? { mimeType: chosenMime } : {};
-      const recorder = new MediaRecorder(recordingStream, recorderOptions);
+      let recorder: MediaRecorder;
+      try {
+        const recorderOptions: MediaRecorderOptions = chosenMime ? { mimeType: chosenMime } : {};
+        recorder = new MediaRecorder(recordingStream, recorderOptions);
+        mimeTypeRef.current = chosenMime;
+      } catch (mimeErr) {
+        console.warn('[GD Recorder] Primary MediaRecorder init with chosen mime failed, falling back to default stream codec:', mimeErr);
+        try {
+          // Tier 2: let the browser pick native default codec for this stream
+          recorder = new MediaRecorder(recordingStream);
+          mimeTypeRef.current = recorder.mimeType || '';
+        } catch (streamErr) {
+          console.warn('[GD Recorder] Stream MediaRecorder failed, falling back to audio-only destination stream:', streamErr);
+          // Tier 3: fallback to pure audio destination stream so the discussion audio is never lost
+          const audioMime = getBestSupportedAudioMimeType();
+          try {
+            recorder = audioMime ? new MediaRecorder(dest.stream, { mimeType: audioMime }) : new MediaRecorder(dest.stream);
+            mimeTypeRef.current = audioMime || recorder.mimeType || '';
+          } catch (audioErr) {
+            recorder = new MediaRecorder(dest.stream);
+            mimeTypeRef.current = recorder.mimeType || '';
+          }
+        }
+      }
       mediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = (e) => {
