@@ -203,7 +203,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
         college: currentUser.college || session.collegeCode || 'Institution',
         course: currentUser.course || 'Computer Science & Engineering',
         batch: currentUser.batch || '2024-2028',
-        avatar: currentUser.avatar || `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(currentUser.name || 'presenter')}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`,
+        avatar: currentUser.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(currentUser.name || 'presenter')}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`,
         seatNumber: normalizedUserSeat,
         isUser: true,
         isRealPeer: false,
@@ -272,7 +272,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
         userId: peer.userId,
         seatNumber: desiredSeat,
         name: peer.name || `Student ${desiredSeat}`,
-        avatar: peer.avatar || `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(peer.name || String(desiredSeat))}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`,
+        avatar: peer.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(peer.name || String(desiredSeat))}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`,
         college: peer.college || session.collegeCode || 'Institution',
         course: (peer as any).course || 'Computer Science & Engineering',
         batch: (peer as any).batch || '2024-2028',
@@ -334,7 +334,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
           isUser: false,
           isEmptySeat: false,
           isRealPeer: false,
-          avatar: st.avatar || `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(st.name)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`,
+          avatar: st.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(st.name)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`,
         });
       }
     });
@@ -352,7 +352,7 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
         college: currentUser.college || session.collegeCode || 'Institution',
         course: currentUser.course || 'Computer Science & Engineering',
         batch: currentUser.batch || '2024-2028',
-        avatar: currentUser.avatar || `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(currentUser.name || 'presenter')}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`,
+        avatar: currentUser.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(currentUser.name || 'presenter')}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`,
         seatNumber: 1,
         isUser: true,
         isRealPeer: false,

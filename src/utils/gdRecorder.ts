@@ -722,13 +722,20 @@ export function useGDRecorder({
         pCtx.fillRect(px, py, w, h);
 
         let didDrawImg = false;
-        if (tile.avatar) {
-          let img = avatarImagePoolRef.current.get(tile.avatar);
+        const avatarRaw = tile.avatar || (
+          tile.name
+            ? `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(tile.name)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`
+            : ''
+        );
+        const avatarUrl = avatarRaw.replace(/\/lorelei\//g, '/avataaars/');
+
+        if (avatarUrl) {
+          let img = avatarImagePoolRef.current.get(avatarUrl);
           if (!img) {
             img = new Image();
             img.crossOrigin = 'anonymous';
-            img.src = tile.avatar;
-            avatarImagePoolRef.current.set(tile.avatar, img);
+            img.src = avatarUrl;
+            avatarImagePoolRef.current.set(avatarUrl, img);
           }
           if (img.complete && img.naturalWidth > 0) {
             const iw = img.naturalWidth;
@@ -736,8 +743,19 @@ export function useGDRecorder({
             const scale = Math.max(w / iw, h / ih);
             const sw = iw * scale;
             const sh = ih * scale;
-            const sx = px + (w - sw) / 2;
-            const sy = py + (h - sh) / 2;
+
+            // Inward-facing orientation for human avatars:
+            // Table center is at (640, 362).
+            // - Bottom participant (dx ≈ 0): Face directly forward/up into the table.
+            // - Left participant (dx > 25): Face inward to the right into the table.
+            // - Right participant (dx < -25): Face inward to the left into the table.
+            const dx = 640 - (px + w / 2);
+            const dy = 362 - (py + h / 2);
+            const shiftX = Math.max(-10, Math.min(10, dx * 0.05));
+            const shiftY = Math.max(-8, Math.min(8, dy * 0.04));
+
+            const sx = px + (w - sw) / 2 + shiftX;
+            const sy = py + (h - sh) / 2 + shiftY;
             pCtx.drawImage(img, sx, sy, sw, sh);
             didDrawImg = true;
           }

@@ -965,7 +965,7 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
       seatNumber: idx + 1,
       isUser: false,
       micActive: false,
-      avatar: (stu as any).avatar || `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(stu.name)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`,
+      avatar: (stu as any).avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(stu.name)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`,
       speakingDurationSeconds: 0,
       speakingTurns: 0,
       interruptionCount: 0,

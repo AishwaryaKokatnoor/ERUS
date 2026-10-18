@@ -1121,7 +1121,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       cameraActive: st.isUser ? isCameraOn : (st.cameraActive ?? true),
       isUser: st.isUser,
       videoStream: st.isUser ? (videoStream || st.videoStream) : st.videoStream,
-      avatar: st.avatar || (st.name ? `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(st.name)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf` : ''),
+      avatar: (st.avatar || (st.name ? `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(st.name)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf` : '')).replace(/\/lorelei\//g, '/avataaars/'),
       turns: st.speakingTurns ?? (st as any).turns ?? 0,
       secondsSpoken: st.speakingDurationSeconds ?? (st as any).secondsSpoken ?? 0,
       isMuted: st.isUser ? (rtcIsMicMuted || !isListeningMic) : (st.isMuted ?? false),
@@ -4662,37 +4662,29 @@ export const StudentVideoFrame: React.FC<{
   const isCameraEnabled = isUser ? isUserCameraOn : (student.cameraActive !== false || hasRemoteVideoTrack);
   const isMicLive = isUser ? isListeningMic : (isCurrentSpeaker || student.isSpeaking);
 
-  // Clear human face portrait avatar fallback (using SVG Lorelei portraits seeded by name)
-  const resolvedAvatar = student.avatar || (
+  // Clear human face portrait avatar fallback (using SVG Avataaars portraits seeded by name)
+  const rawAvatar = student.avatar || (
     student.name
-      ? `https://api.dicebear.com/7.x/lorelei/svg?seed=${encodeURIComponent(student.name)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`
+      ? `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(student.name)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`
       : ''
   );
+  const resolvedAvatar = rawAvatar.replace(/\/lorelei\//g, '/avataaars/');
 
-  // Inward-facing orientation for animated face avatars:
-  // Around the round conference table, participants face INWARD toward the table center (50%, 50%):
-  // Default DiceBear Lorelei portrait faces to the character's right (viewer's left).
-  // - Students on the RIGHT of the table (leftPct > 51.5 or Math.cos(seatAngle) > 0.08): Table is to their left, so avatar faces left directly into the table.
-  // - Students on the LEFT of the table (leftPct < 48.5 or Math.cos(seatAngle) < -0.08): Table is to their right, so avatar flips horizontally (scaleX(-1)) to face right into the table.
-  // - Seats near top of table angle slightly down into the table.
-  // - Seats near bottom of table angle slightly up into the table.
-  const isRightOfCenter = (leftPct !== undefined && leftPct > 51.5) || (seatAngle !== undefined && Math.cos(seatAngle) > 0.08);
-  const isLeftOfCenter = (leftPct !== undefined && leftPct < 48.5) || (seatAngle !== undefined && Math.cos(seatAngle) < -0.08);
-  const isTopOfCenter = (topPct !== undefined && topPct < 49) || position === 'top' || (seatAngle !== undefined && Math.sin(seatAngle) < -0.3);
-  const isBottomOfCenter = (topPct !== undefined && topPct > 51) || position === 'bottom' || (seatAngle !== undefined && Math.sin(seatAngle) > 0.3);
+  // Inward-facing orientation for human avatars:
+  // Around the circular round table, participants face INWARD directly toward the table center (50%, 50%):
+  // - Students at the BOTTOM of the table: Face directly forward/up into the table (zero sideways rotation).
+  // - Students on the LEFT of the table: Face inward to the right (toward table center).
+  // - Students on the RIGHT of the table: Face inward to the left (toward table center).
+  // - Students at the TOP of the table: Face directly forward/down into the table.
+  const dx = (leftPct !== undefined ? 50 - leftPct : (seatAngle !== undefined ? -Math.cos(seatAngle) * 35 : 0));
+  const dy = (topPct !== undefined ? 50 - topPct : (seatAngle !== undefined ? -Math.sin(seatAngle) * 35 : 0));
 
-  let faceTransform = '';
-  if (isLeftOfCenter) {
-    // Face right into the table with inward 2.5D perspective
-    faceTransform = 'scaleX(-1) perspective(400px) rotateY(-12deg)';
-  } else if (isRightOfCenter) {
-    // Face left into the table with inward 2.5D perspective
-    faceTransform = 'scaleX(1) perspective(400px) rotateY(-12deg)';
-  } else if (isTopOfCenter) {
-    faceTransform = 'perspective(400px) rotateX(10deg)';
-  } else if (isBottomOfCenter) {
-    faceTransform = 'perspective(400px) rotateX(-10deg)';
-  }
+  // Inward rotation: dx > 0 means table is to the right (+Y rotation); dx < 0 means table is to the left (-Y rotation)
+  const rotY = Math.max(-22, Math.min(22, dx * 0.7));
+  // Inward tilt: dy > 0 means table is below (-X rotation); dy < 0 means table is above (+X rotation)
+  const rotX = Math.max(-14, Math.min(14, -dy * 0.42));
+
+  const faceTransform = `perspective(500px) rotateY(${rotY.toFixed(1)}deg) rotateX(${rotX.toFixed(1)}deg)`;
 
   return (
     <div className="relative w-full h-full rounded-inherit overflow-hidden bg-slate-900 flex items-center justify-center select-none">
