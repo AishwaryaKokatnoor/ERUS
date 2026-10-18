@@ -752,6 +752,7 @@ export const FacultyDashboardView: React.FC<FacultyDashboardViewProps> = ({
                                 {onStartSession && (
                                   <button
                                     onClick={() => {
+                                      if (onSelectSlot) onSelectSlot(sl.id);
                                       onStartSession(sl.id);
                                     }}
                                     className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm transition-all flex items-center gap-1.5 cursor-pointer hover:scale-105 active:scale-95"

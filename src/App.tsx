@@ -296,9 +296,14 @@ function GDAppContent() {
           });
 
           setSession((prev) => {
-            if (!prev) return mappedSlots[0] || INITIAL_SESSION;
+            if (!prev || prev.id === 'session-default') {
+              if (currentTab !== 'room' && mappedSlots.length > 0) {
+                return mappedSlots[0];
+              }
+              return prev || INITIAL_SESSION;
+            }
             const fresh = mappedSlots.find((s) => s.id === prev.id);
-            if (!fresh) return mappedSlots[0] ? { ...prev, ...mappedSlots[0] } : prev;
+            if (!fresh) return prev;
 
             const isCompletedNow = fresh.status === 'completed' || isSlotCompletedLocally(fresh.id);
 
@@ -548,7 +553,13 @@ function GDAppContent() {
         // The backend response is authoritative, including an empty array.
         // This prevents stale local/demo topics from hiding the real college roster.
         setAvailableSlots(mappedSlots);
-        setSession(mappedSlots[0] || INITIAL_SESSION);
+        setSession((prev) => {
+          if (!prev || prev.id === 'session-default') {
+            return mappedSlots[0] || INITIAL_SESSION;
+          }
+          const fresh = mappedSlots.find((s) => s.id === prev.id);
+          return fresh ? { ...prev, ...fresh } : prev;
+        });
       }
     }).catch(() => {/* Backend unreachable — slots stay empty until admin creates them */});
 

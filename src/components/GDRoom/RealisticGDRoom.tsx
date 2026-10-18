@@ -332,9 +332,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           status: 'active',
           topic: (prev.topic && prev.topic !== 'Group Discussion' && prev.topic !== 'General Discussion') ? prev.topic : (roomData.topic || prev.topic),
         }));
-        if (onStartSession) {
-          onStartSession(session.id);
-        }
       }
       if (roomData.transcripts && roomData.transcripts.length > 0) {
         setTranscripts(roomData.transcripts);
@@ -349,9 +346,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         status: 'active',
         startedAt: prev.startedAt || Date.now(),
       }));
-      if (onStartSession) {
-        onStartSession(session.id);
-      }
     },
     onPeerStatsUpdated: (stats) => {
       setSession((prev) => ({
@@ -415,63 +409,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       // as that causes the AI synthesizer to repeat what the other person just spoke!
       // AI participant speech is handled separately by onAiParticipantSpeech.
     },
-    onAiParticipantSpeech: (data: any) => {
-      const participant = data?.participant;
-      const transcript = data?.transcript;
-      if (!participant?.id || !transcript?.id || !String(transcript.text || '').trim()) return;
-
-      setTranscripts((prev) => (
-        prev.some((entry) => entry.id === transcript.id) ? prev : [...prev, transcript]
-      ));
-
-      const aiStudent: Student = {
-        id: String(participant.id),
-        name: String(participant.name || 'AI Participant'),
-        seatNumber: Number(participant.seatNumber || 1),
-        college: String(participant.college || 'ERUS AI Participant'),
-        course: 'Group Discussion',
-        batch: 'AI Simulation',
-        avatar: String(participant.avatar || ''),
-        isUser: false,
-        micActive: false,
-        isSpeaking: true,
-        hasRaisedHand: false,
-        speakingDurationSeconds: Number(participant.speakingDurationSeconds || 0),
-        speakingTurns: Number(participant.speakingTurns || 1),
-        interruptionCount: 0,
-        questionsAnswered: 0,
-        questionsInitiated: 0,
-        sentiment: 'neutral',
-        isRealPeer: false,
-        isDemoAI: true,
-      };
-
-      setSession((prev) => ({
-        ...prev,
-        currentSpeakerId: aiStudent.id,
-        silenceTimerSeconds: 0,
-        students: prev.students.some((student) => student.id === aiStudent.id)
-          ? prev.students.map((student) => student.id === aiStudent.id ? { ...student, ...aiStudent } : student)
-          : [...prev.students, aiStudent],
-      }));
-
-      // Every connected client vocalizes the same server-authored turn. The voice
-      // engine varies persona by speaker name/seat and cancels overlapping speech.
-      if (!voiceMuted && !isRoomAudioMuted) {
-        roomVoice.speakAsStudent({
-          id: aiStudent.id,
-          name: aiStudent.name,
-          seatNumber: aiStudent.seatNumber,
-          gender: /^(priya|ananya|meera|sneha|neha|kavya|divya)/i.test(aiStudent.name) ? 'female' : 'male',
-        }, String(transcript.text), () => {
-          setSession((prev) => ({
-            ...prev,
-            students: prev.students.map((student) => student.id === aiStudent.id
-              ? { ...student, isSpeaking: false }
-              : student),
-          }));
-        });
-      }
+    onAiParticipantSpeech: () => {
+      // In ERUS live GD & presentation modes, all participants are real human candidates. Synthetic AI bots are disabled.
+      return;
     },
 
     onFacilitatorIntervention: (intervention) => {
@@ -489,6 +429,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         }
         setInterruptionWarning(intText);
         setTimeout(() => setInterruptionWarning(null), 6500);
+      }
+
+      // Suppress duplicate opening welcome: never speak welcome again if client already vocalized it
+      const isOpeningAction = intervention.action === 'opening' || intervention.action === 'initiate_opening_speaker';
+      const isWelcomePrompt = intText.toLowerCase().includes('welcome participants') || intText.toLowerCase().includes('discussion has now officially commenced');
+      if (isOpeningAction || isWelcomePrompt) {
+        const hasWelcomeSpoken = transcripts.some((t) => t.isFacilitator && (t.type === 'intro' || String(t.text || '').toLowerCase().includes('welcome')));
+        if (hasInitiatedOpeningRef.current || hasWelcomeSpoken) {
+          console.log('[Facilitator] Opening welcome already delivered; ignoring duplicate server opening prompt.');
+          return;
+        }
       }
 
       // Deduplicate audio playback: never re-vocalize identical prompt within 25 seconds unless it's a direct interruption or silence prompt
@@ -999,9 +950,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       });
     });
 
-    // 4. In 100% all-human mode, no synthetic AI student participants are injected.
-    // Only if rtcSimulationMode is explicitly enabled by the room, place server-authoritative AI participants.
-    const sourceAiList = rtcSimulationMode ? (rtcAiParticipants || []) : [];
+    // 4. In ERUS, all discussion participants are real human candidates. No synthetic AI bots.
+    const sourceAiList: any[] = [];
 
     sourceAiList.forEach((participant: any) => {
       if (!participant?.id) return;
@@ -1017,15 +967,15 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       usedSeats.add(targetSeat);
       seatMap.set(targetSeat, {
         id: String(participant.id),
-        name: String(participant.name || `AI Participant ${targetSeat}`),
+        name: String(participant.name || `Participant ${targetSeat}`),
         seatNumber: targetSeat,
-        college: String(participant.college || 'ERUS AI Participant'),
+        college: String(participant.college || 'Campus Participant'),
         course: 'Group Discussion',
-        batch: 'AI Simulation',
+        batch: '2024-2028',
         avatar: String(participant.avatar || ''),
         isUser: false,
         isRealPeer: false,
-        isDemoAI: true,
+        isDemoAI: false,
         isEmptySeat: false,
         isSpeaking: session.currentSpeakerId === participant.id,
         micActive: false,
@@ -1047,6 +997,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         !st ||
         st.isEmptySeat ||
         st.isUser ||
+        st.isDemoAI ||
+        st.id?.startsWith('ai-') ||
+        st.name?.toLowerCase().includes('ai participant') ||
+        st.college?.toLowerCase().includes('ai participant') ||
         st.id?.startsWith('seat-') ||
         st.name?.startsWith('Seat ') ||
         (st as any).role === 'faculty' ||
@@ -2362,7 +2316,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // If no one speaks initially, AI Facilitator calls upon a student or welcomes the room
   const handleInitiateOpeningSpeaker = (force: boolean = false) => {
     if (rtcSimulationMode) return;
-    if (!force && hasInitiatedOpeningRef.current) return;
+    if (hasInitiatedOpeningRef.current) {
+      return;
+    }
+    const hasSpokenWelcome = transcripts.some(
+      (t) => t.isFacilitator && (t.type === 'intro' || String(t.text || '').toLowerCase().includes('welcome'))
+    );
+    if (hasSpokenWelcome) {
+      hasInitiatedOpeningRef.current = true;
+      return;
+    }
     if (!force) {
       const hasSpoken = transcripts.some((t) => !t.isFacilitator);
       if (hasSpoken) {
@@ -2524,18 +2487,29 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     rtcRequestAiIntervention,
   ]);
 
-  // Reset initiation flag and trigger opening speaker when session becomes active
+  const lastActiveSlotIdRef = useRef<string>(session.id);
   useEffect(() => {
-    if (session.status === 'active') {
-      const timer = setTimeout(() => {
-        if (!hasInitiatedOpeningRef.current) {
-          handleInitiateOpeningSpeaker(true);
-        }
-      }, 500);
-      return () => clearTimeout(timer);
-    } else {
+    if (session.id && session.id !== lastActiveSlotIdRef.current) {
+      lastActiveSlotIdRef.current = session.id;
       hasInitiatedOpeningRef.current = false;
       setInvitedStudentPrompt(null);
+    }
+  }, [session.id]);
+
+  // Trigger opening speaker when session becomes active if not already initiated
+  useEffect(() => {
+    if (session.status === 'active') {
+      const hasWelcomeInTranscripts = transcripts.some(
+        (t) => t.isFacilitator && (t.type === 'intro' || String(t.text || '').toLowerCase().includes('welcome'))
+      );
+      if (!hasInitiatedOpeningRef.current && !hasWelcomeInTranscripts) {
+        const timer = setTimeout(() => {
+          if (!hasInitiatedOpeningRef.current) {
+            handleInitiateOpeningSpeaker(true);
+          }
+        }, 500);
+        return () => clearTimeout(timer);
+      }
     }
   }, [session.status, session.id]);
 

@@ -9941,10 +9941,7 @@ io.on('connection', (socket) => {
       peer,
     });
 
-    if (room.status === 'active' && !room.openingStarted && !room.currentSpeakerId && !room.waitingForParticipantId) {
-      room.openingStarted = true;
-      scheduleNextTurn(room);
-    }
+    // Remove unwanted artificial turn trigger on peer join
   });
 
   // 1.5 Start Discussion Session
@@ -9970,8 +9967,8 @@ io.on('connection', (socket) => {
     room.silenceTimerSeconds = 0;
     room.silenceStage = 0;
     room.transcripts = [];
-    room.openingStarted = false;
-    room.hasAnnouncedWelcome = false;
+    room.openingStarted = true;
+    room.hasAnnouncedWelcome = true;
     room.deadlockCount = 0;
     room.silenceInterventionCount = 0;
     room.askedQuestions = new Set<string>();
@@ -9988,14 +9985,7 @@ io.on('connection', (socket) => {
       status: 'active',
       topic: room.topic || targetSlot?.topic,
     });
-
-    const hasFacilitatorSpoken = room.transcripts.some((t) => t.isFacilitator);
-    if (!room.hasAnnouncedWelcome && !hasFacilitatorSpoken && room.transcripts.length === 0) {
-      room.openingStarted = false;
-      room.initialSpeakerSelected = false;
-      room.deadlockCount = 0;
-      scheduleNextTurn(room);
-    }
+    // Client initiates the welcome speech on session start; do NOT schedule an artificial duplicate turn
   });
 
   // 1.55 Notification that AI Facilitator speech audio concluded on client
@@ -10065,11 +10055,18 @@ io.on('connection', (socket) => {
     room.transcripts.push(transcript);
     persistTranscriptToMongoDB(transcript);
 
+    const isOpening = actionType === 'initiate_opening_speaker' || actionType === 'opening' || text.toLowerCase().includes('welcome');
+    if (isOpening) {
+      room.openingStarted = true;
+      room.hasAnnouncedWelcome = true;
+    }
+
     const modWordCount = text.trim().split(/\s+/).filter(Boolean).length;
     room.facilitatorSpeakingUntil = Date.now() + Math.max(8000, modWordCount * 500);
     room.silenceTimerSeconds = 0;
 
-    io.to(`room-${safeSlotId}`).emit('facilitator-intervention', {
+    // Broadcast only to OTHER peers in room; never echo back to the caller who spoke it locally
+    socket.to(`room-${safeSlotId}`).emit('facilitator-intervention', {
       text: text.trim(),
       action: actionType || 'moderation',
       transcript,
