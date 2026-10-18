@@ -8356,6 +8356,49 @@ function syncAiParticipants(room: LiveGDRoomState) {
   return [];
 }
 
+function broadcastFacilitatorSilencePrompt(
+  room: LiveGDRoomState,
+  text: string,
+  action: 'silence_instruction_1' | 'silence_instruction_2'
+) {
+  const checkNow = Date.now();
+  if (room.facilitatorSpeakingUntil && checkNow < room.facilitatorSpeakingUntil) {
+    return;
+  }
+  // Human-First Guard: Don't speak if any participant is actively speaking
+  if (Array.from(room.peers.values()).some((p) => p.isSpeaking)) {
+    return;
+  }
+
+  const promptTranscript: BackendTranscript = {
+    id: `t-facilitator-silence-${Date.now()}`,
+    sessionId: room.slotId,
+    speakerId: 'facilitator',
+    speakerName: 'AI Facilitator (ERUS)',
+    seatNumber: null,
+    isFacilitator: true,
+    timestamp: '00:00',
+    timestampSeconds: Date.now(),
+    text,
+    type: 'intervention',
+    sentiment: 'neutral',
+  };
+
+  room.transcripts.push(promptTranscript);
+  persistTranscriptToMongoDB(promptTranscript);
+
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+  room.facilitatorSpeakingUntil = Date.now() + Math.max(4500, wordCount * 450);
+
+  io.to(`room-${room.slotId}`).emit('facilitator-intervention', {
+    text,
+    action,
+    targetUserId: null,
+    targetSeatNumber: null,
+    transcript: promptTranscript,
+  });
+}
+
 function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
   let room = LIVE_ROOMS.get(slotId);
   if (!room) {
@@ -8455,13 +8498,17 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
         });
 
         // 3-Second Staged Turn Arbitration:
-        // Stage 0 -> 1: At 3s silence -> Warning 1 (silent UI countdown, no voice interruption)
+        // Stage 0 -> 1: At 3s silence -> AI speaks telling the floor is open
         if (room.silenceStage === 0 && room.silenceTimerSeconds >= 3) {
           room.silenceStage = 1;
+          const openFloorText = 'The floor is open for discussion. Please feel free to share your thoughts.';
+          broadcastFacilitatorSilencePrompt(room, openFloorText, 'silence_instruction_1');
         }
-        // Stage 1 -> 2: At 6s silence (3s after Stage 1) -> Warning 2 (silent UI countdown, no voice interruption)
+        // Stage 1 -> 2: At 6s silence (3s after Stage 1) -> AI speaks encouraging momentum message
         else if (room.silenceStage === 1 && room.silenceTimerSeconds >= 6) {
           room.silenceStage = 2;
+          const momentumText = 'Let us keep the momentum going. Anyone who has not spoken yet, please share your perspective on this topic.';
+          broadcastFacilitatorSilencePrompt(room, momentumText, 'silence_instruction_2');
         }
         // Stage 2 -> 3: At 9s silence (after 3 silence warnings) -> AI specifically calls upon the candidate who has spoken least and asks a relevant question on the topic
         else if (room.silenceStage === 2 && room.silenceTimerSeconds >= 9) {
@@ -9581,8 +9628,9 @@ Do not mention AI.`,
   }
 
   if (deadlockQuestion) {
-    if (!deadlockQuestion.startsWith('Nine seconds')) {
-      const addressHeader = `Nine seconds of silence detected. Let us hear from ${candidateName} ${seatStr}.`;
+    deadlockQuestion = deadlockQuestion.replace(/^(Nine|Three|\d+)\s+seconds\s+(of\s+)?silence\s+detected\.?\s*/i, '');
+    const addressHeader = `Let us hear from ${candidateName} ${seatStr}.`;
+    if (!deadlockQuestion.toLowerCase().includes(candidateName.toLowerCase())) {
       deadlockQuestion = `${addressHeader} ${deadlockQuestion}`;
     }
     room.askedQuestions.add(deadlockQuestion);

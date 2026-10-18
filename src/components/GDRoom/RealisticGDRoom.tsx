@@ -519,9 +519,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         return [...prev, entryToAppend];
       });
 
+      const isSilenceInstruction =
+        intervention.action === 'silence_instruction_1' ||
+        intervention.action === 'silence_instruction_2';
+
       setSession((prev) => ({
         ...prev,
-        silenceTimerSeconds: 0,
+        silenceTimerSeconds: isSilenceInstruction ? prev.silenceTimerSeconds : 0,
         currentSpeakerId: null,
         facilitatorSpeech: intervention.text,
         isFacilitatorSpeaking: true,
@@ -551,20 +555,34 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         roomVoice.unlock();
         const estSecs = Math.max(8, Math.ceil(intervention.text.split(/\s+/).length * 0.9 + 4));
         const safetyTimeout = setTimeout(() => {
-          setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false, silenceTimerSeconds: 0 }));
+          setSession((prev) => ({
+            ...prev,
+            isFacilitatorSpeaking: false,
+            silenceTimerSeconds: isSilenceInstruction ? prev.silenceTimerSeconds : 0,
+          }));
           notifyFacilitatorSpeechEndedRef.current();
         }, estSecs * 1000);
 
         roomVoice.speakAsFacilitator(intervention.text, () => {
           clearTimeout(safetyTimeout);
           lastFacilitatorInterventionTimeRef.current = Date.now();
-          setLocalSilenceSeconds(0);
-          setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false, silenceTimerSeconds: 0 }));
+          if (!isSilenceInstruction) {
+            setLocalSilenceSeconds(0);
+          }
+          setSession((prev) => ({
+            ...prev,
+            isFacilitatorSpeaking: false,
+            silenceTimerSeconds: isSilenceInstruction ? prev.silenceTimerSeconds : 0,
+          }));
           notifyFacilitatorSpeechEndedRef.current();
         });
       } else {
         setTimeout(() => {
-          setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false, silenceTimerSeconds: 0 }));
+          setSession((prev) => ({
+            ...prev,
+            isFacilitatorSpeaking: false,
+            silenceTimerSeconds: isSilenceInstruction ? prev.silenceTimerSeconds : 0,
+          }));
           notifyFacilitatorSpeechEndedRef.current();
         }, 1500);
       }
@@ -635,12 +653,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         isListeningMicRef.current &&
         (curSpeakingLive || hasSpokenWords);
 
-      const isAnyActive =
-        curSession.isFacilitatorSpeaking ||
-        roomVoice.isSpeaking() ||
-        isUserTalking;
+      const isFacilitatorActive = curSession.isFacilitatorSpeaking || roomVoice.isSpeaking();
+      if (isFacilitatorActive) {
+        // AI Facilitator is actively speaking -> pause silence stopwatch, do not reset!
+        return;
+      }
 
-      if (isAnyActive) {
+      if (isUserTalking) {
         setLocalSilenceSeconds(0);
         clientSilenceStageRef.current = 0;
       } else {
@@ -2364,9 +2383,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       ? generateTargetedQuestionForStudent(targetStudent, session.topic, latestStudentTranscript)
       : getNextUniqueFacilitatorPrompt(session.topic, transcripts, pool, 'probing', true).text;
 
-    const targetedQuestion = baseQuestion.startsWith('Nine seconds')
-      ? baseQuestion
-      : `Nine seconds of silence detected. ${baseQuestion}`;
+    const cleanBase = baseQuestion.replace(/^(Nine|Three|\d+)\s+seconds\s+(of\s+)?silence\s+detected\.?\s*/i, '');
+    const candidateName = targetStudent?.name || 'participants';
+    const targetedQuestion = cleanBase.toLowerCase().includes(candidateName.toLowerCase())
+      ? cleanBase
+      : `Let us hear from ${candidateName}. ${cleanBase}`;
 
     // Broadcast over socket so all connected peers receive the question
     if (rtcBroadcastFacilitatorSpeech) {
@@ -2421,8 +2442,18 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       if (!isSocketConnected) {
         if (clientSilenceStageRef.current === 0 && currentSilence >= 3) {
           clientSilenceStageRef.current = 1;
+          speakFacilitator(
+            'The floor is open for discussion. Please feel free to share your thoughts.',
+            'silence_instruction_1',
+            'guiding'
+          );
         } else if (clientSilenceStageRef.current === 1 && currentSilence >= 6) {
           clientSilenceStageRef.current = 2;
+          speakFacilitator(
+            'Let us keep the momentum going. Anyone who has not spoken yet, please share your perspective on this topic.',
+            'silence_instruction_2',
+            'encouraging'
+          );
         } else if (clientSilenceStageRef.current === 2 && currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
           clientSilenceStageRef.current = 3;
           lastFacilitatorInterventionTimeRef.current = Date.now();
