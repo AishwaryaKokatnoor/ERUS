@@ -8441,11 +8441,8 @@ function broadcastFacilitatorSilencePrompt(
   action: 'silence_instruction_1' | 'silence_instruction_2'
 ) {
   const checkNow = Date.now();
-  if (room.facilitatorSpeakingUntil && checkNow < room.facilitatorSpeakingUntil) {
-    return;
-  }
-  // Human-First Guard: Don't speak if any participant is actively speaking
-  if (Array.from(room.peers.values()).some((p) => p.isSpeaking)) {
+  // Human-First Guard: Don't speak if any participant actually transcribed real speech in the last 2.5s
+  if (Array.from(room.peers.values()).some((p) => p.lastSpokeAt && checkNow - p.lastSpokeAt < 2500)) {
     return;
   }
 
@@ -8466,8 +8463,8 @@ function broadcastFacilitatorSilencePrompt(
   room.transcripts.push(promptTranscript);
   persistTranscriptToMongoDB(promptTranscript);
 
-  const wordCount = text.split(/\s+/).filter(Boolean).length;
-  room.facilitatorSpeakingUntil = Date.now() + Math.max(4500, wordCount * 450);
+  // Keep speaking until brief (2000ms) so staged silence progression at 6s and 9s is never blocked
+  room.facilitatorSpeakingUntil = Date.now() + 2000;
 
   io.to(`room-${room.slotId}`).emit('facilitator-intervention', {
     text,
@@ -8547,16 +8544,14 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
         }
       }
 
-      // Pause silence countdown while the AI Facilitator is actively speaking (do not reset to 0!)
-      if (room.facilitatorSpeakingUntil && checkNow < room.facilitatorSpeakingUntil) {
-        return;
-      }
+      // Check if any peer has recently uttered real speech words (within last 2500ms)
+      const anyPeerActivelyTranscribing = Array.from(room.peers.values()).some(
+        (p) => p.role !== 'faculty' && p.role !== 'college_admin' && p.lastSpokeAt && checkNow - p.lastSpokeAt < 2500
+      );
 
-      const anyPeerSpeaking = Array.from(room.peers.values()).some((p) => p.isSpeaking);
-
-      if (!anyPeerSpeaking) {
-        // Floor is silent
-        if (room.currentSpeakerId) {
+      if (!anyPeerActivelyTranscribing) {
+        // Floor is silent (microphones may be open, but no candidate is uttering points)
+        if (room.currentSpeakerId && (!room.lastSpeakerTranscriptAt || checkNow - room.lastSpeakerTranscriptAt > 2500)) {
           room.currentSpeakerId = null;
           room.currentSpeakerSocketId = null;
           room.floorVersion += 1;
@@ -8577,28 +8572,28 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
         });
 
         // 3-Second Staged Turn Arbitration:
-        // Stage 0 -> 1: At 3s silence -> AI speaks telling the floor is open
+        // Stage 0 -> 1: At 3s silence -> AI speaks telling the floor is open (Warning 1)
         if (room.silenceStage === 0 && room.silenceTimerSeconds >= 3) {
           room.silenceStage = 1;
           const openFloorText = 'The floor is open for discussion. Please feel free to share your thoughts.';
           broadcastFacilitatorSilencePrompt(room, openFloorText, 'silence_instruction_1');
         }
-        // Stage 1 -> 2: At 6s silence (3s after Stage 1) -> AI speaks encouraging momentum message
+        // Stage 1 -> 2: At 6s silence (3s after Stage 1) -> AI speaks telling floor is open again (Warning 2)
         else if (room.silenceStage === 1 && room.silenceTimerSeconds >= 6) {
           room.silenceStage = 2;
-          const momentumText = 'Let us keep the momentum going. Anyone who has not spoken yet, please share your perspective on this topic.';
+          const momentumText = 'The floor is open. Let us keep the momentum going—anyone who has not spoken yet, please share your perspective on this topic.';
           broadcastFacilitatorSilencePrompt(room, momentumText, 'silence_instruction_2');
         }
-        // Stage 2 -> 3: At 9s silence (after 3 silence warnings) -> AI specifically calls upon the candidate who has spoken least and asks a relevant question on the topic
+        // Stage 2 -> 3: At 9s silence (3s after Warning 2) -> AI specifically calls upon the candidate who has spoken least and asks a relevant question on the topic
         else if (room.silenceStage === 2 && room.silenceTimerSeconds >= 9) {
           room.silenceStage = 3;
           room.lastDeadlockAt = Date.now();
-          room.deadlockCount += 1;
+          room.deadlockCount = (room.deadlockCount || 0) + 1;
           room.waitingForParticipantId = undefined;
           await triggerDeadlockIntervention(room);
         }
-        // Stage 3: Question was asked; if after 15s still no response, cycle to next quiet candidate
-        else if (room.silenceStage === 3 && room.silenceTimerSeconds >= 24) {
+        // Stage 3: Question was asked; if after 16s still no response, cycle to next quiet candidate
+        else if (room.silenceStage === 3 && room.silenceTimerSeconds >= 25) {
           room.silenceStage = 2;
           room.silenceTimerSeconds = 8;
         }
@@ -9507,34 +9502,34 @@ CRITICAL RULES:
 }
 
 async function triggerDeadlockIntervention(room: LiveGDRoomState) {
-  const checkNow = Date.now();
-  if (room.facilitatorSpeakingUntil && checkNow < room.facilitatorSpeakingUntil) {
-    return;
-  }
-  for (const p of room.peers.values()) {
-    if (p.isSpeaking && (!p.lastSpokeAt || checkNow - p.lastSpokeAt > 3000)) {
-      p.isSpeaking = false;
-    }
-  }
-  if (Array.from(room.peers.values()).some((p) => p.isSpeaking)) {
-    return;
-  }
   room.currentSpeakerId = null;
   room.currentSpeakerSocketId = null;
   room.waitingForParticipantId = undefined;
 
+  let targetSlot: any = null;
+  for (const [, list] of Object.entries(persistentState.slots)) {
+    const found = list.find((s) => s.id === room.slotId);
+    if (found) { targetSlot = found; break; }
+  }
+
   const candidatePeers = Array.from(room.peers.values()).filter((p) => p.role !== 'faculty' && p.role !== 'college_admin');
-  const realStudents = candidatePeers.length > 0 ? candidatePeers : Array.from(room.peers.values());
+  let realStudents: any[] = candidatePeers;
+  if (realStudents.length === 0 && targetSlot && Array.isArray(targetSlot.students)) {
+    realStudents = targetSlot.students.filter((s: any) => s && !s.isEmptySeat && s.name && !String(s.name).startsWith('Seat '));
+  }
+  if (realStudents.length === 0) {
+    realStudents = Array.from(room.peers.values());
+  }
   if (realStudents.length === 0) return;
 
   const candidates = realStudents
-    .filter((p) => p.userId !== room.lastDeadlockTargetId)
+    .filter((p) => (p.userId || p.id) !== room.lastDeadlockTargetId)
     .sort((a, b) =>
       (a.speakingTurns || 0) - (b.speakingTurns || 0) ||
       (a.speakingDurationSeconds || 0) - (b.speakingDurationSeconds || 0) ||
       (a.lastSpokeAt || 0) - (b.lastSpokeAt || 0)
     );
-  const quietPeer = candidates[0] || realStudents.sort(
+  const quietPeer = candidates[0] || realStudents.slice().sort(
     (a, b) =>
       (a.speakingTurns || 0) - (b.speakingTurns || 0) ||
       (a.speakingDurationSeconds || 0) - (b.speakingDurationSeconds || 0) ||
@@ -9545,8 +9540,8 @@ async function triggerDeadlockIntervention(room: LiveGDRoomState) {
   const seatStr = quietPeer?.seatNumber ? `from Seat ${quietPeer.seatNumber}` : '';
   const firstName = candidateName.split(' ')[0];
   if (quietPeer) {
-    room.lastDeadlockTargetId = quietPeer.userId;
-    room.waitingForParticipantId = quietPeer.userId;
+    room.lastDeadlockTargetId = quietPeer.userId || quietPeer.id;
+    room.waitingForParticipantId = quietPeer.userId || quietPeer.id;
   }
 
   const recentHistory = room.transcripts
@@ -9715,8 +9710,9 @@ Do not mention AI.`,
     room.askedQuestions.add(deadlockQuestion);
   }
 
-  // Strict Human Priority: Abort if anyone began speaking while generating deadlock question
-  if (Array.from(room.peers.values()).some((p) => p.isSpeaking)) {
+  // Strict Human Priority: Abort if anyone began transcribing speech while generating deadlock question
+  const checkAfterAi = Date.now();
+  if (Array.from(room.peers.values()).some((p) => p.lastSpokeAt && checkAfterAi - p.lastSpokeAt < 2500)) {
     return;
   }
 
@@ -9738,8 +9734,9 @@ Do not mention AI.`,
   persistTranscriptToMongoDB(interventionTranscript);
 
   const dlWordCount = (deadlockQuestion || '').split(/\s+/).filter(Boolean).length;
-  room.facilitatorSpeakingUntil = Date.now() + Math.max(7000, dlWordCount * 480);
-  room.silenceTimerSeconds = 0;
+  room.facilitatorSpeakingUntil = Date.now() + Math.max(5000, dlWordCount * 400);
+  // Do NOT reset silenceTimerSeconds to 0 here; keep at 9 so it does not loop back to Stage 1!
+  room.silenceTimerSeconds = 9;
 
   io.to(`room-${room.slotId}`).emit('facilitator-intervention', {
     text: deadlockQuestion,
@@ -10021,16 +10018,10 @@ io.on('connection', (socket) => {
     if (cameraActive !== undefined) peer.cameraActive = cameraActive;
 
     if (peer.isSpeaking) {
-      peer.lastSpokeAt = Date.now();
-      // Reset silence watchdog while candidate is actively uttering speech words
-      room.silenceTimerSeconds = 0;
-      room.silenceStage = 0;
-      room.facilitatorSpeakingUntil = 0;
       if (room.turnTimer) {
         clearTimeout(room.turnTimer);
         room.turnTimer = undefined;
       }
-      room.waitingForParticipantId = undefined;
     }
 
     // Identify all student peers currently speaking with active mics

@@ -651,7 +651,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       const isUserTalking =
         !rtcIsMicMutedRef.current &&
         isListeningMicRef.current &&
-        (curSpeakingLive || hasSpokenWords);
+        hasSpokenWords;
 
       const isFacilitatorActive = curSession.isFacilitatorSpeaking || roomVoice.isSpeaking();
       if (isFacilitatorActive) {
@@ -2438,7 +2438,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       !isTransitioningTurnRef.current &&
       !liveSpeechTranscript
     ) {
-      // In standalone / offline mode: arbitrate through the 3 warnings and call least spoken candidate at 9s
+      // In standalone mode or as client-side safety watchdog:
       if (!isSocketConnected) {
         if (clientSilenceStageRef.current === 0 && currentSilence >= 3) {
           clientSilenceStageRef.current = 1;
@@ -2450,7 +2450,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         } else if (clientSilenceStageRef.current === 1 && currentSilence >= 6) {
           clientSilenceStageRef.current = 2;
           speakFacilitator(
-            'Let us keep the momentum going. Anyone who has not spoken yet, please share your perspective on this topic.',
+            'The floor is open. Let us keep the momentum going—anyone who has not spoken yet, please share your perspective on this topic.',
             'silence_instruction_2',
             'encouraging'
           );
@@ -2459,6 +2459,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           lastFacilitatorInterventionTimeRef.current = Date.now();
           handleFacilitatorTargetedProbe();
         }
+      } else if (clientSilenceStageRef.current === 2 && currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3500) {
+        clientSilenceStageRef.current = 3;
+        lastFacilitatorInterventionTimeRef.current = Date.now();
+        handleFacilitatorTargetedProbe();
       }
     }
   }, [
