@@ -122,6 +122,20 @@ export interface GDParticipantTile {
   isMuted?: boolean;
 }
 
+export interface PresentationSlideInfo {
+  badge?: string;
+  title?: string;
+  subtitle?: string;
+  bullets?: string[];
+  currentSlideIndex?: number;
+  totalSlides?: number;
+  slideMode?: 'deck' | 'screen';
+  phase?: string;
+  presenterName?: string;
+  presenterCollege?: string;
+  aiGuidance?: string;
+}
+
 export interface UseGDRecorderOptions {
   slotId: string;
   isSessionActive: boolean;
@@ -134,7 +148,9 @@ export interface UseGDRecorderOptions {
   currentSpeakerId?: string | null;
   currentSpeakerName?: string | null;
   latestTranscriptText?: string | null;
-  layoutMode?: 'round_table' | 'grid';
+  layoutMode?: 'round_table' | 'grid' | 'presentation';
+  screenStream?: MediaStream | null;
+  presentationInfo?: PresentationSlideInfo;
   participantTiles?: GDParticipantTile[];
   autoStartOnActive?: boolean;
   onRecordingComplete?: (recordingUrl: string, blob: Blob) => void;
@@ -346,7 +362,10 @@ export function useGDRecorder({
   const currentSpeakerIdRef = useRef<string | null | undefined>(currentSpeakerId);
   const currentSpeakerNameRef = useRef<string | null | undefined>(currentSpeakerName);
   const latestTranscriptTextRef = useRef<string | null | undefined>(latestTranscriptText);
-  const layoutModeRef = useRef<'round_table' | 'grid'>(layoutMode);
+  const layoutModeRef = useRef<'round_table' | 'grid' | 'presentation'>(layoutMode || 'round_table');
+  const screenStreamRef = useRef<MediaStream | null | undefined>(screenStream);
+  const presentationInfoRef = useRef<PresentationSlideInfo | undefined>(presentationInfo);
+  const screenVideoRef = useRef<HTMLVideoElement | null>(null);
 
   // Keep refs in sync with latest props
   useEffect(() => {
@@ -386,8 +405,16 @@ export function useGDRecorder({
   }, [latestTranscriptText]);
 
   useEffect(() => {
-    layoutModeRef.current = layoutMode;
+    layoutModeRef.current = layoutMode || 'round_table';
   }, [layoutMode]);
+
+  useEffect(() => {
+    screenStreamRef.current = screenStream;
+  }, [screenStream]);
+
+  useEffect(() => {
+    presentationInfoRef.current = presentationInfo;
+  }, [presentationInfo]);
 
   // Format seconds to mm:ss
   const formattedDuration = `${Math.floor(recordingDurationSeconds / 60)
@@ -908,29 +935,45 @@ export function useGDRecorder({
       ctx.textBaseline = 'middle';
       ctx.fillText('ERUS-AIGDF', 56, 22);
 
-      // Role tag: STUDENT
-      drawRoundedRect(ctx, 160, 13, 62, 18, 5, '#e0e7ff', '#c7d2fe', 1);
-      ctx.fillStyle = '#4338ca';
-      ctx.font = 'bold 9px Inter, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('STUDENT', 191, 22);
+      // Role tag
+      if (layoutModeRef.current === 'presentation') {
+        drawRoundedRect(ctx, 160, 13, 76, 18, 5, '#fef3c7', '#fde68a', 1);
+        ctx.fillStyle = '#92400e';
+        ctx.font = 'bold 9px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('SEMINAR', 198, 22);
+      } else {
+        drawRoundedRect(ctx, 160, 13, 62, 18, 5, '#e0e7ff', '#c7d2fe', 1);
+        ctx.fillStyle = '#4338ca';
+        ctx.font = 'bold 9px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('STUDENT', 191, 22);
+      }
 
       // Candidate info subtitle
       ctx.fillStyle = '#64748b';
       ctx.font = '11px Inter, sans-serif';
       ctx.textAlign = 'left';
       const firstUser = tiles.find((t) => t.isUser) || tiles[0];
-      const candidateInfo = firstUser
-        ? `${firstUser.name}${firstUser.college ? ` • ${firstUser.college}` : ''}`
-        : 'Group Discussion Session';
+      const candidateInfo = layoutModeRef.current === 'presentation'
+        ? (firstUser ? `${firstUser.name}${firstUser.college ? ` • ${firstUser.college}` : ''}` : 'Classroom Presentation')
+        : (firstUser ? `${firstUser.name}${firstUser.college ? ` • ${firstUser.college}` : ''}` : 'Group Discussion Session');
       ctx.fillText(candidateInfo, 56, 38);
 
-      // Center navigation pill: ((•)) Live GD Room
-      drawRoundedRect(ctx, width / 2 - 80, 11, 160, 30, 15, '#059669', '#10b981', 1);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 12px Inter, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('((•)) Live GD Room', width / 2, 26);
+      // Center navigation pill
+      if (layoutModeRef.current === 'presentation') {
+        drawRoundedRect(ctx, width / 2 - 110, 11, 220, 30, 15, '#d97706', '#f59e0b', 1);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 12px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('((•)) Classroom Seminar Hall', width / 2, 26);
+      } else {
+        drawRoundedRect(ctx, width / 2 - 80, 11, 160, 30, 15, '#059669', '#10b981', 1);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 12px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('((•)) Live GD Room', width / 2, 26);
+      }
 
       // Right: Live REC Indicator & Slot info
       const timerSecs = durationCounterRef.current;
@@ -954,11 +997,572 @@ export function useGDRecorder({
       ctx.font = '10px Inter, sans-serif';
       ctx.fillText(`(${tiles.length} P)`, width - 58, 26);
 
-      // 3. Stage Layout: Round Table (Default) vs Grid
-      const isRoundTable = layoutModeRef.current !== 'grid';
+      // Update screen video element if live screen share is provided
+      const liveScreenStream = screenStreamRef.current;
+      let screenVideoEl = screenVideoRef.current;
+      if (liveScreenStream && liveScreenStream.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)) {
+        if (!screenVideoEl && typeof document !== 'undefined') {
+          screenVideoEl = document.createElement('video');
+          screenVideoEl.muted = true;
+          screenVideoEl.defaultMuted = true;
+          screenVideoEl.autoplay = true;
+          screenVideoEl.playsInline = true;
+          screenVideoEl.width = 640;
+          screenVideoEl.height = 360;
+          screenVideoEl.style.position = 'fixed';
+          screenVideoEl.style.left = '0px';
+          screenVideoEl.style.top = '0px';
+          screenVideoEl.style.width = '1px';
+          screenVideoEl.style.height = '1px';
+          screenVideoEl.style.opacity = '0';
+          screenVideoEl.style.pointerEvents = 'none';
+          if (hiddenVideoContainerRef.current) hiddenVideoContainerRef.current.appendChild(screenVideoEl);
+          screenVideoRef.current = screenVideoEl;
+        }
+        if (screenVideoEl) {
+          if (screenVideoEl.srcObject !== liveScreenStream) {
+            screenVideoEl.srcObject = liveScreenStream;
+            screenVideoEl.play().catch(() => {});
+          } else if (screenVideoEl.paused) {
+            screenVideoEl.play().catch(() => {});
+          }
+        }
+      }
 
-      if (isRoundTable) {
-        // --- 3A. ROUND TABLE CONFERENCE STAGE ---
+      // 3. Stage Layout: Presentation Seminar Hall vs Round Table vs Grid
+      if (layoutModeRef.current === 'presentation') {
+        // --- 3A. CLASSROOM PRESENTATION SEMINAR HALL STAGE ---
+        // (Matching ClassroomPresentationRoom layout: Projector Screen / Slides on Left, Presenter Podium on Right, Audience Desks on Bottom)
+        const presInfo = presentationInfoRef.current;
+        const currentPresenterName = presInfo?.presenterName || currentSpeakerNameRef.current || (firstUser?.name || 'Candidate');
+        const currentPresenterCollege = presInfo?.presenterCollege || (firstUser?.college || 'Department of Computer Science & Engineering');
+        const currentPhase = presInfo?.phase || 'presenting';
+        const slideBadge = presInfo?.badge || `SLIDE ${presInfo?.currentSlideIndex || 1} OF ${presInfo?.totalSlides || 3}`;
+        const slideTitle = presInfo?.title || activeTopic;
+        const slideSubtitle = presInfo?.subtitle || 'Key research findings, implementation architecture, and analysis.';
+        const slideBullets = presInfo?.bullets && presInfo.bullets.length > 0 ? presInfo.bullets : [
+          'Detailed methodology, computational workflow, and core algorithmic specifications.',
+          'Comprehensive performance metrics, empirical benchmarks, and validation standards.',
+          'Scalability paradigms, strategic takeaways, and production readiness evaluation.'
+        ];
+        const aiGuidance = presInfo?.aiGuidance || 'Presenter is delivering the scheduled seminar topic. Clear articulated perspectives will be evaluated.';
+
+        // Find active presenter tile
+        const presenterTile = tiles.find((t) => t.id === currentSpeakerIdRef.current) ||
+                              tiles.find((t) => t.isUser) ||
+                              tiles[0];
+        const isPresenterUser = Boolean(
+          presenterTile && (presenterTile.isUser || presenterTile.name === 'You' || presenterTile.id?.includes('user'))
+        );
+
+        // --- SECTION 1: Whiteboard / Projector Screen (Left 730px) ---
+        const sX = 24;
+        const sY = 60;
+        const sW = 730;
+        const sH = 480;
+
+        // Whiteboard Shadow & Box
+        ctx.save();
+        ctx.shadowColor = 'rgba(15, 23, 42, 0.08)';
+        ctx.shadowBlur = 18;
+        ctx.shadowOffsetY = 4;
+        drawRoundedRect(ctx, sX, sY, sW, sH, 18, '#ffffff', '#cbd5e1', 1.5);
+        ctx.restore();
+
+        // Projector Top Amber Accent Strip
+        ctx.save();
+        clipRoundedRect(ctx, sX, sY, sW, sH, 18);
+        const accentGrad = ctx.createLinearGradient(sX, sY, sX + sW, sY);
+        accentGrad.addColorStop(0, '#f59e0b');
+        accentGrad.addColorStop(0.5, '#fbbf24');
+        accentGrad.addColorStop(1, '#d97706');
+        ctx.fillStyle = accentGrad;
+        ctx.fillRect(sX, sY, sW, 5);
+        ctx.restore();
+
+        // Projector Header Row:
+        // Left Badge: Classroom Seminar Screen
+        drawRoundedRect(ctx, sX + 16, sY + 14, 180, 24, 12, '#fef3c7', '#fde68a', 1);
+        ctx.fillStyle = '#92400e';
+        ctx.font = 'bold 10px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🖥️ Classroom Seminar Screen', sX + 16 + 90, sY + 26);
+
+        // Center Badge: Slide badge (e.g. SLIDE 1 OF 3 • RESEARCH PROBLEM)
+        const slideBadgeW = 200;
+        drawRoundedRect(ctx, sX + 210, sY + 14, slideBadgeW, 24, 12, '#eff6ff', '#bfdbfe', 1);
+        ctx.fillStyle = '#1d4ed8';
+        ctx.font = 'bold 9.5px monospace';
+        ctx.fillText(slideBadge, sX + 210 + slideBadgeW / 2, sY + 26);
+
+        // Right Timer: 08:00 Min
+        const timerPillW = 120;
+        drawRoundedRect(ctx, sX + sW - 16 - timerPillW, sY + 14, timerPillW, 24, 8, '#f8fafc', '#e2e8f0', 1);
+        ctx.fillStyle = '#334155';
+        ctx.font = 'bold 10px monospace';
+        ctx.fillText(`⏱️ ${timerText} / 08:00`, sX + sW - 16 - timerPillW / 2, sY + 26);
+
+        // Topic Title Heading
+        ctx.fillStyle = '#0f172a';
+        ctx.font = 'bold 16px Inter, system-ui, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        const maxTitleW = sW - 32;
+        const topicWords = activeTopic.split(' ');
+        let titleLine1 = '';
+        let titleLine2 = '';
+        for (const w of topicWords) {
+          const test = titleLine1 ? `${titleLine1} ${w}` : w;
+          if (ctx.measureText(test).width > maxTitleW && titleLine1) {
+            titleLine2 = titleLine2 ? `${titleLine2} ${w}` : w;
+          } else if (!titleLine2) {
+            titleLine1 = test;
+          } else {
+            titleLine2 = `${titleLine2} ${w}`;
+          }
+        }
+        if (titleLine2 && ctx.measureText(titleLine2).width > maxTitleW) {
+          titleLine2 = titleLine2.substring(0, 48) + '...';
+        }
+        if (titleLine2) {
+          ctx.fillText(`"${titleLine1}`, sX + 18, sY + 54);
+          ctx.fillText(`${titleLine2}"`, sX + 18, sY + 74);
+        } else {
+          ctx.fillText(`"${titleLine1}"`, sX + 18, sY + 60);
+        }
+
+        // Slide Content Area: Screen Share or Slide Deck Card
+        const cBoxX = sX + 16;
+        const cBoxY = sY + (titleLine2 ? 96 : 84);
+        const cBoxW = sW - 32;
+        const cBoxH = sH - (titleLine2 ? 96 : 84) - 72;
+
+        let drewScreenVideo = false;
+        if (screenVideoEl && (screenVideoEl.readyState >= 1 || screenVideoEl.videoWidth > 0)) {
+          try {
+            ctx.save();
+            clipRoundedRect(ctx, cBoxX, cBoxY, cBoxW, cBoxH, 14);
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(cBoxX, cBoxY, cBoxW, cBoxH);
+
+            const vW = screenVideoEl.videoWidth || 1280;
+            const vH = screenVideoEl.videoHeight || 720;
+            const scale = Math.min(cBoxW / vW, cBoxH / vH);
+            const sw = vW * scale;
+            const sh = vH * scale;
+            const sx = cBoxX + (cBoxW - sw) / 2;
+            const sy = cBoxY + (cBoxH - sh) / 2;
+            ctx.drawImage(screenVideoEl, sx, sy, sw, sh);
+
+            // Screen Share Badge
+            drawRoundedRect(ctx, cBoxX + 12, cBoxY + 12, 130, 22, 6, '#f59e0b', undefined, 0);
+            ctx.fillStyle = '#0f172a';
+            ctx.font = 'bold 10px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('● Live Screen Share', cBoxX + 12 + 65, cBoxY + 23);
+
+            ctx.restore();
+            drewScreenVideo = true;
+          } catch {}
+        }
+
+        if (!drewScreenVideo) {
+          // Slide Deck Card
+          drawRoundedRect(ctx, cBoxX, cBoxY, cBoxW, cBoxH, 14, '#f8fafc', '#e2e8f0', 1);
+
+          // Slide Title
+          ctx.fillStyle = '#1e293b';
+          ctx.font = 'bold 16px Inter, system-ui, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          ctx.fillText(slideTitle, cBoxX + 18, cBoxY + 16);
+
+          // Slide Subtitle
+          ctx.fillStyle = '#64748b';
+          ctx.font = '12px Inter, sans-serif';
+          ctx.fillText(slideSubtitle, cBoxX + 18, cBoxY + 40);
+
+          // Divider
+          ctx.strokeStyle = '#e2e8f0';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(cBoxX + 18, cBoxY + 62);
+          ctx.lineTo(cBoxX + cBoxW - 18, cBoxY + 62);
+          ctx.stroke();
+
+          // Bullets
+          const bulletStartY = cBoxY + 74;
+          const bulletSpacing = 52;
+          slideBullets.slice(0, 3).forEach((bulletText, bIdx) => {
+            const bY = bulletStartY + bIdx * bulletSpacing;
+            // Bullet icon badge
+            drawRoundedRect(ctx, cBoxX + 18, bY, 20, 20, 6, '#fef3c7', '#fde68a', 1);
+            ctx.fillStyle = '#b45309';
+            ctx.font = 'bold 11px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('✓', cBoxX + 28, bY + 10);
+
+            // Bullet text (wrap up to 2 lines)
+            ctx.fillStyle = '#334155';
+            ctx.font = '500 12.5px Inter, system-ui, sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+
+            const maxBulletW = cBoxW - 64;
+            const bWords = bulletText.split(' ');
+            let bLine1 = '';
+            let bLine2 = '';
+            for (const bw of bWords) {
+              const testB = bLine1 ? `${bLine1} ${bw}` : bw;
+              if (ctx.measureText(testB).width > maxBulletW && bLine1) {
+                bLine2 = bLine2 ? `${bLine2} ${bw}` : bw;
+              } else if (!bLine2) {
+                bLine1 = testB;
+              } else {
+                bLine2 = `${bLine2} ${bw}`;
+              }
+            }
+            if (bLine2 && ctx.measureText(bLine2).width > maxBulletW) {
+              bLine2 = bLine2.substring(0, 50) + '...';
+            }
+            ctx.fillText(bLine1, cBoxX + 46, bY + 1);
+            if (bLine2) {
+              ctx.fillText(bLine2, cBoxX + 46, bY + 18);
+            }
+          });
+        }
+
+        // AI Guidance Banner at bottom of whiteboard
+        const gBoxY = sY + sH - 56;
+        drawRoundedRect(ctx, sX + 16, gBoxY, sW - 32, 44, 10, '#fffbeb', '#fde68a', 1);
+        ctx.fillStyle = '#92400e';
+        ctx.font = 'bold 10px Inter, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText('✨ AI Seminar Facilitator Guidance:', sX + 26, gBoxY + 7);
+
+        ctx.fillStyle = '#78350f';
+        ctx.font = 'italic 11px Inter, sans-serif';
+        const cleanGuidance = aiGuidance.replace(/^[\s"']+|[\s"']+$/g, '');
+        const maxGuidanceW = sW - 56;
+        const truncatedGuidance = ctx.measureText(cleanGuidance).width > maxGuidanceW
+          ? cleanGuidance.substring(0, 75) + '...'
+          : cleanGuidance;
+        ctx.fillText(`"${truncatedGuidance}"`, sX + 26, gBoxY + 23);
+
+        // --- SECTION 2: Presenter Lectern / Podium Structure (Right 492px) ---
+        const pX = 770;
+        const pY = 60;
+        const pW = 486;
+        const pH = 480;
+
+        // Podium Frame
+        ctx.save();
+        ctx.shadowColor = 'rgba(245, 158, 11, 0.12)';
+        ctx.shadowBlur = 20;
+        ctx.shadowOffsetY = 4;
+        const podiumGrad = ctx.createLinearGradient(pX, pY, pX + pW, pY + pH);
+        podiumGrad.addColorStop(0, '#fffbeb');
+        podiumGrad.addColorStop(0.5, '#fef3c7');
+        podiumGrad.addColorStop(1, '#fde68a');
+        drawRoundedRect(ctx, pX, pY, pW, pH, 20, podiumGrad, '#fcd34d', 2);
+        ctx.restore();
+
+        // Top Lectern Microphone Placard
+        const lecternW = 270;
+        drawRoundedRect(ctx, pX + (pW - lecternW) / 2, pY + 12, lecternW, 26, 13, '#fef08a', '#facc15', 1);
+        ctx.fillStyle = '#713f12';
+        ctx.font = 'bold 10.5px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🎙️ SEMINAR LECTERN • PRESENTER PODIUM', pX + pW / 2, pY + 25);
+
+        // Presenter Video Box
+        const vX = pX + 20;
+        const vY = pY + 48;
+        const vW = pW - 40;
+        const vH = 266;
+
+        drawRoundedRect(ctx, vX, vY, vW, vH, 16, '#0f172a', '#f59e0b', 3);
+
+        const { activeVideo } = resolveTileVideo(presenterTile, isPresenterUser);
+        let drewPresenterVideo = false;
+        if (activeVideo && presenterTile.cameraActive !== false) {
+          try {
+            ctx.save();
+            clipRoundedRect(ctx, vX, vY, vW, vH, 16);
+            const vw = activeVideo.videoWidth || 640;
+            const vh = activeVideo.videoHeight || 480;
+            const scale = Math.max(vW / vw, vH / vh);
+            const sw = vw * scale;
+            const sh = vh * scale;
+            const sx = vX + (vW - sw) / 2;
+            const sy = vY + (vH - sh) / 2;
+
+            if (isPresenterUser) {
+              ctx.translate(vX + vW, vY);
+              ctx.scale(-1, 1);
+              ctx.drawImage(activeVideo, (vW - sw) / 2, sy - vY, sw, sh);
+            } else {
+              ctx.drawImage(activeVideo, sx, sy, sw, sh);
+            }
+            ctx.restore();
+            drewPresenterVideo = true;
+          } catch {}
+        }
+
+        if (!drewPresenterVideo) {
+          // Draw Avatar inside Video Box
+          ctx.save();
+          clipRoundedRect(ctx, vX, vY, vW, vH, 16);
+          const avGrad = ctx.createLinearGradient(vX, vY, vX + vW, vY + vH);
+          avGrad.addColorStop(0, '#334155');
+          avGrad.addColorStop(1, '#1e293b');
+          ctx.fillStyle = avGrad;
+          ctx.fillRect(vX, vY, vW, vH);
+
+          const avatarUrl = presenterTile.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(presenterTile.name || 'presenter')}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`;
+          let img = avatarImagePoolRef.current.get(avatarUrl);
+          if (!img) {
+            img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.src = avatarUrl;
+            avatarImagePoolRef.current.set(avatarUrl, img);
+          }
+          if (img.complete && img.naturalWidth > 0) {
+            const iw = img.naturalWidth;
+            const ih = img.naturalHeight;
+            const scale = Math.min(vW / iw, vH / ih) * 0.9;
+            const sw = iw * scale;
+            const sh = ih * scale;
+            ctx.drawImage(img, vX + (vW - sw) / 2, vY + (vH - sh) / 2, sw, sh);
+          } else {
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 48px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            const initials = (presenterTile.name || 'P').split(' ').map((n) => n[0]).join('').substring(0, 2).toUpperCase();
+            ctx.fillText(initials, vX + vW / 2, vY + vH / 2);
+          }
+          ctx.restore();
+        }
+
+        // Overlay inside bottom of video box (Name & Live Mic status)
+        ctx.save();
+        clipRoundedRect(ctx, vX, vY, vW, vH, 16);
+        const ovGrad = ctx.createLinearGradient(vX, vY + vH - 42, vX, vY + vH);
+        ovGrad.addColorStop(0, 'rgba(15, 23, 42, 0)');
+        ovGrad.addColorStop(1, 'rgba(15, 23, 42, 0.92)');
+        ctx.fillStyle = ovGrad;
+        ctx.fillRect(vX, vY + vH - 42, vW, 42);
+
+        // Presenter Name
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 13px Inter, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        const pDispName = isPresenterUser ? `${presenterTile.name} (You)` : presenterTile.name;
+        ctx.fillText(pDispName, vX + 14, vY + vH - 20);
+
+        // Mic Status Badge (Right)
+        const isPresMicOn = !presenterTile.isMuted;
+        const micBadgeW = isPresMicOn ? 86 : 82;
+        const micBadgeX = vX + vW - micBadgeW - 12;
+        const micBadgeY = vY + vH - 31;
+        drawRoundedRect(
+          ctx,
+          micBadgeX,
+          micBadgeY,
+          micBadgeW,
+          22,
+          11,
+          isPresMicOn ? '#059669' : '#dc2626',
+          isPresMicOn ? '#34d399' : '#f87171',
+          1
+        );
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 10px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(isPresMicOn ? '🎙️ LIVE MIC' : '🔇 MUTED', micBadgeX + micBadgeW / 2, micBadgeY + 11);
+        ctx.restore();
+
+        // Presenter Details Below Video
+        ctx.fillStyle = '#0f172a';
+        ctx.font = 'bold 17px Inter, system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(currentPresenterName, pX + pW / 2, pY + 338);
+
+        ctx.fillStyle = '#64748b';
+        ctx.font = '12px Inter, sans-serif';
+        ctx.fillText(currentPresenterCollege, pX + pW / 2, pY + 360);
+
+        // Phase Action Pill (Delivering Presentation / Q&A)
+        let phaseText = '🎤 DELIVERING PRESENTATION (08:00 MIN MAX)';
+        let phaseBg = '#fef3c7';
+        let phaseBorder = '#f59e0b';
+        let phaseColor = '#92400e';
+        if (currentPhase === 'peer_qa') {
+          phaseText = '❓ PEER QUESTIONS & ANSWERS SESSION';
+          phaseBg = '#eff6ff';
+          phaseBorder = '#3b82f6';
+          phaseColor = '#1e40af';
+        } else if (currentPhase === 'ai_qa') {
+          phaseText = '🤖 AI INSTRUCTOR DEFENSE EVALUATION';
+          phaseBg = '#f5f3ff';
+          phaseBorder = '#8b5cf6';
+          phaseColor = '#5b21b6';
+        } else if (currentPhase === 'concluded') {
+          phaseText = '✅ PRESENTATION DEFENSE CONCLUDED';
+          phaseBg = '#ecfdf5';
+          phaseBorder = '#10b981';
+          phaseColor = '#065f46';
+        }
+        const phasePillW = 320;
+        drawRoundedRect(ctx, pX + (pW - phasePillW) / 2, pY + 386, phasePillW, 30, 15, phaseBg, phaseBorder, 1.2);
+        ctx.fillStyle = phaseColor;
+        ctx.font = 'bold 11px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(phaseText, pX + pW / 2, pY + 401);
+
+        // --- SECTION 3: Classroom Audience / Connected Participants Row (Bottom) ---
+        const aX = 24;
+        const aY = 552;
+        const aW = 1232;
+        const aH = 106;
+
+        drawRoundedRect(ctx, aX, aY, aW, aH, 16, '#ffffff', '#e2e8f0', 1.5);
+
+        // Header label
+        ctx.fillStyle = '#0f172a';
+        ctx.font = 'bold 11.5px Inter, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`👥 Seminar Participants (${tiles.length} Connected Candidates)`, aX + 16, aY + 16);
+
+        ctx.fillStyle = '#64748b';
+        ctx.font = '10px Inter, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText('Classroom Desks • Real Enrolled Candidates', aX + aW - 16, aY + 16);
+
+        // Distribute student cards
+        const maxDisplayStudents = Math.min(6, tiles.length);
+        const cardGap = 12;
+        const cardW = Math.min(190, (aW - 32 - (maxDisplayStudents - 1) * cardGap) / maxDisplayStudents);
+        const cardH = 64;
+        const cardStartY = aY + 30;
+
+        tiles.slice(0, 6).forEach((st, idx) => {
+          const cX = aX + 16 + idx * (cardW + cardGap);
+          const isStPresenter = st.id === presenterTile.id || idx === 0;
+          const isStUser = Boolean(st.isUser || st.name === 'You');
+
+          const cardBg = isStPresenter ? '#fffbeb' : (isStUser ? '#eff6ff' : '#f8fafc');
+          const cardStroke = isStPresenter ? '#f59e0b' : (isStUser ? '#93c5fd' : '#e2e8f0');
+          drawRoundedRect(ctx, cX, cardStartY, cardW, cardH, 12, cardBg, cardStroke, isStPresenter ? 2 : 1);
+
+          // Mini Avatar Circle (x: cX + 8, y: cardStartY + 14, d: 36)
+          const avD = 36;
+          const avX = cX + 8;
+          const avY = cardStartY + (cardH - avD) / 2;
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(avX + avD / 2, avY + avD / 2, avD / 2, 0, Math.PI * 2);
+          ctx.clip();
+          ctx.fillStyle = '#475569';
+          ctx.fillRect(avX, avY, avD, avD);
+
+          const { activeVideo: stVideo } = resolveTileVideo(st, isStUser);
+          if (stVideo && st.cameraActive !== false) {
+            try {
+              if (isStUser) {
+                ctx.translate(avX + avD, avY);
+                ctx.scale(-1, 1);
+                ctx.drawImage(stVideo, 0, 0, avD, avD);
+              } else {
+                ctx.drawImage(stVideo, avX, avY, avD, avD);
+              }
+            } catch {}
+          } else {
+            const stAvatarUrl = st.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(st.name || String(idx + 1))}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`;
+            let sImg = avatarImagePoolRef.current.get(stAvatarUrl);
+            if (!sImg) {
+              sImg = new Image();
+              sImg.crossOrigin = 'anonymous';
+              sImg.src = stAvatarUrl;
+              avatarImagePoolRef.current.set(stAvatarUrl, sImg);
+            }
+            if (sImg.complete && sImg.naturalWidth > 0) {
+              ctx.drawImage(sImg, avX, avY, avD, avD);
+            } else {
+              ctx.fillStyle = '#ffffff';
+              ctx.font = 'bold 12px sans-serif';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText((st.name || 'S').substring(0, 1), avX + avD / 2, avY + avD / 2);
+            }
+          }
+          ctx.restore();
+
+          // Small mic status dot on avatar
+          const isStMicActive = !st.isMuted;
+          ctx.beginPath();
+          ctx.arc(avX + avD - 4, avY + avD - 4, 5, 0, Math.PI * 2);
+          ctx.fillStyle = isStMicActive ? '#10b981' : '#f43f5e';
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          // Student Details on right
+          const textX = avX + avD + 8;
+          const maxTextW = cardW - (avD + 18);
+
+          // Seat number & Badge
+          ctx.fillStyle = '#475569';
+          ctx.font = 'bold 9px monospace';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          const seatLabel = `#${st.seatNumber || idx + 1}`;
+          ctx.fillText(seatLabel, textX, cardStartY + 10);
+
+          if (isStPresenter) {
+            drawRoundedRect(ctx, textX + 22, cardStartY + 9, 44, 14, 4, '#f59e0b', undefined, 0);
+            ctx.fillStyle = '#0f172a';
+            ctx.font = 'bold 8px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Podium', textX + 44, cardStartY + 10);
+          } else if (isStUser) {
+            drawRoundedRect(ctx, textX + 22, cardStartY + 9, 32, 14, 4, '#4f46e5', undefined, 0);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 8px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('You', textX + 38, cardStartY + 10);
+          }
+
+          // Student Name
+          ctx.fillStyle = '#0f172a';
+          ctx.font = 'bold 11px Inter, sans-serif';
+          ctx.textAlign = 'left';
+          let stNameTrunc = st.name || `Student ${idx + 1}`;
+          if (ctx.measureText(stNameTrunc).width > maxTextW) {
+            stNameTrunc = stNameTrunc.substring(0, 12) + '...';
+          }
+          ctx.fillText(stNameTrunc, textX, cardStartY + 27);
+
+          // College or status
+          ctx.fillStyle = '#64748b';
+          ctx.font = '9px Inter, sans-serif';
+          ctx.fillText(isStMicActive ? '🎙️ Speaking' : 'Listening', textX, cardStartY + 44);
+        });
+      } else if (isRoundTable) {
+        // --- 3B. ROUND TABLE CONFERENCE STAGE ---
         const CX = width / 2;
         const CY = 362;
 
@@ -1121,7 +1725,7 @@ export function useGDRecorder({
           drawParticipantPod(ctx, tile, px, py, podW, podH, isThisUser, activeVideo);
         });
       } else {
-        // --- 3B. BALANCED GRID STAGE FALLBACK ---
+        // --- 3C. BALANCED GRID STAGE FALLBACK ---
         const margin = 28;
         const gap = 16;
         const headerH = 64;
@@ -1265,6 +1869,10 @@ export function useGDRecorder({
         }
       }
 
+      if (screenStream && screenStream.getAudioTracks().length > 0) {
+        mixStreamIntoDestination(screenStream);
+      }
+
       // If no tracks connected yet, create an oscillator silence track so MediaRecorder doesn't error
       if (connectedTracksRef.current.size === 0) {
         const osc = ctx.createOscillator();
@@ -1338,6 +1946,15 @@ export function useGDRecorder({
           } catch {}
         });
         videoPoolRef.current.clear();
+
+        if (screenVideoRef.current) {
+          try {
+            screenVideoRef.current.srcObject = null;
+            screenVideoRef.current.remove();
+          } catch {}
+          screenVideoRef.current = null;
+        }
+
         if (hiddenVideoContainerRef.current) {
           try {
             hiddenVideoContainerRef.current.remove();

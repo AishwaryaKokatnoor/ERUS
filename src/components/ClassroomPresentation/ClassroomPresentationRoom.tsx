@@ -143,6 +143,9 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
     peerStreams: rtcPeerStreams,
     broadcastTranscript: rtcBroadcastTranscript,
     broadcastFacilitatorSpeech: rtcBroadcastFacilitatorSpeech,
+    toggleMute: rtcToggleMute,
+    setMicEnabled: rtcSetMicEnabled,
+    localAudioStream: rtcLocalAudioStream,
   } = useWebRTCRoom({
     slotId: session.slotId || session.id || 'slot-presentation-1',
     currentUser,
@@ -222,9 +225,27 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
       });
     }
 
-    // 2. Real remote student peers connected via WebRTC
+    // Strict filter to eliminate any AI participants or bots from Classroom Presentation
+    const isAiParticipant = (p: any): boolean => {
+      if (!p) return true;
+      if (p.isAiParticipant || p.isDemoAI || p.isAI) return true;
+      if (p.role === 'ai' || p.role === 'bot') return true;
+      const id = String(p.id || '').toLowerCase();
+      if (id.startsWith('ai-') || id.startsWith('bot-') || id.startsWith('sim-') || id.includes('ai-participant')) return true;
+      const name = String(p.name || '').toLowerCase();
+      if (
+        name.includes('ai participant') ||
+        name.startsWith('ai ') ||
+        name.endsWith(' (ai)') ||
+        name.includes('bot') ||
+        name === 'ai'
+      ) return true;
+      return false;
+    };
+
+    // 2. Real remote student peers connected via WebRTC (strictly human, zero AI)
     const validStudentPeers = (rtcPeers || []).filter(
-      (p) => p && p.role !== 'faculty' && p.role !== 'college_admin' && p.role !== 'super_admin'
+      (p) => p && p.role !== 'faculty' && p.role !== 'college_admin' && p.role !== 'super_admin' && !isAiParticipant(p)
     );
 
     validStudentPeers.forEach((peer) => {
@@ -300,10 +321,10 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
         !st ||
         st.isEmptySeat ||
         st.isUser ||
+        isAiParticipant(st) ||
         st.id?.startsWith('seat-') ||
         st.id?.startsWith('slot-stu-') ||
         st.id?.startsWith('slot-student-') ||
-        st.id?.startsWith('ai-') ||
         st.id?.startsWith('stu-pres-') ||
         st.name?.startsWith('Seat ') ||
         (st as any).role === 'faculty' ||
@@ -339,9 +360,9 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
       }
     });
 
-    // Return strictly real participants (only current user, live peers, and verified slot enrollee students)
+    // Return strictly real participants (only current user, live peers, and verified slot enrollee students, never AI)
     const finalRealParticipants = Array.from(seatMap.values())
-      .filter((s) => !s.isEmptySeat && !s.id?.startsWith('ai-') && !s.id?.startsWith('slot-student-') && s.college !== 'Available Desk')
+      .filter((s) => !s.isEmptySeat && !isAiParticipant(s) && !s.id?.startsWith('slot-student-') && s.college !== 'Available Desk')
       .sort((a, b) => (a.seatNumber || 0) - (b.seatNumber || 0));
 
     // Fallback: If empty, at least ensure currentUser is present
@@ -402,16 +423,36 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
     });
   }, [presentationStudents, session.presentationTopics, session.topic]);
 
-  // Automated Presentation Video/Audio Recorder (Saved to Faculty Dashboard)
+  const activeSlide = topicSlides[currentSlideIndex] || topicSlides[0];
+
+  // Automated Presentation Video/Audio Recorder (Saved to Faculty Dashboard with presentation stage layout)
   const gdRecorder = useGDRecorder({
     slotId: session.slotId || session.id || 'slot-1',
     isSessionActive: session.status === 'active',
     localStream: videoStream,
-    localAudioStream: audioStream,
+    localAudioStream: audioStream || rtcLocalAudioStream,
     peerStreams: rtcPeerStreams,
     recordVideo: true,
     enabled: true,
-    topicTitle: session.topic || 'Classroom Presentation',
+    topicTitle: currentTopic || session.topic || 'Classroom Presentation',
+    layoutMode: 'presentation',
+    screenStream: isSharingScreen && slideMode === 'screen' ? screenStream : null,
+    presentationInfo: {
+      badge: activeSlide?.badge,
+      title: activeSlide?.title,
+      subtitle: activeSlide?.subtitle,
+      bullets: activeSlide?.bullets,
+      currentSlideIndex: currentSlideIndex + 1,
+      totalSlides: topicSlides.length,
+      slideMode: isSharingScreen && slideMode === 'screen' ? 'screen' : 'deck',
+      phase,
+      presenterName: currentPresenter?.name || 'Candidate',
+      presenterCollege: currentPresenter?.college || session.collegeCode || 'Institution',
+      aiGuidance: aiSpeech || '',
+    },
+    currentSpeakerId: currentPresenter?.id,
+    currentSpeakerName: currentPresenter?.name,
+    latestTranscriptText: liveSpeech || (transcripts.length > 0 ? transcripts[transcripts.length - 1].text : ''),
     participantTiles: presentationStudents.map((st) => ({
       id: st.id,
       socketId: st.socketId,
@@ -419,9 +460,10 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
       name: st.name,
       college: st.college,
       seatNumber: st.seatNumber,
-      isSpeaking: st.isSpeaking,
-      cameraActive: st.cameraActive,
+      isSpeaking: st.id === currentPresenter?.id ? (st.isUser ? isMicOn : st.isSpeaking) : st.isSpeaking,
+      cameraActive: st.isUser ? isCameraOn : st.cameraActive,
       isUser: st.isUser,
+      isMuted: st.isUser ? !isMicOn : !st.micActive,
       videoStream: st.isUser ? (videoStream || st.videoStream) : st.videoStream,
     })),
     autoStartOnActive: true,
@@ -779,9 +821,29 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
 
   // Presenter Microphone Toggle (Mute / Unmute)
   const handleToggleMic = async () => {
-    if (isMicOn) {
-      setIsMicOn(false);
-      isMicOnRef.current = false;
+    const nextState = !isMicOn;
+    setIsMicOn(nextState);
+    isMicOnRef.current = nextState;
+
+    // 1. Toggle WebRTC live microphone if available
+    if (rtcSetMicEnabled) {
+      rtcSetMicEnabled(nextState);
+    }
+
+    // 2. Toggle local audio stream tracks
+    if (audioStream) {
+      audioStream.getAudioTracks().forEach((track) => {
+        track.enabled = nextState;
+      });
+    }
+    if (rtcLocalAudioStream) {
+      rtcLocalAudioStream.getAudioTracks().forEach((track) => {
+        track.enabled = nextState;
+      });
+    }
+
+    // 3. Manage Speech Recognition
+    if (!nextState) {
       if (speechRecognitionRef.current) {
         try { speechRecognitionRef.current.stop(); } catch {}
       }
@@ -790,8 +852,6 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
         setLiveSpeech('');
       }
     } else {
-      setIsMicOn(true);
-      isMicOnRef.current = true;
       const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (SpeechRec) {
         try {
@@ -949,6 +1009,29 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
               <span>Recording Saved</span>
             </span>
           ) : null}
+          {/* Presenter / User Microphone Mute & Unmute Toggle */}
+          <button
+            type="button"
+            onClick={handleToggleMic}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer shadow-2xs ${
+              isMicOn
+                ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-500 shadow-emerald-600/20 ring-2 ring-emerald-400/30'
+                : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-300'
+            }`}
+            title={isMicOn ? 'Click to Mute Microphone' : 'Click to Unmute Microphone'}
+          >
+            {isMicOn ? (
+              <>
+                <Mic className="w-4 h-4 text-white animate-pulse" />
+                <span className="hidden sm:inline">Mic: On</span>
+              </>
+            ) : (
+              <>
+                <MicOff className="w-4 h-4 text-rose-600" />
+                <span className="hidden sm:inline">Mic: Muted</span>
+              </>
+            )}
+          </button>
 
           <button
             onClick={() => setIsRoomAudioMuted(!isRoomAudioMuted)}
@@ -1207,6 +1290,30 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
                       <>
                         <VideoOff className="w-3.5 h-3.5 text-slate-500" />
                         <span>My Video: Off</span>
+                      </>
+                    )}
+                  </button>
+
+                  {/* 2. TURN MIC ON / OFF (MUTE / UNMUTE) */}
+                  <button
+                    type="button"
+                    onClick={handleToggleMic}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs ${
+                      isMicOn
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-400/40 shadow-emerald-600/20'
+                        : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300'
+                    }`}
+                    title={isMicOn ? 'Click to Mute Microphone' : 'Click to Unmute Microphone'}
+                  >
+                    {isMicOn ? (
+                      <>
+                        <Mic className="w-3.5 h-3.5 text-white animate-pulse" />
+                        <span>My Mic: On</span>
+                      </>
+                    ) : (
+                      <>
+                        <MicOff className="w-3.5 h-3.5 text-rose-600" />
+                        <span>My Mic: Muted</span>
                       </>
                     )}
                   </button>
