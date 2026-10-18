@@ -21,14 +21,16 @@ export function getBestSupportedAudioMimeType(): string {
 }
 
 // Detect best supported video MIME type for grid video recording
+// Prioritizes software-safe VP8 / WebM for 100% reliability on mobile/Android Chrome
 export function getBestSupportedVideoMimeType(): string {
   if (typeof window === 'undefined' || typeof MediaRecorder === 'undefined') return 'video/webm';
   const candidates = [
-    'video/webm;codecs=vp9,opus',
     'video/webm;codecs=vp8,opus',
     'video/webm',
+    'video/webm;codecs=h264,opus',
     'video/mp4;codecs=avc1,mp4a.40.2',
     'video/mp4',
+    'video/webm;codecs=vp9,opus',
   ];
   for (const type of candidates) {
     if (MediaRecorder.isTypeSupported(type)) {
@@ -36,6 +38,20 @@ export function getBestSupportedVideoMimeType(): string {
     }
   }
   return 'video/webm';
+}
+
+export function getAllSupportedVideoMimeTypes(): string[] {
+  if (typeof window === 'undefined' || typeof MediaRecorder === 'undefined') return ['video/webm'];
+  const candidates = [
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+    'video/webm;codecs=h264,opus',
+    'video/mp4;codecs=avc1,mp4a.40.2',
+    'video/mp4',
+    'video/webm;codecs=vp9,opus',
+    '',
+  ];
+  return candidates.filter((c) => !c || MediaRecorder.isTypeSupported(c));
 }
 
 export interface UploadRecordingResponse {
@@ -1811,6 +1827,10 @@ export function useGDRecorder({
             : cleanSpeech;
         ctx.fillText(`"${truncatedSpeech}"`, capX + 16 + tagW, capY + capH / 2);
       }
+
+      // Micro-pixel draw to guarantee Chrome/Android MediaCodec compositor pipeline recognizes active frame updates
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.01)';
+      ctx.fillRect(0, 0, 2, 2);
     };
 
     // Render the initial frame synchronously so the canvas has valid content immediately
@@ -1892,8 +1912,12 @@ export function useGDRecorder({
         osc.start();
       }
 
-      let recordingStream: MediaStream;
-      let chosenMime = '';
+      let canvasStream: MediaStream | null = null;
+      let videoTrack: MediaStreamTrack | null = null;
+      const mixedAudioTracks = dest.stream.getAudioTracks().filter(Boolean);
+      mixedAudioTracks.forEach((t) => {
+        t.enabled = true;
+      });
 
       if (recordVideo && typeof document !== 'undefined') {
         try {
@@ -1901,71 +1925,132 @@ export function useGDRecorder({
           const canvas = document.createElement('canvas');
           canvas.width = 1280;
           canvas.height = 720;
+          canvas.id = `erus-gd-canvas-${Date.now()}`;
+          // Keep canvas offscreen but explicitly attached to DOM so Chrome/Android compositors maintain active hardware surface
+          canvas.style.position = 'fixed';
+          canvas.style.left = '-9999px';
+          canvas.style.top = '-9999px';
+          canvas.style.width = '1px';
+          canvas.style.height = '1px';
+          canvas.style.opacity = '0';
+          canvas.style.pointerEvents = 'none';
+          canvas.style.zIndex = '-9999';
+          document.body.appendChild(canvas);
+          canvasRef.current = canvas;
+
           // Paint initial background so captureStream has immediate graphical content
           const initialCtx = canvas.getContext('2d');
           if (initialCtx) {
             initialCtx.fillStyle = '#0f172a';
             initialCtx.fillRect(0, 0, 1280, 720);
           }
-          canvasRef.current = canvas;
 
           startCanvasVideoCompositor(canvas);
 
           const captureFn = (canvas as any).captureStream || (canvas as any).webkitCaptureStream;
-          let canvasStream: MediaStream | null = null;
           if (typeof captureFn === 'function') {
             canvasStream = captureFn.call(canvas, 20);
           }
 
           const rawVideoTracks = canvasStream ? canvasStream.getVideoTracks() : [];
-          const videoTrack = rawVideoTracks && rawVideoTracks.length > 0 ? rawVideoTracks[0] : null;
-          const mixedAudioTracks = dest.stream.getAudioTracks().filter(Boolean);
-          mixedAudioTracks.forEach((t) => {
-            t.enabled = true;
-          });
-
-          if (videoTrack) {
-            recordingStream = new MediaStream([videoTrack, ...mixedAudioTracks]);
-            chosenMime = getBestSupportedVideoMimeType();
-          } else {
-            console.warn('[GD Recorder] No canvas video track obtained; recording audio-only stream');
-            recordingStream = dest.stream;
-            chosenMime = getBestSupportedAudioMimeType();
-          }
+          videoTrack = rawVideoTracks && rawVideoTracks.length > 0 ? rawVideoTracks[0] : null;
         } catch (canvasErr) {
-          console.warn('[GD Recorder] Canvas compositing setup error, falling back to audio stream:', canvasErr);
-          recordingStream = dest.stream;
-          chosenMime = getBestSupportedAudioMimeType();
+          console.warn('[GD Recorder] Canvas compositing setup error:', canvasErr);
         }
-      } else {
-        recordingStream = dest.stream;
-        chosenMime = getBestSupportedAudioMimeType();
       }
 
-      let recorder: MediaRecorder;
-      try {
-        const recorderOptions: MediaRecorderOptions = chosenMime ? { mimeType: chosenMime } : {};
-        recorder = new MediaRecorder(recordingStream, recorderOptions);
-        mimeTypeRef.current = chosenMime;
-      } catch (mimeErr) {
-        console.warn('[GD Recorder] Primary MediaRecorder init with chosen mime failed, falling back to default stream codec:', mimeErr);
+      const isMobile = typeof navigator !== 'undefined' && /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent || '');
+      const videoBitrate = isMobile ? 800000 : 1500000;
+      const videoCandidates = getAllSupportedVideoMimeTypes();
+
+      let recorder: MediaRecorder | null = null;
+      let usedMime = '';
+
+      // TIER 1: Video + Mixed Audio
+      if (recordVideo && videoTrack) {
         try {
-          // Tier 2: let the browser pick native default codec for this stream
-          recorder = new MediaRecorder(recordingStream);
-          mimeTypeRef.current = recorder.mimeType || '';
-        } catch (streamErr) {
-          console.warn('[GD Recorder] Stream MediaRecorder failed, falling back to audio-only destination stream:', streamErr);
-          // Tier 3: fallback to pure audio destination stream so the discussion audio is never lost
-          const audioMime = getBestSupportedAudioMimeType();
-          try {
-            recorder = audioMime ? new MediaRecorder(dest.stream, { mimeType: audioMime }) : new MediaRecorder(dest.stream);
-            mimeTypeRef.current = audioMime || recorder.mimeType || '';
-          } catch (audioErr) {
-            recorder = new MediaRecorder(dest.stream);
-            mimeTypeRef.current = recorder.mimeType || '';
+          const streamToRecord = new MediaStream([videoTrack, ...mixedAudioTracks]);
+          for (const candidate of videoCandidates) {
+            try {
+              const opts: MediaRecorderOptions = {
+                ...(candidate ? { mimeType: candidate } : {}),
+                videoBitsPerSecond: videoBitrate,
+              };
+              recorder = new MediaRecorder(streamToRecord, opts);
+              usedMime = candidate || recorder.mimeType || 'video/webm';
+              console.log(`[GD Recorder] Tier 1: Successfully initialized MediaRecorder with video+audio (${usedMime})`);
+              break;
+            } catch (t1Err) {
+              console.warn(`[GD Recorder] Tier 1 candidate "${candidate || 'default'}" failed:`, t1Err);
+            }
           }
+        } catch (streamErr) {
+          console.warn('[GD Recorder] Tier 1 stream composition error:', streamErr);
         }
       }
+
+      // TIER 2: If mixing video with WebAudio destination failed (known issue on certain Android chipsets),
+      // try combining video with direct microphone track
+      if (!recorder && recordVideo && videoTrack) {
+        try {
+          const directMicTracks = (localAudioStreamRef.current?.getAudioTracks() || localStreamRef.current?.getAudioTracks() || []).filter((t) => t.readyState === 'live');
+          if (directMicTracks.length > 0) {
+            const directStream = new MediaStream([videoTrack, ...directMicTracks]);
+            for (const candidate of videoCandidates) {
+              try {
+                const opts: MediaRecorderOptions = {
+                  ...(candidate ? { mimeType: candidate } : {}),
+                  videoBitsPerSecond: videoBitrate,
+                };
+                recorder = new MediaRecorder(directStream, opts);
+                usedMime = candidate || recorder.mimeType || 'video/webm';
+                console.log(`[GD Recorder] Tier 2: Successfully initialized with direct mic + video (${usedMime})`);
+                break;
+              } catch {}
+            }
+          }
+        } catch {}
+      }
+
+      // TIER 3: Video-only stream (Canvas video track alone).
+      // If audio merging failed, the video presentation & GD room screen MUST NOT be lost!
+      if (!recorder && recordVideo && videoTrack && canvasStream) {
+        try {
+          const videoOnlyStream = new MediaStream([videoTrack]);
+          for (const candidate of videoCandidates) {
+            try {
+              const opts: MediaRecorderOptions = {
+                ...(candidate ? { mimeType: candidate } : {}),
+                videoBitsPerSecond: videoBitrate,
+              };
+              recorder = new MediaRecorder(videoOnlyStream, opts);
+              usedMime = candidate || recorder.mimeType || 'video/webm';
+              console.log(`[GD Recorder] Tier 3: Successfully initialized video-only MediaRecorder (${usedMime})`);
+              break;
+            } catch {}
+          }
+        } catch {}
+      }
+
+      // TIER 4: Pure audio fallback (only if device cannot encode any video at all)
+      if (!recorder) {
+        const audioCandidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg', 'audio/mp4', ''];
+        for (const candidate of audioCandidates) {
+          try {
+            const opts: MediaRecorderOptions = candidate ? { mimeType: candidate } : {};
+            recorder = new MediaRecorder(dest.stream, opts);
+            usedMime = candidate || recorder.mimeType || 'audio/webm';
+            console.log(`[GD Recorder] Tier 4: Fallback to audio-only MediaRecorder (${usedMime})`);
+            break;
+          } catch {}
+        }
+      }
+
+      if (!recorder) {
+        throw new Error('MediaRecorder could not be initialized with any supported codec');
+      }
+
+      mimeTypeRef.current = usedMime;
       mediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = (e) => {
@@ -2014,6 +2099,13 @@ export function useGDRecorder({
             hiddenVideoContainerRef.current.remove();
           } catch {}
           hiddenVideoContainerRef.current = null;
+        }
+
+        if (canvasRef.current && canvasRef.current.parentNode) {
+          try {
+            canvasRef.current.parentNode.removeChild(canvasRef.current);
+          } catch {}
+          canvasRef.current = null;
         }
 
         const mime = mimeTypeRef.current || (recordVideo ? 'video/webm' : 'audio/webm');
@@ -2248,6 +2340,12 @@ export function useGDRecorder({
           hiddenVideoContainerRef.current.remove();
         } catch {}
         hiddenVideoContainerRef.current = null;
+      }
+      if (canvasRef.current && canvasRef.current.parentNode) {
+        try {
+          canvasRef.current.parentNode.removeChild(canvasRef.current);
+        } catch {}
+        canvasRef.current = null;
       }
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         try {

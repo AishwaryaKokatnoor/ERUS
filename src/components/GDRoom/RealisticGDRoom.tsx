@@ -147,6 +147,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   const clientSilenceStageRef = useRef<number>(0);
   const isSessionActive = session.status === 'active' || Boolean(session.startedAt && session.status !== 'completed');
   const [showVideoModal, setShowVideoModal] = useState(false);
+  const [hasVideoTrackModal, setHasVideoTrackModal] = useState(true);
   // Faculty Live Observation Notes State (Enhancement 4)
   const [isNotesModalOpen, setIsNotesModalOpen] = useState(false);
   const [noteTargetStudentId, setNoteTargetStudentId] = useState<string>(session?.students?.[0]?.id || '');
@@ -4572,12 +4573,47 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               </button>
             </div>
 
-            <div className="relative aspect-video w-full rounded-2xl overflow-hidden bg-black flex items-center justify-center shadow-inner">
+            <div className="relative aspect-video w-full rounded-2xl overflow-hidden bg-slate-950 flex items-center justify-center shadow-inner">
+              {!hasVideoTrackModal && (
+                <div className="absolute inset-0 bottom-12 z-10 bg-gradient-to-b from-slate-900 via-indigo-950/70 to-slate-900 flex flex-col items-center justify-center p-6 text-center pointer-events-none select-none">
+                  <div className="w-14 h-14 rounded-2xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 mb-3 shadow-lg shadow-indigo-500/10">
+                    <Mic className="w-7 h-7 animate-pulse" />
+                  </div>
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold mb-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                    <span>Live Discussion Audio Active</span>
+                  </div>
+                  <h4 className="text-white font-bold text-sm sm:text-base max-w-md truncate mb-1">
+                    {session.topic || 'Group Discussion'}
+                  </h4>
+                  <p className="text-xs text-slate-400 max-w-sm mb-3">
+                    Verbal discussion audio recorded. Use the media player controls below for playback and scrubbing.
+                  </p>
+                  <div className="flex items-center gap-1 h-5">
+                    {[40, 70, 100, 60, 85, 35, 95, 50, 80, 65, 45, 90].map((h, i) => (
+                      <span
+                        key={i}
+                        className="w-1 bg-indigo-400 rounded-full animate-pulse"
+                        style={{ height: `${h}%`, animationDelay: `${i * 100}ms` }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
               <video
                 controls
                 autoPlay
+                playsInline
                 src={gdRecorder.recordingUrl || session.recordingUrl}
-                className="w-full h-full object-contain"
+                onLoadedMetadata={(e) => {
+                  const v = e.currentTarget;
+                  if (v.videoWidth === 0 || v.videoHeight === 0) {
+                    setHasVideoTrackModal(false);
+                  } else {
+                    setHasVideoTrackModal(true);
+                  }
+                }}
+                className="w-full h-full object-contain relative z-0"
               >
                 Your browser does not support the video tag.
               </video>
