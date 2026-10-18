@@ -1896,23 +1896,47 @@ export function useGDRecorder({
       let chosenMime = '';
 
       if (recordVideo && typeof document !== 'undefined') {
-        // Setup 720p HD Canvas
-        const canvas = document.createElement('canvas');
-        canvas.width = 1280;
-        canvas.height = 720;
-        canvasRef.current = canvas;
+        try {
+          // Setup 720p HD Canvas
+          const canvas = document.createElement('canvas');
+          canvas.width = 1280;
+          canvas.height = 720;
+          // Paint initial background so captureStream has immediate graphical content
+          const initialCtx = canvas.getContext('2d');
+          if (initialCtx) {
+            initialCtx.fillStyle = '#0f172a';
+            initialCtx.fillRect(0, 0, 1280, 720);
+          }
+          canvasRef.current = canvas;
 
-        startCanvasVideoCompositor(canvas);
+          startCanvasVideoCompositor(canvas);
 
-        const canvasStream = canvas.captureStream(20);
-        const videoTrack = canvasStream.getVideoTracks()[0];
-        const mixedAudioTracks = dest.stream.getAudioTracks();
-        mixedAudioTracks.forEach((t) => {
-          t.enabled = true;
-        });
+          const captureFn = (canvas as any).captureStream || (canvas as any).webkitCaptureStream;
+          let canvasStream: MediaStream | null = null;
+          if (typeof captureFn === 'function') {
+            canvasStream = captureFn.call(canvas, 20);
+          }
 
-        recordingStream = new MediaStream([videoTrack, ...mixedAudioTracks]);
-        chosenMime = getBestSupportedVideoMimeType();
+          const rawVideoTracks = canvasStream ? canvasStream.getVideoTracks() : [];
+          const videoTrack = rawVideoTracks && rawVideoTracks.length > 0 ? rawVideoTracks[0] : null;
+          const mixedAudioTracks = dest.stream.getAudioTracks().filter(Boolean);
+          mixedAudioTracks.forEach((t) => {
+            t.enabled = true;
+          });
+
+          if (videoTrack) {
+            recordingStream = new MediaStream([videoTrack, ...mixedAudioTracks]);
+            chosenMime = getBestSupportedVideoMimeType();
+          } else {
+            console.warn('[GD Recorder] No canvas video track obtained; recording audio-only stream');
+            recordingStream = dest.stream;
+            chosenMime = getBestSupportedAudioMimeType();
+          }
+        } catch (canvasErr) {
+          console.warn('[GD Recorder] Canvas compositing setup error, falling back to audio stream:', canvasErr);
+          recordingStream = dest.stream;
+          chosenMime = getBestSupportedAudioMimeType();
+        }
       } else {
         recordingStream = dest.stream;
         chosenMime = getBestSupportedAudioMimeType();

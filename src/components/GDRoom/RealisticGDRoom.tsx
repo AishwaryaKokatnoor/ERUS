@@ -175,6 +175,26 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  const [localRoomElapsedSeconds, setLocalRoomElapsedSeconds] = useState(elapsedSeconds || 0);
+  useEffect(() => {
+    if (!isSessionActive) {
+      setLocalRoomElapsedSeconds(0);
+      return;
+    }
+    const updateLocalElapsed = () => {
+      if (session.startedAt) {
+        setLocalRoomElapsedSeconds(Math.max(0, Math.floor((Date.now() - session.startedAt) / 1000)));
+      } else {
+        setLocalRoomElapsedSeconds((prev) => prev + 1);
+      }
+    };
+    updateLocalElapsed();
+    const interval = setInterval(updateLocalElapsed, 1000);
+    return () => clearInterval(interval);
+  }, [isSessionActive, session.startedAt]);
+
+  const effectiveElapsed = Math.max(elapsedSeconds || 0, localRoomElapsedSeconds);
+
   const formatElapsedClock = (secs: number) => {
     const mins = Math.floor(secs / 60).toString().padStart(2, '0');
     const remainingSecs = (secs % 60).toString().padStart(2, '0');
@@ -184,7 +204,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   const handleOpenNoteModal = (studentId?: string) => {
     const targetId = studentId || noteTargetStudentId || session?.students?.[0]?.id || '';
     setNoteTargetStudentId(targetId);
-    setNoteTimestamp(formatElapsedClock(elapsedSeconds));
+    setNoteTimestamp(formatElapsedClock(effectiveElapsed));
     setIsNotesModalOpen(true);
   };
 
@@ -199,8 +219,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       studentId: targetStudent.id,
       studentName: targetStudent.name,
       seatNumber: targetStudent.seatNumber,
-      timestamp: noteTimestamp || formatElapsedClock(elapsedSeconds),
-      timestampSeconds: elapsedSeconds,
+      timestamp: noteTimestamp || formatElapsedClock(effectiveElapsed),
+      timestampSeconds: effectiveElapsed,
       note: cleanNote,
       tag: noteTag,
       facultyName: currentUser?.name || session.assignedFacultyName || 'Faculty Evaluator',
@@ -1122,7 +1142,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   const gdRecorder = useGDRecorder({
     slotId: session.id || session.slotId || 'slot-1',
-    isSessionActive: session.status === 'active',
+    isSessionActive: Boolean(isSessionActive),
     localStream: videoStream,
     localAudioStream: rtcLocalAudioStream || (getLocalAudioStream ? getLocalAudioStream() : null) || audioStream,
     peerStreams: rtcPeerStreams,
@@ -2342,13 +2362,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // If no one speaks initially, AI Facilitator calls upon a student or welcomes the room
   const handleInitiateOpeningSpeaker = (force: boolean = false) => {
     if (rtcSimulationMode) return;
-    if (hasInitiatedOpeningRef.current) return;
-    const hasSpoken = transcripts.some((t) => !t.isFacilitator) || transcripts.some((t) => t.isFacilitator);
-    if (hasSpoken) {
-      hasInitiatedOpeningRef.current = true;
-      return;
-    }
+    if (!force && hasInitiatedOpeningRef.current) return;
     if (!force) {
+      const hasSpoken = transcripts.some((t) => !t.isFacilitator);
+      if (hasSpoken) {
+        hasInitiatedOpeningRef.current = true;
+        return;
+      }
       if (!isSessionActive || session.isFacilitatorSpeaking || session.currentSpeakerId) return;
     }
 
@@ -2603,6 +2623,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 </span>
               )}
 
+              {/* Live Discussion Session Elapsed Timer */}
+              {isSessionActive && (
+                <span className="px-3 py-1 rounded-full text-xs font-bold bg-indigo-100 dark:bg-indigo-950/80 text-indigo-900 dark:text-indigo-200 border border-indigo-300 dark:border-indigo-700 flex items-center gap-1.5 shadow-2xs">
+                  <Clock className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0 animate-pulse" />
+                  <span className="font-mono">Time: {formatElapsedClock(effectiveElapsed)}</span>
+                </span>
+              )}
+
               {/* Allotted Faculty Evaluator */}
               <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 dark:bg-amber-950/70 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800 flex items-center gap-1.5 shadow-2xs">
                 <GraduationCap className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
@@ -2843,6 +2871,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 id="start-gd-btn"
                 onClick={() => {
                   roomVoice.unlock();
+                  gdRecorderRef.current?.startRecording().catch((e) => {
+                    console.warn('[Start GD] Direct recorder start notice:', e);
+                  });
                   setSession((prev) => ({
                     ...prev,
                     status: 'active',
@@ -2854,9 +2885,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   if (onStartSession) {
                     onStartSession(session.id);
                   }
-                  setTimeout(() => {
-                    handleInitiateOpeningSpeaker(true);
-                  }, 350);
+                  handleInitiateOpeningSpeaker(true);
                 }}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-700/30 transition-all hover:scale-105 active:scale-95 cursor-pointer animate-pulse ring-2 ring-emerald-400/50"
               >
@@ -2879,15 +2908,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                     id="restart-gd-btn"
                     onClick={() => {
                       roomVoice.unlock();
+                      gdRecorderRef.current?.startRecording().catch((e) => {
+                        console.warn('[Restart GD] Direct recorder start notice:', e);
+                      });
                       if (rtcStartSession) {
                         rtcStartSession(session.topic);
                       }
                       if (onStartSession) {
                         onStartSession(session.id);
                       }
-                      setTimeout(() => {
-                        handleInitiateOpeningSpeaker(true);
-                      }, 350);
+                      handleInitiateOpeningSpeaker(true);
                     }}
                     className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-600 text-white shadow-md transition-all active:scale-95 cursor-pointer border border-emerald-500/50"
                     title="Restart discussion from beginning and deliver opening speech"

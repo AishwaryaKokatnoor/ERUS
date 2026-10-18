@@ -673,9 +673,17 @@ function GDAppContent() {
     const isLive = session.status === 'active' || Boolean(session.startedAt && session.status !== 'completed');
     if (!currentUser || currentTab !== 'room' || !isLive) return;
 
-    const timer = setInterval(() => {
-      setElapsedSeconds((prev) => prev + 1);
-    }, 1000);
+    const tickTimer = () => {
+      if (session.startedAt) {
+        const delta = Math.max(0, Math.floor((Date.now() - session.startedAt) / 1000));
+        setElapsedSeconds(delta);
+      } else {
+        setElapsedSeconds((prev) => prev + 1);
+      }
+    };
+
+    tickTimer();
+    const timer = setInterval(tickTimer, 1000);
 
     return () => clearInterval(timer);
   }, [currentUser, currentTab, session.status, session.startedAt]);
@@ -685,8 +693,11 @@ function GDAppContent() {
     const targetSlotId = slotIdToStart || session.id;
     const targetSlot = availableSlots.find((s) => s.id === targetSlotId) || session;
 
-    // Reset timer to 0 for a fresh live discussion
-    setElapsedSeconds(0);
+    const isAlreadyActive = session.status === 'active' && session.id === targetSlotId;
+    if (!isAlreadyActive) {
+      setElapsedSeconds(0);
+    }
+    const sessionStartTime = (isAlreadyActive && session.startedAt) ? session.startedAt : Date.now();
 
     const isPresentation = targetSlot.activityType === 'presentation' || targetSlot.roomLayout === 'classroom';
     const welcomeIntroText = isPresentation
@@ -710,7 +721,7 @@ function GDAppContent() {
       currentPhase: 'intro',
       facilitatorSpeech: welcomeIntroText,
       isFacilitatorSpeaking: false,
-      startedAt: Date.now(),
+      startedAt: sessionStartTime,
       students: baseStudents.map((s) => ({
         ...s,
         speakingTurns: 0,
@@ -730,7 +741,7 @@ function GDAppContent() {
         activityType: isPresentation ? 'presentation' : 'gd',
         roomLayout: isPresentation ? 'classroom' : (s.roomLayout === 'speaker_center' ? 'speaker_center' : 'round_table'),
         status: 'active', 
-        startedAt: Date.now(),
+        startedAt: sessionStartTime,
         students: (s.students && s.students.length > 0 ? s.students : baseStudents).map((st) => ({
           ...st,
           speakingTurns: 0,

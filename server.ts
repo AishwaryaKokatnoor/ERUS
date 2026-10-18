@@ -9582,7 +9582,7 @@ CRITICAL RULES:
         }, speechDurationMs);
       }, facilitatorWaitMs);
     }
-  }, 1200);
+  }, isOpening ? 100 : 1200);
 }
 
 async function triggerDeadlockIntervention(room: LiveGDRoomState) {
