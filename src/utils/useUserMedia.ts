@@ -65,7 +65,13 @@ export function useUserMedia(): UserMediaControls {
     try {
       if (audioStreamRef.current) return audioStreamRef.current; // Already running
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       audioStreamRef.current = stream;
       setAudioStream(stream);
 

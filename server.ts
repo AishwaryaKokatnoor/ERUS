@@ -8477,20 +8477,25 @@ function broadcastFacilitatorSilencePrompt(
 
 function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
   let room = LIVE_ROOMS.get(slotId);
-  if (!room) {
-    let resolvedTopic = topic;
-    let slotStatus: 'waiting' | 'active' | 'completed' = 'waiting';
-    for (const slots of Object.values(persistentState.slots)) {
-      const slot = slots.find((s) => s.id === slotId);
-      if (slot) {
-        if (!resolvedTopic && slot.topic) resolvedTopic = slot.topic;
-        if (slot.status === 'active') slotStatus = 'active';
-        else if (slot.status === 'completed') slotStatus = 'completed';
-        break;
-      }
+  if (room) {
+    if (topic && topic.trim() && (!room.topic || room.topic === 'Group Discussion' || room.topic === 'General Discussion' || room.topic !== topic.trim())) {
+      room.topic = topic.trim();
     }
-    resolvedTopic = resolvedTopic || (currentLiveSession as any)?.topic || 'Group Discussion';
-    room = {
+    return room;
+  }
+  let resolvedTopic = topic;
+  let slotStatus: 'waiting' | 'active' | 'completed' = 'waiting';
+  for (const slots of Object.values(persistentState.slots)) {
+    const slot = slots.find((s) => s.id === slotId);
+    if (slot) {
+      if (!resolvedTopic && slot.topic) resolvedTopic = slot.topic;
+      if (slot.status === 'active') slotStatus = 'active';
+      else if (slot.status === 'completed') slotStatus = 'completed';
+      break;
+    }
+  }
+  resolvedTopic = resolvedTopic || (currentLiveSession as any)?.topic || 'Group Discussion';
+  room = {
       slotId,
       peers: new Map(),
       aiParticipants: new Map(),
@@ -8614,9 +8619,8 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
     }, 1000);
 
     LIVE_ROOMS.set(slotId, room);
+    return room;
   }
-  return room;
-}
 
 interface UtteranceClassification {
   category: 'greeting' | 'mic_check' | 'filler' | 'substantive';
@@ -9748,13 +9752,19 @@ Do not mention AI.`,
 
 io.on('connection', (socket) => {
   // 1. Join Slot Room
-  socket.on('join-gd-room', ({ slotId, user }) => {
+  socket.on('join-gd-room', ({ slotId, user, topic }: { slotId?: string; user?: any; topic?: string }) => {
     const safeSlotId = slotId || 'session-101';
-    const room = getOrCreateLiveRoom(safeSlotId);
+    const room = getOrCreateLiveRoom(safeSlotId, topic);
+    if (topic && topic.trim() && room.topic !== topic.trim()) {
+      room.topic = topic.trim();
+    }
     let targetSlot: any = null;
     for (const [, list] of Object.entries(persistentState.slots)) {
       const found = list.find((s) => s.id === safeSlotId);
       if (found) { targetSlot = found; break; }
+    }
+    if (targetSlot?.topic && targetSlot.topic.trim()) {
+      room.topic = targetSlot.topic.trim();
     }
     if (targetSlot?.status === 'active' && room.status !== 'active') {
       room.status = 'active';
@@ -9871,10 +9881,20 @@ io.on('connection', (socket) => {
       targetSlot.status = 'active';
       savePersistentState();
     }
-    if (topic) room.topic = topic;
+    if (topic && topic.trim()) {
+      room.topic = topic.trim();
+    } else if (targetSlot?.topic && targetSlot.topic.trim()) {
+      room.topic = targetSlot.topic.trim();
+    }
     room.status = 'active';
     room.silenceTimerSeconds = 0;
     room.silenceStage = 0;
+    room.transcripts = [];
+    room.openingStarted = false;
+    room.hasAnnouncedWelcome = false;
+    room.deadlockCount = 0;
+    room.silenceInterventionCount = 0;
+    room.askedQuestions = new Set<string>();
     syncAiParticipants(room);
     io.to(`room-${safeSlotId}`).emit('session-started', {
       slotId: safeSlotId,

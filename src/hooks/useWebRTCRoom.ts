@@ -22,6 +22,7 @@ export interface LivePeer {
 
 interface UseWebRTCRoomOptions {
   slotId: string;
+  topic?: string;
   currentUser: AuthUser | null;
   videoStream?: MediaStream | null;
   isCameraOn?: boolean;
@@ -86,6 +87,7 @@ const ICE_SERVERS: RTCConfiguration = {
 
 export function useWebRTCRoom({
   slotId,
+  topic,
   currentUser,
   videoStream = null,
   isCameraOn = false,
@@ -97,6 +99,10 @@ export function useWebRTCRoom({
   onPeerStatsUpdated,
   onRoomJoined,
 }: UseWebRTCRoomOptions) {
+  const topicRef = useRef<string | undefined>(topic);
+  useEffect(() => {
+    topicRef.current = topic;
+  }, [topic]);
   const [connected, setConnected] = useState(false);
   const [assignedSeat, setAssignedSeat] = useState<number>(currentUser && 'seatNumber' in currentUser ? (currentUser as any).seatNumber || 1 : 1);
   const [peers, setPeers] = useState<LivePeer[]>([]);
@@ -553,16 +559,23 @@ export function useWebRTCRoom({
             setLocalVolume(normVol);
           }
 
+          // Suppress acoustic feedback when AI voice is playing over speakers
+          const isAiSpeakingNow = Boolean(
+            typeof window !== 'undefined' && ((window as any).__erusIsAiSpeaking || (Date.now() - ((window as any).__erusLastAiSpeechTime || 0) < 2200))
+          );
+          const effectiveIsSpeaking = isAiSpeakingNow ? false : isSpeakingLiveRef.current;
+          const effectiveVol = isAiSpeakingNow ? 0 : normVol;
+
           // Broadcast volume level for UI visualizers without falsely declaring speaking turns from ambient noise
           const timeSinceEmit = now - lastSpeakingEmitTimestampRef.current;
           if (socketRef.current && (timeSinceEmit > 350 || Math.abs(normVol - lastVolumeStateEmittedRef.current) >= 12)) {
             lastSpeakingEmitTimestampRef.current = now;
             socketRef.current.emit('peer-speaking-state', {
               slotId,
-              isSpeaking: isSpeakingLiveRef.current,
+              isSpeaking: effectiveIsSpeaking,
               micActive: !isMicMutedRef.current,
               cameraActive: Boolean(isCameraOnRef.current && videoStreamRef.current),
-              volumeLevel: normVol,
+              volumeLevel: effectiveVol,
             });
           }
 
@@ -629,9 +642,10 @@ export function useWebRTCRoom({
         await initLocalMicrophoneRef.current();
       }
 
-      // Join the slot room with user metadata
+      // Join the slot room with user metadata and topic
       socket.emit('join-gd-room', {
         slotId,
+        topic: topicRef.current,
         user: {
           id: currentUserRef.current?.id || `anon-${socket.id}`,
           name: currentUserRef.current?.name || 'Student Participant',

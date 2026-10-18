@@ -740,9 +740,9 @@ function GDAppContent() {
       } : s))
     );
 
-    // Synchronized opening transcript: preserve existing or initialize fresh welcome entry so transcript stream is never blank
+    // Synchronized opening transcript: preserve existing only if belonging to this slot, else initialize fresh welcome entry
     setTranscripts((prev) => {
-      if (prev.length > 0) return prev;
+      if (prev.length > 0 && prev.every((t) => t.sessionId === targetSlotId)) return prev;
       return [
         {
           id: `t-opening-${Date.now()}`,

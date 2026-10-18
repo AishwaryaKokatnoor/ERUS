@@ -356,6 +356,8 @@ class RoomVoiceEngine {
       this.isCurrentlySpeaking = true;
       this.speechStartedAt = Date.now();
       if (typeof window !== 'undefined') {
+        (window as any).__erusIsAiSpeaking = true;
+        (window as any).__erusLastAiSpeechTime = Date.now();
         window.dispatchEvent(new CustomEvent('erus-ai-voice-start'));
       }
 
@@ -375,6 +377,8 @@ class RoomVoiceEngine {
             this.watchdogInterval = null;
           }
           if (typeof window !== 'undefined') {
+            (window as any).__erusIsAiSpeaking = false;
+            (window as any).__erusLastAiSpeechTime = Date.now();
             window.dispatchEvent(new CustomEvent('erus-ai-voice-end'));
           }
           if (onEnd) onEnd();
@@ -614,6 +618,8 @@ class RoomVoiceEngine {
               this.watchdogInterval = null;
             }
             if (typeof window !== 'undefined') {
+              (window as any).__erusIsAiSpeaking = false;
+              (window as any).__erusLastAiSpeechTime = Date.now();
               window.dispatchEvent(new CustomEvent('erus-ai-voice-end'));
             }
           };
@@ -650,7 +656,11 @@ class RoomVoiceEngine {
 
           this.isCurrentlySpeaking = true;
           this.speechStartedAt = Date.now();
-          window.dispatchEvent(new CustomEvent('erus-ai-voice-start'));
+          if (typeof window !== 'undefined') {
+            (window as any).__erusIsAiSpeaking = true;
+            (window as any).__erusLastAiSpeechTime = Date.now();
+            window.dispatchEvent(new CustomEvent('erus-ai-voice-start'));
+          }
           if (window.speechSynthesis.paused) {
             window.speechSynthesis.resume();
           }
@@ -679,15 +689,26 @@ class RoomVoiceEngine {
 
   public isSpeaking(): boolean {
     if (typeof window === 'undefined' || !window.speechSynthesis) return false;
-    if (!this.isCurrentlySpeaking) return false;
-    // Safety check: if more than 20 seconds have elapsed since start of speech, it has naturally finished
-    if (this.speechStartedAt && Date.now() - this.speechStartedAt > 20000) {
+    const nativeSpeaking = Boolean(window.speechSynthesis.speaking);
+    const globalSpeaking = Boolean((window as any).__erusIsAiSpeaking);
+    if (!this.isCurrentlySpeaking && !nativeSpeaking && !globalSpeaking) return false;
+    // Safety check: if more than 25 seconds have elapsed since start of speech, it has naturally finished
+    if (this.speechStartedAt && Date.now() - this.speechStartedAt > 25000) {
       this.isCurrentlySpeaking = false;
+      if (typeof window !== 'undefined') {
+        (window as any).__erusIsAiSpeaking = false;
+      }
       this.activeUtterances.clear();
       this.currentUtterance = null;
       return false;
     }
-    return this.isCurrentlySpeaking;
+    return this.isCurrentlySpeaking || nativeSpeaking || globalSpeaking;
+  }
+
+  public isSpeakingOrRecentlyFinished(bufferMs: number = 2000): boolean {
+    if (this.isSpeaking()) return true;
+    const lastSpoken = typeof window !== 'undefined' ? (window as any).__erusLastAiSpeechTime || 0 : 0;
+    return (Date.now() - lastSpoken) < bufferMs;
   }
 
   public stop() {
@@ -700,6 +721,8 @@ class RoomVoiceEngine {
       this.watchdogInterval = null;
     }
     if (typeof window !== 'undefined') {
+      (window as any).__erusIsAiSpeaking = false;
+      (window as any).__erusLastAiSpeechTime = Date.now();
       if (window.speechSynthesis) {
         try {
           window.speechSynthesis.cancel();

@@ -300,7 +300,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     isAudioAutoplayBlocked: rtcIsAudioAutoplayBlocked,
     resumeAudioPlayback: rtcResumeAudioPlayback,
   } = useWebRTCRoom({
-    slotId: session.slotId || session.id || 'slot-1',
+    slotId: session.id || session.slotId || 'slot-1',
+    topic: session.topic,
     currentUser,
     videoStream,
     isCameraOn,
@@ -309,7 +310,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         setSession((prev) => ({
           ...prev,
           status: 'active',
-          topic: roomData.topic || prev.topic,
+          topic: (prev.topic && prev.topic !== 'Group Discussion' && prev.topic !== 'General Discussion') ? prev.topic : (roomData.topic || prev.topic),
         }));
         if (onStartSession) {
           onStartSession(session.id);
@@ -645,24 +646,27 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       const curSpeakingLive = rtcIsSpeakingLiveRef.current;
       const curSession = sessionRef.current;
 
+      // Check if AI facilitator or peer voice is playing or recently finished (acoustic buffer)
+      const isAiActive = roomVoice.isSpeakingOrRecentlyFinished(2200) ||
+                         Boolean(curSession.isFacilitatorSpeaking) ||
+                         Boolean((window as any).__erusIsAiSpeaking) ||
+                         (Date.now() - ((window as any).__erusLastAiSpeechTime || 0) < 2200);
+
       // Crucial: Only consider talking if recognized words are actively being uttered
       // Ambient microphone noise, fan, or breath MUST NOT reset silence!
+      // AND acoustic feedback from AI voice must NEVER be considered user talking!
       const hasSpokenWords = Boolean(curTranscript && curTranscript.trim().length > 0);
       const isUserTalking =
         !rtcIsMicMutedRef.current &&
         isListeningMicRef.current &&
+        !isAiActive &&
         (curSpeakingLive || hasSpokenWords);
 
-      const isFacilitatorActive = curSession.isFacilitatorSpeaking || roomVoice.isSpeaking();
       if (isUserTalking) {
-        if (isFacilitatorActive) {
-          roomVoice.stop();
-          setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
-        }
         setLocalSilenceSeconds(0);
         clientSilenceStageRef.current = 0;
-      } else if (isFacilitatorActive) {
-        // AI Facilitator is actively speaking -> pause silence stopwatch, do not reset!
+      } else if (isAiActive) {
+        // AI Facilitator or Peer is actively speaking -> pause silence stopwatch, do not reset!
         return;
       } else {
         // Microphones remain open, but no candidate is uttering points -> silence ticks!
@@ -1511,8 +1515,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             return;
           }
 
-          // While AI facilitator voice is actively playing audio, ignore brief acoustic feedback
-          if (roomVoice.isSpeaking()) {
+          // While AI facilitator or peer voice is playing or recently finished (2.2s buffer for acoustic echo & recognition latency), discard feedback
+          const isAiSpeakingNow = roomVoice.isSpeakingOrRecentlyFinished(2200) ||
+                                  Boolean(sessionRef.current?.isFacilitatorSpeaking) ||
+                                  Boolean((window as any).__erusIsAiSpeaking) ||
+                                  (Date.now() - ((window as any).__erusLastAiSpeechTime || 0) < 2200);
+          if (isAiSpeakingNow) {
+            liveTranscriptRef.current = '';
+            setLiveSpeechTranscript('');
             return;
           }
 
@@ -1875,6 +1885,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
     const safeSpeechText = String(text || '');
     setIsAiProcessing(true);
+
+    // Flush any live candidate transcript so AI speech is not captured by candidate mic
+    liveTranscriptRef.current = '';
+    setLiveSpeechTranscript('');
+    try {
+      if (recognitionRef.current) {
+        recognitionRef.current.abort();
+      }
+    } catch {}
+
     setSession((prev) => ({
       ...prev,
       facilitatorSpeech: safeSpeechText,
@@ -1922,6 +1942,11 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
       setIsAiProcessing(false);
       notifyFacilitatorSpeechEndedRef.current();
+      setTimeout(() => {
+        if (typeof (window as any).__startErusSpeechRecognition === 'function') {
+          (window as any).__startErusSpeechRecognition();
+        }
+      }, 400);
       if (onSpeechEnd) {
         onSpeechEnd();
       }
