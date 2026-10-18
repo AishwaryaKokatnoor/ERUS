@@ -2801,7 +2801,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                     <p className="text-[11px] text-amber-800 dark:text-amber-300/80">
                       {canStartSession
                         ? "You are evaluating this session. When candidates are ready, click 'Start Group Discussion' below to commence."
-                        : "The discussion has not begun yet. Click 'Start Discussion / Commence GD' below when you are ready to begin, or wait for your faculty evaluator."}
+                        : "The discussion has not begun yet. Please wait for your faculty evaluator to start the GD session."}
                     </p>
                   </div>
                 </div>
@@ -2811,7 +2811,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
           {/* Quick Facilitator Action Bar */}
           <div className="flex items-center gap-2 flex-wrap">
-            {!isSessionActive && session.status !== 'completed' && (
+            {!isSessionActive && session.status !== 'completed' && canStartSession && (
               <button
                 id="start-gd-btn"
                 onClick={() => {
@@ -2834,8 +2834,15 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-700/30 transition-all hover:scale-105 active:scale-95 cursor-pointer animate-pulse ring-2 ring-emerald-400/50"
               >
                 <Play className="w-4 h-4 fill-white" />
-                <span>{canStartSession ? 'Start Group Discussion' : 'Start Discussion / Commence GD'}</span>
+                <span>Start Group Discussion</span>
               </button>
+            )}
+
+            {!isSessionActive && session.status !== 'completed' && !canStartSession && (
+              <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 shadow-sm">
+                <Clock className="w-3.5 h-3.5 animate-spin text-amber-600 dark:text-amber-400" />
+                <span>Waiting for Faculty In-Charge to start GD...</span>
+              </div>
             )}
 
             {canStartSession && (
@@ -3467,8 +3474,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                     <FastForward className="w-5 h-5 text-indigo-300" />
                   </button>
 
-                  {/* 5.5 Start / Restart GD Call (Green Pill Button) */}
-                  {session.status !== 'completed' && (!isSessionActive || isFacultyOrAdmin) && (
+                  {/* 5.5 Start / Restart GD Call (Green Pill Button - Faculty & Admin only) */}
+                  {session.status !== 'completed' && isFacultyOrAdmin && (
                     <button
                       id="dock-start-gd-btn"
                       onClick={() => {
@@ -3507,6 +3514,15 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                         </>
                       )}
                     </button>
+                  )}
+
+                  {/* Waiting badge for students when session not active */}
+                  {session.status !== 'completed' && !isSessionActive && !isFacultyOrAdmin && (
+                    <div className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-slate-800/90 border border-slate-700 text-[11px] text-amber-300 font-semibold shadow-sm ml-1 sm:ml-2">
+                      <Clock className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                      <span className="hidden sm:inline">Waiting for Faculty to start GD</span>
+                      <span className="sm:hidden">Waiting...</span>
+                    </div>
                   )}
 
                   {/* 6. Conclude / Finish GD Call (Red Pill Button - Faculty & Admin only) */}
