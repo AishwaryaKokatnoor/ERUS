@@ -459,8 +459,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       const intText = String(intervention?.text || '').trim();
       if (!intText) return;
 
-      // If this is an interruption warning, display the prominent warning banner
+      // If this is an interruption warning, display the prominent warning banner only if multiple participants exist
       if (intervention.action === 'interruption_warning') {
+        const activeParticipants = filledStudents.filter((s) => !s.isEmptySeat && !s.id?.includes('empty') && !s.name?.startsWith('Seat '));
+        if (activeParticipants.length <= 1) {
+          // Solo participant: interruption is physically impossible
+          return;
+        }
         setInterruptionWarning(intText);
         setTimeout(() => setInterruptionWarning(null), 6500);
       }
@@ -1523,13 +1528,24 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
           // Mark speaker active on floor
           if (!isFacultyRef.current) {
-            setSession((prev) => ({
-              ...prev,
-              currentSpeakerId: prev.students.find((s) => s.isUser)?.id || 's1',
-              students: prev.students.map((s) =>
-                s.isUser ? { ...s, isSpeaking: true, micActive: true } : s
-              ),
-            }));
+            const currentUserId = currentUser?.id;
+            const currentUserName = currentUser?.name;
+            setSession((prev) => {
+              const myStudent =
+                prev.students.find((s) => s.isUser) ||
+                prev.students.find((s) => !s.isEmptySeat && ((currentUserId && s.id === currentUserId) || (currentUserName && s.name === currentUserName))) ||
+                prev.students.find((s) => !s.isEmptySeat);
+              const myId = myStudent?.id || currentUserId || 'speaker-1';
+              return {
+                ...prev,
+                currentSpeakerId: myId,
+                students: prev.students.map((s) =>
+                  s.isUser || s.id === myId || (currentUserId && s.id === currentUserId) || (currentUserName && s.name === currentUserName)
+                    ? { ...s, isSpeaking: true, micActive: true }
+                    : s
+                ),
+              };
+            });
           }
 
           // Reset silence pause timer on each spoken token
@@ -2014,14 +2030,36 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       sentiment: 'neutral' as const,
     };
 
-    // Check if another speaker was currently active (interruption detection)
-    if (session?.currentSpeakerId && session.currentSpeakerId !== userStudent.id) {
-      const interruptedStudent = (session?.students || []).find((s) => s.id === session.currentSpeakerId);
-      const firstSpeakerName = interruptedStudent?.name || 'the previous speaker';
-      const warningMessage = `One at a time, please. Let ${firstSpeakerName} complete their thought before responding.`;
-      setInterruptionWarning(warningMessage);
-      speakFacilitator(warningMessage, 'interruption_arbitration', 'moderation');
-      setTimeout(() => setInterruptionWarning(null), 6500);
+    // Interruption detection: STRICTLY suppressed if candidate is practicing solo or is the only one in the room.
+    // Interruption is physically only possible if >= 2 active participants exist and another participant is ACTUALLY speaking right now.
+    const activeParticipants = filledStudents.filter((s) => !s.isEmptySeat && !s.id?.includes('empty') && !s.name?.startsWith('Seat '));
+    const isSoloSession = activeParticipants.length <= 1;
+
+    // In a live WebRTC room (isSocketConnected === true), the backend server handles real-time audio mesh overlap detection.
+    // In standalone/local mode, only warn if another real or simulated peer is currently actively speaking.
+    if (!isSoloSession && !isSocketConnected && session?.currentSpeakerId) {
+      const isSelfSpeaking =
+        session.currentSpeakerId === userStudent.id ||
+        session.currentSpeakerId === currentUser?.id ||
+        (session.students || []).find((s) => s.id === session.currentSpeakerId)?.name === userStudent.name;
+
+      if (!isSelfSpeaking) {
+        const interruptedStudent = activeParticipants.find(
+          (s) =>
+            s.id === session.currentSpeakerId &&
+            s.id !== userStudent.id &&
+            s.name !== userStudent.name &&
+            !s.isUser &&
+            s.isSpeaking
+        );
+        if (interruptedStudent) {
+          const firstSpeakerName = interruptedStudent.name || 'the previous speaker';
+          const warningMessage = `One at a time, please. Let ${firstSpeakerName} complete their thought before responding.`;
+          setInterruptionWarning(warningMessage);
+          speakFacilitator(warningMessage, 'interruption_arbitration', 'moderation');
+          setTimeout(() => setInterruptionWarning(null), 6500);
+        }
+      }
     }
 
     const newEntry: TranscriptEntry = {
@@ -2880,7 +2918,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
               <button
                 id="ai-rules-btn"
                 onClick={() => {
-                  const rulesText = "Discussion Rules: 1. Speak one person at a time. 2. Respect differing opinions. 3. Support arguments with examples. 4. Encourage participation. 5. Stay on topic. Let us maintain balanced dialogue.";
+                  const isSolo = filledStudents.filter((s) => !s.isEmptySeat && !s.id?.includes('empty') && !s.name?.startsWith('Seat ')).length <= 1;
+                  const rulesText = isSolo
+                    ? "Discussion Guidelines: 1. Present your thoughts clearly and confidently. 2. Support arguments with concrete examples. 3. Maintain structured articulation. 4. Stay strictly on topic. You have the floor whenever you are ready."
+                    : "Discussion Rules: 1. Speak one person at a time. 2. Respect differing opinions. 3. Support arguments with examples. 4. Encourage participation. 5. Stay on topic. Let us maintain balanced dialogue.";
                   if (rtcBroadcastFacilitatorSpeech) {
                     rtcBroadcastFacilitatorSpeech(rulesText, 'explain_rules');
                   } else {

@@ -6367,6 +6367,9 @@ app.post('/api/facilitator/moderate', async (req, res) => {
     // Combine previous questions from client and server
     const allAsked = Array.from(new Set([...Array.from(serverAskedQuestions), ...previousQuestions]));
 
+    const realStudentsList = (students || []).filter((s: any) => !s.isEmptySeat && s.role !== 'faculty' && !String(s.id || '').includes('empty') && !String(s.name || '').startsWith('Seat '));
+    const isSoloStudent = realStudentsList.length <= 1;
+
     // If Gemini key is available, run prompt for human-like moderation
     if (ai) {
       const recentContext = transcriptHistory
@@ -6388,6 +6391,7 @@ Topic: "${topic}"
 Current Phase: ${phase}
 Silence Duration: ${silenceDurationSeconds} seconds
 Interruption Detected: ${interruptionDetected}
+Solo Student Practice: ${isSoloStudent}
 ${previousQuestionsBlock}
 Recent Transcript:
 ${recentContext || '(Discussion just started)'}
@@ -6398,9 +6402,11 @@ ${studentStats}
 Language, Accent & Moderator Behavior Guidelines:
 - Language: Authentic, formal Indian Academic English with an Indian collegiate moderator demeanor (dignified, polite, encouraging yet firm).
 - Phrasing & Style:
-  1. If phase is 'intro': Introduce the discussion warmly with Indian academic greeting ("Good morning participants. Today's group discussion topic is: '${topic}'... Each candidate will receive an opportunity to put forth their views.").
-  2. If phase is 'rules': State the 5 core rules clearly (Speak one at a time, respect differing viewpoints, substantiate with examples, ensure balanced participation, stay strictly on topic), then invite someone to initiate.
-  3. If one student is dominating: Politely thank them and invite a less active or quiet peer by name and seat ("Thank you [Name] for your points. I would like to request our other peers, such as [Quiet Student], to share their perspective.").
+  1. If phase is 'intro': Introduce the discussion warmly with Indian academic greeting ("Good morning ${isSoloStudent ? 'candidate' : 'participants'}. Today's discussion topic is: '${topic}'... ${isSoloStudent ? 'You will have the floor to present your perspectives in depth.' : 'Each candidate will receive an opportunity to put forth their views.'}").
+  2. If phase is 'rules': ${isSoloStudent
+      ? 'Since this candidate is practicing solo, explain the key individual presentation guidelines (articulate clearly, substantiate with concrete examples, maintain steady delivery, stay strictly on topic), then invite them to initiate their arguments. Do NOT ask them to speak one at a time or take turns with peers since they are practicing alone.'
+      : 'State the 5 core rules clearly (Speak one at a time, respect differing viewpoints, substantiate with examples, ensure balanced participation, stay strictly on topic), then invite someone to initiate.'}
+  3. If one student is dominating: ${isSoloStudent ? 'Acknowledge their detailed points and pose an analytical probing question.' : 'Politely thank them and invite a less active or quiet peer by name and seat ("Thank you [Name] for your points. I would like to request our other peers, such as [Quiet Student], to share their perspective.").'}
   4. If there is a silence/deadlock (>15-20s): Intervene with a fresh, provocative open-ended question relevant to practical realities, ethics, or societal impact in our context.
   5. If off-topic: Politely thank them and steer back to "${topic}".
   6. If discussion is in progress: Ask thoughtful probing questions tailored to the latest speaker's argument (asking for counter-evidence, practical implementation barriers in our context, long-term societal effects, or addressing quiet participants).
@@ -6454,11 +6460,15 @@ Generate your response in JSON format with:
     let isProbing = true;
 
     if (phase === 'intro') {
-      speech = `Good morning participants. Welcome to this group discussion. Today's topic is: "${topic}". Each participant will receive an opportunity to put forth their views. Kindly maintain decorum, listen actively, and avoid interruptions.`;
+      speech = isSoloStudent
+        ? `Good morning candidate. Welcome to your individual practice discussion. Today's topic is: "${topic}". You have the floor to present your analysis and supporting arguments. Let us begin.`
+        : `Good morning participants. Welcome to this group discussion. Today's topic is: "${topic}". Each participant will receive an opportunity to put forth their views. Kindly maintain decorum, listen actively, and avoid interruptions.`;
       actionType = 'introduce';
       isProbing = false;
     } else if (phase === 'rules') {
-      speech = `Before we begin, kindly note the ground rules: 1. Speak one at a time. 2. Respect differing viewpoints. 3. Support arguments with concrete examples. 4. Encourage quiet peers to participate. 5. Stay strictly on topic. Let us initiate the discussion. Who would like to start?`;
+      speech = isSoloStudent
+        ? `Welcome to your individual practice session on "${topic}". Kindly note the key guidelines: 1. Structure your arguments clearly. 2. Support your views with concrete examples. 3. Maintain steady pacing and articulation. 4. Stay strictly on topic. You have the floor. Whenever you are ready, please begin!`
+        : `Before we begin, kindly note the ground rules: 1. Speak one at a time. 2. Respect differing viewpoints. 3. Support arguments with concrete examples. 4. Encourage quiet peers to participate. 5. Stay strictly on topic. Let us initiate the discussion. Who would like to start?`;
       actionType = 'explain_rules';
       isProbing = false;
     } else if (silenceDurationSeconds >= 15) {
@@ -9995,22 +10005,68 @@ io.on('connection', (socket) => {
       (p) => p.role === 'student' && p.isSpeaking && p.micActive
     );
 
+    // Get total distinct real students connected in the room
+    const allStudentPeers = Array.from(room.peers.values()).filter((p) => p.role === 'student');
+    const distinctStudentsInRoom = new Set(
+      allStudentPeers.map((p) => String(p.userId || p.name || p.socketId))
+    );
+
+    // Solo participant mode: If <= 1 student in room, interruptions & overlap warnings are physically impossible
+    if (distinctStudentsInRoom.size <= 1) {
+      if (room.overlapTimer) {
+        clearTimeout(room.overlapTimer);
+        room.overlapTimer = undefined;
+      }
+      if (activelySpeakingPeers.length >= 1) {
+        const soloSpeaker = activelySpeakingPeers[0];
+        room.currentSpeakerId = soloSpeaker.userId;
+        room.currentSpeakerSocketId = soloSpeaker.socketId;
+        room.floorVersion += 1;
+        io.to(`room-${safeSlotId}`).emit('floor-state', {
+          speakerId: soloSpeaker.userId,
+          speakerName: soloSpeaker.name,
+          speakerSocketId: soloSpeaker.socketId,
+          isFloorLocked: false,
+          floorVersion: room.floorVersion,
+        });
+      }
+      return;
+    }
+
+    // Deduplicate speaking peers by unique userId/name so multiple sockets for the same candidate do not trigger false overlap
+    const uniqueSpeakingStudents = new Map<string, LiveRoomPeer>();
+    for (const p of activelySpeakingPeers) {
+      const uKey = String(p.userId || p.name || p.socketId);
+      if (!uniqueSpeakingStudents.has(uKey)) {
+        uniqueSpeakingStudents.set(uKey, p);
+      }
+    }
+    const distinctActiveSpeakers = Array.from(uniqueSpeakingStudents.values());
+
     // INTERRUPTION & VOICE OVERLAPPING RESTRICTION:
     // Continuous discussion: all mics stay open, but if multiple participants speak simultaneously
     // for >= 1000ms, the AI Facilitator gives the interruption message.
-    if (activelySpeakingPeers.length >= 2) {
+    if (distinctActiveSpeakers.length >= 2) {
       if (!room.overlapTimer) {
         room.overlapTimer = setTimeout(() => {
           room.overlapTimer = undefined;
           const currentOverlapping = Array.from(room.peers.values()).filter(
             (p) => p.role === 'student' && p.isSpeaking && p.micActive
           );
-          if (currentOverlapping.length >= 2) {
+          const uniqueCurrentSpeaking = new Map<string, LiveRoomPeer>();
+          for (const p of currentOverlapping) {
+            const uKey = String(p.userId || p.name || p.socketId);
+            if (!uniqueCurrentSpeaking.has(uKey)) {
+              uniqueCurrentSpeaking.set(uKey, p);
+            }
+          }
+          const distinctCurrentSpeakers = Array.from(uniqueCurrentSpeaking.values());
+          if (distinctCurrentSpeakers.length >= 2) {
             const now = Date.now();
             if (now - (room.lastOverlapWarningTime || 0) > 12000) {
               room.lastOverlapWarningTime = now;
-              const spk1 = currentOverlapping[0];
-              const spk2 = currentOverlapping[1];
+              const spk1 = distinctCurrentSpeakers[0];
+              const spk2 = distinctCurrentSpeakers[1];
               spk2.interruptionCount = (spk2.interruptionCount || 0) + 1;
 
               const warningMsg = `Please allow ${spk1.name} to finish their statement before speaking. Let's maintain proper discussion decorum.`;

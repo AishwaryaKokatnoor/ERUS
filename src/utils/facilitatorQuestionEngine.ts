@@ -579,7 +579,8 @@ export function getNextUniqueFacilitatorPrompt(
   }
 
   // If participation imbalance is high (e.g. one student spoke 4+ turns while someone has 0-1 turns)
-  if (mostQuiet && mostActive && mostActive.speakingTurns - mostQuiet.speakingTurns >= 2) {
+  const realStudents = students.filter((s) => !s.isEmptySeat && !s.id?.includes('empty') && !s.name?.startsWith('Seat '));
+  if (realStudents.length > 1 && mostQuiet && mostActive && mostActive.id !== mostQuiet.id && mostActive.speakingTurns - mostQuiet.speakingTurns >= 2) {
     const inviteTemplates = [
       `Thank you for those points. We'd love to balance the discussion by bringing in ${mostQuiet.name} from Seat ${mostQuiet.seatNumber}. What is your perspective on "${topic}"?`,
       `Thank you. Let us hear from ${mostQuiet.name} at Seat ${mostQuiet.seatNumber}—how would you assess the practical challenges discussed so far in "${topic}"?`,
