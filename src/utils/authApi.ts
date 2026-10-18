@@ -371,7 +371,7 @@ export function getLocalSlots(collegeCode: string): any[] {
       const topic = s.topic ? String(s.topic).trim() : '';
       const numMatch = (s.slotName || '').match(/^(Slot\s+\d+)/i) || (s.id || '').match(/slot-.*?-(\d+)/i);
       const prefix = numMatch ? (numMatch[1].startsWith('Slot') ? numMatch[1] : `Slot ${numMatch[1]}`) : '';
-      if (prefix && topic && !topic.toLowerCase().includes('pending') && !s.description?.includes('Waiting for College Admin to allot')) {
+      if (prefix && topic && !topic.toLowerCase().includes('pending')) {
         return { ...s, status: resolvedStatus, collegeCode: s.collegeCode || targetCode, slotName: `${prefix}: ${topic}` };
       }
       return { ...s, status: resolvedStatus, collegeCode: s.collegeCode || targetCode };
@@ -1232,6 +1232,10 @@ export async function allotSlotTopicAndFaculty(
           ? (isPresentation && s.students.length > 6 ? s.students.slice(0, 6) : s.students)
           : [];
 
+        const resolvedDesc = data.description || (data.topic
+          ? (isPresentation ? 'Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates.' : `Autonomous AI evaluated discussion on "${data.topic}".`)
+          : s.description);
+
         return {
           ...s,
           ...data,
@@ -1241,6 +1245,7 @@ export async function allotSlotTopicAndFaculty(
           enrolledCount: Math.min(students.length || capacity, capacity),
           students,
           topic: data.topic,
+          description: resolvedDesc,
           slotName: syncedSlotName,
           assignedFacultyId: data.assignedFacultyId,
           assignedFacultyName: data.assignedFacultyName,

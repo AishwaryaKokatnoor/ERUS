@@ -220,8 +220,8 @@ function GDAppContent() {
           const mappedSlots: GDSession[] = filteredRaw.map((s: any, sIdx: number): GDSession => {
             const rawName = String(s.slotName || '').replace(/\s*\(\d{1,2}:\d{2}\s*(?:AM|PM)\s*-\s*\d{1,2}:\d{2}\s*(?:AM|PM)\)/gi, '').trim();
             const cleanName = rawName || `Slot ${sIdx + 1}`;
-            const isTopicAllotted = typeof s.topic === 'string' && s.topic.trim() !== '' && !/^slot\s+\d+/i.test(s.topic) && s.topic !== s.slotName && s.topic !== cleanName && !s.description?.includes('Waiting for College Admin to allot');
-            const cleanTopic = isTopicAllotted && typeof s.topic === 'string' ? s.topic.trim() : '';
+            const isTopicAllotted = typeof s.topic === 'string' && s.topic.trim() !== '' && !/^slot\s+\d+\s*$/i.test(s.topic) && !s.topic.toLowerCase().includes('pending');
+            const cleanTopic = isTopicAllotted ? s.topic.trim() : '';
 
             const recUrlStr = typeof s.recordingUrl === 'string' ? s.recordingUrl : (s.recordingUrl?.recordingUrl || s.recordingUrl?.url || '');
             const finalRecUrl = (recUrlStr && !recUrlStr.startsWith('blob:')) ? recUrlStr : '';
@@ -499,8 +499,8 @@ function GDAppContent() {
         const mappedSlots: GDSession[] = activeBackendSlots.map((s: any, sIdx: number): GDSession => {
           const rawName = String(s.slotName || '').replace(/\s*\(\d{1,2}:\d{2}\s*(?:AM|PM)\s*-\s*\d{1,2}:\d{2}\s*(?:AM|PM)\)/gi, '').trim();
           const cleanName = rawName || `Slot ${sIdx + 1}`;
-          const isTopicAllotted = typeof s.topic === 'string' && s.topic.trim() !== '' && !/^slot\s+\d+/i.test(s.topic) && s.topic !== s.slotName && s.topic !== cleanName && !s.description?.includes('Waiting for College Admin to allot');
-          const cleanTopic = isTopicAllotted && typeof s.topic === 'string' ? s.topic.trim() : '';
+          const isTopicAllotted = typeof s.topic === 'string' && s.topic.trim() !== '' && !/^slot\s+\d+\s*$/i.test(s.topic) && !s.topic.toLowerCase().includes('pending');
+          const cleanTopic = isTopicAllotted ? s.topic.trim() : '';
 
           return {
             ...INITIAL_SESSION,

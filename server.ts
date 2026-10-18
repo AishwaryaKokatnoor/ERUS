@@ -1829,10 +1829,15 @@ async function addSlotsToCollegeAndPersist(col: BackendCollege, body: any) {
     const isTopicValid =
       rawTopic !== '' &&
       !rawTopic.toLowerCase().includes('pending') &&
-      !/^slot\s+\d+/i.test(rawTopic) &&
-      !sl.description?.includes('Waiting for College Admin to allot');
+      !/^slot\s+\d+\s*$/i.test(rawTopic);
     const cleanTopic = isTopicValid ? rawTopic : '';
+    sl.topic = cleanTopic;
     sl.slotName = cleanTopic ? `Slot ${seqNum}: ${cleanTopic}` : `Slot ${seqNum}`;
+    if (cleanTopic && sl.description?.includes('Waiting for College Admin to allot')) {
+      sl.description = sl.activityType === 'presentation'
+        ? 'Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates.'
+        : `Autonomous AI evaluated discussion on "${cleanTopic}".`;
+    }
     sl.collegeCode = normCode;
   });
 
@@ -3337,8 +3342,7 @@ app.get('/api/college/slots', async (req, res) => {
     const isTopicValid =
       rawTopic !== '' &&
       !rawTopic.toLowerCase().includes('pending') &&
-      !/^slot\s+\d+/i.test(rawTopic) &&
-      !slot.description?.includes('Waiting for College Admin to allot');
+      !/^slot\s+\d+\s*$/i.test(rawTopic);
     const currentTopic = isTopicValid ? rawTopic : '';
 
     let rawSlotName = cleanSlotName(slot.slotName) || slot.slotName || 'Slot';
@@ -3351,11 +3355,17 @@ app.get('/api/college/slots', async (req, res) => {
 
     slot.slotName = resolvedSlotName;
     slot.topic = currentTopic;
+    if (currentTopic && slot.description?.includes('Waiting for College Admin to allot')) {
+      slot.description = slot.activityType === 'presentation'
+        ? 'Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates.'
+        : `Autonomous AI evaluated discussion on "${currentTopic}".`;
+    }
 
     const baseSlot: BackendCollegeSlotItem = {
       ...slot,
       slotName: resolvedSlotName,
       topic: currentTopic,
+      description: slot.description,
       assignedFacultyId: faculty?.facultyId || slot.assignedFacultyId || '',
       assignedFacultyName: faculty?.name || slot.assignedFacultyName || 'Unassigned',
       assignedFacultyEmail: faculty?.email || slot.assignedFacultyEmail || '',
@@ -3384,14 +3394,18 @@ app.get('/api/college/slots', async (req, res) => {
     const isTopicValid =
       rawTopic !== '' &&
       !rawTopic.toLowerCase().includes('pending') &&
-      !/^slot\s+\d+/i.test(rawTopic) &&
-      !slot.description?.includes('Waiting for College Admin to allot');
+      !/^slot\s+\d+\s*$/i.test(rawTopic);
     const currentTopic = isTopicValid ? rawTopic : '';
     const resolvedSlotName = currentTopic ? `Slot ${seqNum}: ${currentTopic}` : `Slot ${seqNum}`;
     return {
       ...slot,
       slotName: resolvedSlotName,
       topic: currentTopic,
+      description: currentTopic && slot.description?.includes('Waiting for College Admin to allot')
+        ? (slot.activityType === 'presentation'
+            ? 'Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates.'
+            : `Autonomous AI evaluated discussion on "${currentTopic}".`)
+        : (slot.description || ''),
     };
   });
 
@@ -3683,7 +3697,17 @@ app.put(['/api/college/slots/:id/allot', '/api/college/slots/:id'], async (req, 
     }
   }
 
-  if (topic !== undefined) targetSlot.topic = String(topic).trim();
+  if (topic !== undefined) {
+    targetSlot.topic = String(topic).trim();
+  }
+
+  if (description !== undefined && String(description).trim()) {
+    targetSlot.description = String(description).trim();
+  } else if (targetSlot.topic) {
+    targetSlot.description = targetSlot.activityType === 'presentation'
+      ? 'Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates.'
+      : `Autonomous AI evaluated discussion on "${targetSlot.topic}".`;
+  }
 
   const proposedSlotName = slotName !== undefined ? String(slotName).trim() : (targetSlot.slotName || '');
   const cleanProposed = cleanSlotName(proposedSlotName);
@@ -3694,9 +3718,8 @@ app.put(['/api/college/slots/:id/allot', '/api/college/slots/:id'], async (req, 
     ? (slotNumMatch[1].startsWith('Slot') ? slotNumMatch[1] : `Slot ${slotNumMatch[1]}`) 
     : (cleanProposed.split(':')[0].trim() || 'Slot');
 
-  const validTopic = targetSlot.topic && !targetSlot.topic.toLowerCase().includes('pending') && !targetSlot.description?.includes('Waiting for College Admin to allot') ? targetSlot.topic : '';
+  const validTopic = targetSlot.topic && !targetSlot.topic.toLowerCase().includes('pending') ? targetSlot.topic : '';
   targetSlot.slotName = validTopic ? `${prefix}: ${validTopic}` : prefix;
-  if (description !== undefined) targetSlot.description = String(description).trim();
   if (slotTiming !== undefined) targetSlot.slotTiming = String(slotTiming).trim();
   if (slotDate !== undefined) targetSlot.slotDate = String(slotDate).trim();
   if (status !== undefined) targetSlot.status = String(status).trim();
@@ -3807,7 +3830,17 @@ app.post('/api/college/slots/:id/allot', async (req, res) => {
     }
   }
 
-  if (topic !== undefined) targetSlot.topic = String(topic).trim();
+  if (topic !== undefined) {
+    targetSlot.topic = String(topic).trim();
+  }
+
+  if (description !== undefined && String(description).trim()) {
+    targetSlot.description = String(description).trim();
+  } else if (targetSlot.topic) {
+    targetSlot.description = targetSlot.activityType === 'presentation'
+      ? 'Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates.'
+      : `Autonomous AI evaluated discussion on "${targetSlot.topic}".`;
+  }
 
   const proposedSlotName = slotName !== undefined ? String(slotName).trim() : (targetSlot.slotName || '');
   const cleanProposed = cleanSlotName(proposedSlotName);
@@ -3818,9 +3851,8 @@ app.post('/api/college/slots/:id/allot', async (req, res) => {
     ? (slotNumMatch[1].startsWith('Slot') ? slotNumMatch[1] : `Slot ${slotNumMatch[1]}`) 
     : (cleanProposed.split(':')[0].trim() || 'Slot');
 
-  const validTopic = targetSlot.topic && !targetSlot.topic.toLowerCase().includes('pending') && !targetSlot.description?.includes('Waiting for College Admin to allot') ? targetSlot.topic : '';
+  const validTopic = targetSlot.topic && !targetSlot.topic.toLowerCase().includes('pending') ? targetSlot.topic : '';
   targetSlot.slotName = validTopic ? `${prefix}: ${validTopic}` : prefix;
-  if (description !== undefined) targetSlot.description = String(description).trim();
   if (slotTiming !== undefined) targetSlot.slotTiming = String(slotTiming).trim();
   if (slotDate !== undefined) targetSlot.slotDate = String(slotDate).trim();
   if (status !== undefined) targetSlot.status = String(status).trim();

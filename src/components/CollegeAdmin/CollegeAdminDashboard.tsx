@@ -59,6 +59,8 @@ import {
   dispatchCredentials,
   allotSlotTopicAndFaculty,
   generateCollegeSlots,
+  getLocalSlots,
+  saveLocalSlots,
   getDeletedSlotIds,
   markSlotDeletedLocally,
   isSlotCompletedLocally,
@@ -206,8 +208,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
       const isTopicAllotted =
         rawTopic !== '' &&
         !rawTopic.toLowerCase().includes('pending') &&
-        !/^slot\s+\d+/i.test(rawTopic) &&
-        !s.description?.includes('Waiting for College Admin to allot');
+        !/^slot\s+\d+\s*$/i.test(rawTopic);
       const cleanTopic = isTopicAllotted ? rawTopic : '';
 
       // Derive unique sequential slot prefix: "Slot 1", "Slot 2", etc.
@@ -421,16 +422,11 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
   // Slot Allotment & Regeneration Actions
   const handleOpenAllotModal = (slot: any) => {
     setAllottingSlot(slot);
-    const existingTopic = String(slot.topic || '');
-    const cleanCurrentName = cleanSlotName(slot.slotName);
+    const existingTopic = String(slot.topic || '').trim();
     const isTopicPending =
       !existingTopic ||
-      existingTopic.trim() === '' ||
       existingTopic.toLowerCase().includes('pending') ||
-      existingTopic === slot.slotName ||
-      existingTopic === cleanCurrentName ||
-      /^slot\s+\d+/i.test(existingTopic) ||
-      slot.description?.includes('Waiting for College Admin to allot');
+      /^slot\s+\d+\s*$/i.test(existingTopic);
 
     let defaultFacultyId = slot.assignedFacultyId || '';
     let defaultFacultyName = slot.assignedFacultyName || '';
@@ -451,7 +447,11 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     setAllotForm({
       activityType: currentActivity,
       topic: isTopicPending ? '' : existingTopic,
-      description: slot.description && !slot.description.toLowerCase().includes('pending') && !slot.description.includes('Waiting for College Admin to allot') ? slot.description : '',
+      description: slot.description && !slot.description.toLowerCase().includes('pending') && !slot.description.includes('Waiting for College Admin to allot')
+        ? slot.description
+        : (existingTopic && !isTopicPending
+            ? (currentActivity === 'presentation' ? 'Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates.' : `Autonomous AI evaluated discussion on "${existingTopic}".`)
+            : ''),
       assignedFacultyId: defaultFacultyId,
       assignedFacultyName: defaultFacultyName,
       assignedFacultyDept: defaultFacultyDept,
@@ -536,13 +536,24 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
                 ...payload,
                 activityType: allotForm.activityType,
                 slotName: newSlotName,
+                topic: payload.topic,
+                description: payload.description,
               },
             };
           }
           return s;
         })
       );
-      await loadAllData();
+      try {
+        const local = getLocalSlots(collegeCode);
+        const updated = local.map((s: any) =>
+          s.id === allottingSlot.id
+            ? { ...s, ...payload, topic: payload.topic, description: payload.description, slotName: newSlotName }
+            : s
+        );
+        saveLocalSlots(collegeCode, updated);
+      } catch {}
+      await loadAllData(true);
     } else {
       setBannerMsg(res?.error || 'Failed to allot topic and faculty.');
     }
@@ -1655,10 +1666,7 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                 !slTopicStr ||
                 slTopicStr.trim() === '' ||
                 slTopicStr.toLowerCase().includes('pending') ||
-                slTopicStr === sl.slotName ||
-                slTopicStr === cleanTitle ||
-                /^slot\s+\d+/i.test(slTopicStr) ||
-                sl.description?.includes('Waiting for College Admin to allot');
+                /^slot\s+\d+\s*$/i.test(slTopicStr);
 
               const isFacultyPending =
                 !sl.assignedFacultyId ||
