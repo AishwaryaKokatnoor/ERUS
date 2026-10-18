@@ -8544,12 +8544,12 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
         }
       }
 
-      // Check if any peer has recently uttered real speech words (within last 2500ms)
-      const anyPeerActivelyTranscribing = Array.from(room.peers.values()).some(
-        (p) => p.role !== 'faculty' && p.role !== 'college_admin' && p.lastSpokeAt && checkNow - p.lastSpokeAt < 2500
+      // Check if any peer has recently uttered real speech words OR is speaking actively
+      const anyPeerActivelySpeaking = Array.from(room.peers.values()).some(
+        (p) => p.role !== 'faculty' && p.role !== 'college_admin' && (p.isSpeaking || (p.lastSpokeAt && checkNow - p.lastSpokeAt < 3000))
       );
 
-      if (!anyPeerActivelyTranscribing) {
+      if (!anyPeerActivelySpeaking) {
         // Floor is silent (microphones may be open, but no candidate is uttering points)
         if (room.currentSpeakerId && (!room.lastSpeakerTranscriptAt || checkNow - room.lastSpeakerTranscriptAt > 2500)) {
           room.currentSpeakerId = null;
@@ -8592,8 +8592,8 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
           room.waitingForParticipantId = undefined;
           await triggerDeadlockIntervention(room);
         }
-        // Stage 3: Question was asked; if after 16s still no response, cycle to next quiet candidate
-        else if (room.silenceStage === 3 && room.silenceTimerSeconds >= 25) {
+        // Stage 3: Question was asked; give candidate 20 seconds to answer before cycling to next candidate
+        else if (room.silenceStage === 3 && room.silenceTimerSeconds >= 20) {
           room.silenceStage = 2;
           room.silenceTimerSeconds = 8;
         }
@@ -9734,9 +9734,8 @@ Do not mention AI.`,
   persistTranscriptToMongoDB(interventionTranscript);
 
   const dlWordCount = (deadlockQuestion || '').split(/\s+/).filter(Boolean).length;
-  room.facilitatorSpeakingUntil = Date.now() + Math.max(5000, dlWordCount * 400);
-  // Do NOT reset silenceTimerSeconds to 0 here; keep at 9 so it does not loop back to Stage 1!
-  room.silenceTimerSeconds = 9;
+  // Reset silence timer to 0 so stage 3 counts up to 20s while candidate answers
+  room.silenceTimerSeconds = 0;
 
   io.to(`room-${room.slotId}`).emit('facilitator-intervention', {
     text: deadlockQuestion,
@@ -10018,10 +10017,15 @@ io.on('connection', (socket) => {
     if (cameraActive !== undefined) peer.cameraActive = cameraActive;
 
     if (peer.isSpeaking) {
+      peer.lastSpokeAt = Date.now();
+      room.silenceTimerSeconds = 0;
+      room.silenceStage = 0;
+      room.facilitatorSpeakingUntil = 0;
       if (room.turnTimer) {
         clearTimeout(room.turnTimer);
         room.turnTimer = undefined;
       }
+      room.waitingForParticipantId = undefined;
     }
 
     // Identify all student peers currently speaking with active mics

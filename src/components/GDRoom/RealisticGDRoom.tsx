@@ -647,21 +647,23 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
       // Crucial: Only consider talking if recognized words are actively being uttered
       // Ambient microphone noise, fan, or breath MUST NOT reset silence!
-      const hasSpokenWords = Boolean(curTranscript && curTranscript.trim().length > 1);
+      const hasSpokenWords = Boolean(curTranscript && curTranscript.trim().length > 0);
       const isUserTalking =
         !rtcIsMicMutedRef.current &&
         isListeningMicRef.current &&
-        hasSpokenWords;
+        (curSpeakingLive || hasSpokenWords);
 
       const isFacilitatorActive = curSession.isFacilitatorSpeaking || roomVoice.isSpeaking();
-      if (isFacilitatorActive) {
-        // AI Facilitator is actively speaking -> pause silence stopwatch, do not reset!
-        return;
-      }
-
       if (isUserTalking) {
+        if (isFacilitatorActive) {
+          roomVoice.stop();
+          setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
+        }
         setLocalSilenceSeconds(0);
         clientSilenceStageRef.current = 0;
+      } else if (isFacilitatorActive) {
+        // AI Facilitator is actively speaking -> pause silence stopwatch, do not reset!
+        return;
       } else {
         // Microphones remain open, but no candidate is uttering points -> silence ticks!
         setLocalSilenceSeconds((prev) => prev + 1);
@@ -2438,7 +2440,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       !isTransitioningTurnRef.current &&
       !liveSpeechTranscript
     ) {
-      // In standalone mode or as client-side safety watchdog:
+      // In standalone mode (offline without socket):
       if (!isSocketConnected) {
         if (clientSilenceStageRef.current === 0 && currentSilence >= 3) {
           clientSilenceStageRef.current = 1;
@@ -2459,10 +2461,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           lastFacilitatorInterventionTimeRef.current = Date.now();
           handleFacilitatorTargetedProbe();
         }
-      } else if (clientSilenceStageRef.current === 2 && currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3500) {
-        clientSilenceStageRef.current = 3;
-        lastFacilitatorInterventionTimeRef.current = Date.now();
-        handleFacilitatorTargetedProbe();
       }
     }
   }, [
