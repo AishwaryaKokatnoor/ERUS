@@ -473,15 +473,10 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
     if (Array.isArray(session?.students) && session.students.length > 0) {
       const valid = session.students.filter((s) => s && !s.isEmptySeat && s.college !== 'Available Desk' && !/^Seat\s+\d+$/i.test(s.name || ''));
       if (valid.length > 0) {
-        setSessionParticipants((prev) => {
-          const map = new Map<string, any>();
-          prev.forEach((p) => map.set(p.id, p));
-          valid.forEach((v) => map.set(v.id, { ...map.get(v.id), ...v }));
-          return Array.from(map.values());
-        });
+        setSessionParticipants(valid);
       }
     }
-  }, [session?.students]);
+  }, [session?.id, session?.students]);
 
   const [selectedStudentId, setSelectedStudentId] = useState<string>(effectiveInitialStudentId);
   const [showVideoModal, setShowVideoModal] = useState(false);
@@ -780,9 +775,23 @@ export const StudentReportView: React.FC<StudentReportViewProps> = ({
           return normalizeReport(generateStudentReport(userStudent, session?.topic || 'Group Discussion', session?.durationMinutes || 15, undefined, session?.id));
         });
       }
-    } else if (targetStudentId && targetStudentId !== selectedStudentId) {
-      setSelectedStudentId(targetStudentId);
-      handleSelectStudent(targetStudentId);
+    } else {
+      // Faculty and Admins: synchronize report and participant when session or initialReport changes
+      if (initialReport && (initialReport.sessionId === session?.id || !initialReport.sessionId || initialReport.topic === session?.topic)) {
+        if (initialReport.studentId) {
+          setSelectedStudentId(initialReport.studentId);
+        }
+        setCurrentReport(normalizeReport(initialReport));
+      } else if (targetStudentId && targetStudentId !== selectedStudentId) {
+        setSelectedStudentId(targetStudentId);
+        handleSelectStudent(targetStudentId);
+      } else if (session?.students && session.students.length > 0) {
+        const first = session.students.find((s) => s && !s.isEmptySeat && !/^Seat\s+\d+$/i.test(s.name || '')) || session.students[0];
+        if (first) {
+          setSelectedStudentId(first.id);
+          setCurrentReport(normalizeReport(generateStudentReport(first, session?.topic || 'Group Discussion', session?.durationMinutes || 15, undefined, session?.id)));
+        }
+      }
     }
   }, [isStudent, userStudent?.id, currentUser?.name, session?.id, session?.topic, initialReport, targetStudentId]);
 

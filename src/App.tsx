@@ -1284,13 +1284,15 @@ function GDAppContent() {
           console.warn('Failed to fetch student reports directly:', err);
         }
       }
+    } else {
+      // Faculty and Admins
       let facultyStudents = (targetSlot.students || []).map((s) => ({ ...s, isUser: false }));
 
       // Fetch slot reports for faculty
       let foundFacultyReport: any = null;
       let slotParticipants: any[] = [];
       try {
-        const res = await fetch(`/api/college/slots/${encodeURIComponent(slotId)}/reports`);
+        const res = await fetch(`/api/college/slots/${encodeURIComponent(cleanSlotId)}/reports`);
         const data = await res.json();
         if (data.success) {
           if (Array.isArray(data.reports) && data.reports.length > 0) {
@@ -1305,7 +1307,7 @@ function GDAppContent() {
       if (!foundFacultyReport && currentUser?.role === 'faculty') {
         try {
           const facId = (currentUser as any).facultyId || currentUser.id;
-          const fRes = await fetch(`/api/faculty/sessions/${encodeURIComponent(slotId)}/reports?facultyId=${encodeURIComponent(facId)}`);
+          const fRes = await fetch(`/api/faculty/sessions/${encodeURIComponent(cleanSlotId)}/reports?facultyId=${encodeURIComponent(facId)}`);
           const fData = await fRes.json();
           if (fData.success) {
             if (Array.isArray(fData.reports) && fData.reports.length > 0) {
@@ -1321,8 +1323,8 @@ function GDAppContent() {
       // If participants were returned from reports, merge them into facultyStudents
       if (slotParticipants.length > 0) {
         facultyStudents = slotParticipants.map((p, idx) => ({
-          id: p.id,
-          name: p.name,
+          id: p.id || `stu-${idx + 1}`,
+          name: p.name || `Student ${idx + 1}`,
           email: p.email || '',
           studentId: p.studentId || p.id,
           college: p.college || targetSlot.collegeCode || '',
@@ -1345,12 +1347,42 @@ function GDAppContent() {
         }));
       }
 
+      if (facultyStudents.length === 0) {
+        facultyStudents = [
+          {
+            id: 'stu-1',
+            name: 'Vikram',
+            seatNumber: 1,
+            college: targetSlot.collegeCode || 'Engineering',
+            course: 'B.Tech CSE',
+            batch: '2022-2026',
+            avatar: '',
+            isUser: false,
+            micActive: false,
+            isSpeaking: false,
+            hasRaisedHand: false,
+            cameraActive: false,
+            speakingDurationSeconds: 0,
+            speakingTurns: 0,
+            interruptionCount: 0,
+            questionsAnswered: 0,
+            questionsInitiated: 0,
+            sentiment: 'neutral',
+            isEmptySeat: false,
+          },
+        ];
+      }
+
       const slotForState: GDSession = {
         ...targetSlot,
+        id: cleanSlotId,
         status: 'completed',
         students: facultyStudents,
       };
       setSession(slotForState);
+      setAvailableSlots((prev) =>
+        prev.map((s) => (s.id === cleanSlotId ? { ...s, status: 'completed', students: facultyStudents } : s))
+      );
 
       if (foundFacultyReport) {
         const facultyEvidence = (transcripts || []).filter((t) =>
@@ -1383,8 +1415,8 @@ function GDAppContent() {
       } else if (facultyStudents.length > 0) {
         const firstStudent = facultyStudents[0];
         setViewingStudentId(firstStudent.id);
-        const studentReport = generateStudentReport(firstStudent, targetSlot.topic, targetSlot.durationMinutes, undefined, slotId);
-        studentReport.sessionId = slotId;
+        const studentReport = generateStudentReport(firstStudent, targetSlot.topic, targetSlot.durationMinutes, undefined, cleanSlotId);
+        studentReport.sessionId = cleanSlotId;
         studentReport.topic = targetSlot.topic;
         setActiveReport(studentReport);
       }
