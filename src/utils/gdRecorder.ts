@@ -322,6 +322,8 @@ export function useGDRecorder({
   currentSpeakerName,
   latestTranscriptText,
   layoutMode = 'round_table',
+  screenStream = null,
+  presentationInfo,
   participantTiles = [],
   autoStartOnActive = true,
   onRecordingComplete,
