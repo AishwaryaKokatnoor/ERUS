@@ -8456,19 +8456,13 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
         });
 
         const STAGE_1_PROMPTS = [
-          "Who would like to build on that point or share an alternative perspective?",
-          "Let's hear other viewpoints on this topic — anyone is welcome to jump in.",
-          "Who has a counter-argument or fresh insight to bring to the discussion?",
-          "Let's explore another angle of this issue — who would like to speak next?",
-          "Feel free to share your thoughts or provide real-world examples on this point.",
+          "Three seconds of silence detected. The floor is open — anyone can jump in.",
+          "Three seconds of silence. Please share your perspective or build on this topic.",
         ];
 
         const STAGE_2_PROMPTS = [
-          "Let's keep the discussion moving — feel free to jump in with your thoughts.",
-          "We encourage everyone to participate — please share your perspective.",
-          "Let's hear from our peers who haven't spoken recently — what is your view?",
-          "Does anyone want to add data or concrete industry examples to support our analysis?",
-          "Who would like to take the floor next to expand on this topic?",
+          "Six seconds of silence detected. Please present your arguments or counter-points.",
+          "Six seconds of silence. Let us keep the momentum going — feel free to contribute.",
         ];
 
         // Strict 3-Second Staged Turn Arbitration:
@@ -9653,6 +9647,10 @@ Do not mention AI.`,
   }
 
   if (deadlockQuestion) {
+    if (!deadlockQuestion.startsWith('Nine seconds')) {
+      const addressHeader = `Nine seconds of silence detected. Let us hear from ${candidateName} ${seatStr}.`;
+      deadlockQuestion = `${addressHeader} ${deadlockQuestion}`;
+    }
     room.askedQuestions.add(deadlockQuestion);
   }
 

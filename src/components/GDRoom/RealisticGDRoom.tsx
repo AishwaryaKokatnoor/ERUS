@@ -130,7 +130,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   const notifyFacilitatorSpeechEndedRef = useRef<() => void>(() => {});
   const [isListeningMic, setIsListeningMic] = useState(!isFaculty);
   const [interruptionWarning, setInterruptionWarning] = useState<string | null>(null);
-  const [silenceWarning, setSilenceWarning] = useState<string | null>(null);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   // Server-side Socket.IO is now the single source of truth for AI turns.
   // Keeping the legacy local simulator enabled can queue a second voice while
@@ -489,19 +488,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       lastFacilitatorInterventionTimeRef.current = now;
       lastFacilitatorInterventionTextRef.current = intText;
 
-      // Update client silence stage to match server intervention and show prominent warning banner
+      // Update client silence stage to match server intervention
       if (intervention.action === 'silence_instruction_1') {
         clientSilenceStageRef.current = 1;
-        setSilenceWarning('⚠️ Stage 1 Warning: 3s silence detected! The floor is open — anyone can jump in.');
-        setTimeout(() => setSilenceWarning(null), 6000);
       } else if (intervention.action === 'silence_instruction_2') {
         clientSilenceStageRef.current = 2;
-        setSilenceWarning('⚠️ Stage 2 Warning: 6s silence detected! Please present your arguments or counter-points.');
-        setTimeout(() => setSilenceWarning(null), 6000);
       } else if (intervention.action === 'deadlock_intervention' || intervention.action === 'targeted_question_student') {
         clientSilenceStageRef.current = 3;
-        setSilenceWarning('🚨 Stage 3: 9s silence — AI Facilitator calling upon a candidate to speak!');
-        setTimeout(() => setSilenceWarning(null), 7000);
       }
 
       // Record question in sessionQuestionTracker so local fallback never repeats it
@@ -1964,8 +1957,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     const text = String(textToSend || liveSpeechTranscript || '').trim();
     if (!text) return;
 
-    // Reset live buffers and silence warning
-    setSilenceWarning(null);
+    // Reset live buffers
     liveTranscriptRef.current = '';
     setLiveSpeechTranscript('');
     setInvitedStudentPrompt(null);
@@ -2338,14 +2330,24 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
     lastFacilitatorInterventionTimeRef.current = Date.now();
 
-    const liveStudents = activeDisplayStudents.filter((s) => !s.isEmptySeat);
-    const pool = liveStudents.length > 0 ? liveStudents : (session.students || []).filter((s) => !s.isEmptySeat);
-    const targetStudent = getNextTurnSpeaker(pool, null) || pool[0] || null;
+    const liveStudents = activeDisplayStudents.filter((s) => !s.isEmptySeat && !s.id?.includes('empty') && !s.name?.startsWith('Seat '));
+    const pool = liveStudents.length > 0 ? liveStudents : (session.students || []).filter((s) => !s.isEmptySeat && !s.id?.includes('empty') && !s.name?.startsWith('Seat '));
+    
+    // Select the candidate who has spoken the least in the session
+    const sortedPool = pool.slice().sort((a, b) =>
+      (a.speakingTurns || 0) - (b.speakingTurns || 0) ||
+      (a.speakingDurationSeconds || 0) - (b.speakingDurationSeconds || 0)
+    );
+    const targetStudent = sortedPool[0] || null;
 
     const latestStudentTranscript = transcripts.slice().reverse().find((t) => !t.isFacilitator);
-    const targetedQuestion = targetStudent
+    const baseQuestion = targetStudent
       ? generateTargetedQuestionForStudent(targetStudent, session.topic, latestStudentTranscript)
       : getNextUniqueFacilitatorPrompt(session.topic, transcripts, pool, 'probing', true).text;
+
+    const targetedQuestion = baseQuestion.startsWith('Nine seconds')
+      ? baseQuestion
+      : `Nine seconds of silence detected. ${baseQuestion}`;
 
     // Broadcast over socket so all connected peers receive the question
     if (rtcBroadcastFacilitatorSpeech) {
@@ -2368,7 +2370,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     });
   };
 
-  // Silence Watchdog: triggers opening initiation (8s silence) or targeted question mentioning name (25s mid-discussion silence)
+  // Silence Watchdog: triggers opening initiation (8s silence) or 3-second staged arbitration
   useEffect(() => {
     if (rtcSimulationMode) return;
     if (!isSessionActive) return;
@@ -2386,7 +2388,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       }
     }
 
-    // 2. 3-Second Staged Turn Arbitration Watchdog (3s Stage 1, 6s Stage 2, 9s Targeted Candidate Callout)
+    // 2. 3-Second Staged Turn Arbitration Watchdog (3s Warning 1, 6s Warning 2, 9s Targeted Candidate Callout)
     const currentSilence = Math.max(localSilenceSeconds, rtcSilenceTimer, session.silenceTimerSeconds);
     if (
       !session.isFacilitatorSpeaking &&
@@ -2397,78 +2399,30 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       !liveSpeechTranscript
     ) {
       const STAGE_1_PROMPTS = [
-        "Who would like to build on that point or share an alternative perspective?",
-        "Let's hear other viewpoints on this topic — anyone is welcome to jump in.",
-        "Who has a counter-argument or fresh insight to bring to the discussion?",
-        "Let's explore another angle of this issue — who would like to speak next?",
-        "Feel free to share your thoughts or provide real-world examples on this point.",
+        "Three seconds of silence detected. The floor is open — anyone can jump in.",
+        "Three seconds of silence. Please share your perspective or build on this topic.",
       ];
       const STAGE_2_PROMPTS = [
-        "Let's keep the discussion moving — feel free to jump in with your thoughts.",
-        "We encourage everyone to participate — please share your perspective.",
-        "Let's hear from our peers who haven't spoken recently — what is your view?",
-        "Does anyone want to add data or concrete industry examples to support our analysis?",
-        "Who would like to take the floor next to expand on this topic?",
+        "Six seconds of silence detected. Please present your arguments or counter-points.",
+        "Six seconds of silence. Let us keep the momentum going — feel free to contribute.",
       ];
 
+      // In standalone / offline mode: arbitrate through the 3 warnings and call least spoken candidate at 9s
       if (!isSocketConnected) {
         if (clientSilenceStageRef.current === 0 && currentSilence >= 3 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
           clientSilenceStageRef.current = 1;
           lastFacilitatorInterventionTimeRef.current = Date.now();
-          setSilenceWarning('⚠️ Stage 1 Warning: 3s silence detected! The floor is open — anyone can jump in.');
-          setTimeout(() => setSilenceWarning(null), 6000);
           const pIdx = Math.floor(Date.now() / 1000) % STAGE_1_PROMPTS.length;
           speakFacilitator(STAGE_1_PROMPTS[pIdx], 'silence_instruction_1', 'turn_transition');
         } else if (clientSilenceStageRef.current === 1 && currentSilence >= 6 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
           clientSilenceStageRef.current = 2;
           lastFacilitatorInterventionTimeRef.current = Date.now();
-          setSilenceWarning('⚠️ Stage 2 Warning: 6s silence detected! Please present your arguments or counter-points.');
-          setTimeout(() => setSilenceWarning(null), 6000);
           const pIdx = Math.floor(Date.now() / 1000) % STAGE_2_PROMPTS.length;
           speakFacilitator(STAGE_2_PROMPTS[pIdx], 'silence_instruction_2', 'turn_transition');
         } else if (clientSilenceStageRef.current === 2 && currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
           clientSilenceStageRef.current = 3;
           lastFacilitatorInterventionTimeRef.current = Date.now();
-          setSilenceWarning('🚨 Stage 3: 9s silence — AI Facilitator calling upon a candidate to speak!');
-          setTimeout(() => setSilenceWarning(null), 7000);
           handleFacilitatorTargetedProbe();
-        }
-      } else {
-        // Socket mode: Fail-safe if server hasn't intervened at 3s of silence
-        if (clientSilenceStageRef.current === 0 && currentSilence >= 3 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
-          clientSilenceStageRef.current = 1;
-          lastFacilitatorInterventionTimeRef.current = Date.now();
-          setSilenceWarning('⚠️ Stage 1 Warning: 3s silence detected! The floor is open — anyone can jump in.');
-          setTimeout(() => setSilenceWarning(null), 6000);
-          const pIdx = Math.floor(Date.now() / 1000) % STAGE_1_PROMPTS.length;
-          const prompt = STAGE_1_PROMPTS[pIdx];
-          if (rtcBroadcastFacilitatorSpeech) {
-            rtcBroadcastFacilitatorSpeech(prompt, 'silence_instruction_1');
-          } else {
-            speakFacilitator(prompt, 'silence_instruction_1', 'turn_transition');
-          }
-        } else if (clientSilenceStageRef.current === 1 && currentSilence >= 6 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
-          clientSilenceStageRef.current = 2;
-          lastFacilitatorInterventionTimeRef.current = Date.now();
-          setSilenceWarning('⚠️ Stage 2 Warning: 6s silence detected! Please present your arguments or counter-points.');
-          setTimeout(() => setSilenceWarning(null), 6000);
-          const pIdx = Math.floor(Date.now() / 1000) % STAGE_2_PROMPTS.length;
-          const prompt = STAGE_2_PROMPTS[pIdx];
-          if (rtcBroadcastFacilitatorSpeech) {
-            rtcBroadcastFacilitatorSpeech(prompt, 'silence_instruction_2');
-          } else {
-            speakFacilitator(prompt, 'silence_instruction_2', 'turn_transition');
-          }
-        } else if (currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 5000) {
-          lastFacilitatorInterventionTimeRef.current = Date.now();
-          clientSilenceStageRef.current = 3;
-          setSilenceWarning('🚨 Stage 3: 9s silence — AI Facilitator calling upon a candidate to speak!');
-          setTimeout(() => setSilenceWarning(null), 7000);
-          if (rtcRequestAiIntervention) {
-            rtcRequestAiIntervention();
-          } else {
-            handleFacilitatorTargetedProbe();
-          }
         }
       }
     }
@@ -2552,31 +2506,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         </div>
       )}
 
-      {/* 3-Second Turn Arbitration Silence Warning Floating Banner */}
-      {silenceWarning && (
-        <div className="fixed top-18 sm:top-20 left-1/2 -translate-x-1/2 z-50 max-w-xl w-[92vw] sm:w-full p-3.5 rounded-2xl bg-indigo-600/95 dark:bg-indigo-950/95 border-2 border-indigo-400 text-white shadow-2xl flex items-center justify-between gap-3 backdrop-blur-md animate-in fade-in slide-in-from-top-4 duration-200 pointer-events-auto">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-bold text-sm shrink-0 shadow-md">
-              ⏱️
-            </div>
-            <div className="min-w-0">
-              <span className="text-[10px] font-black uppercase tracking-wider text-amber-300 block">
-                3-Second Silence Turn Arbitration
-              </span>
-              <p className="text-xs sm:text-sm font-semibold truncate sm:whitespace-normal">
-                {silenceWarning}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setSilenceWarning(null)}
-            className="px-2.5 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-xs font-bold transition-colors cursor-pointer shrink-0"
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
       
       {/* Session Title & Facilitator Broadcast Banner */}
       <div className="bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-sm dark:shadow-xl relative overflow-hidden backdrop-blur-md transition-colors duration-200">
