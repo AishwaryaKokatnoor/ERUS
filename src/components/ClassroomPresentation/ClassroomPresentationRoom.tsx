@@ -423,63 +423,6 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
     });
   }, [presentationStudents, session.presentationTopics, session.topic]);
 
-  const activeSlide = topicSlides[currentSlideIndex] || topicSlides[0];
-
-  // Automated Presentation Video/Audio Recorder (Saved to Faculty Dashboard with presentation stage layout)
-  const gdRecorder = useGDRecorder({
-    slotId: session.slotId || session.id || 'slot-1',
-    isSessionActive: session.status === 'active',
-    localStream: videoStream,
-    localAudioStream: audioStream || rtcLocalAudioStream,
-    peerStreams: rtcPeerStreams,
-    recordVideo: true,
-    enabled: true,
-    topicTitle: currentTopic || session.topic || 'Classroom Presentation',
-    layoutMode: 'presentation',
-    screenStream: isSharingScreen && slideMode === 'screen' ? screenStream : null,
-    presentationInfo: {
-      badge: activeSlide?.badge,
-      title: activeSlide?.title,
-      subtitle: activeSlide?.subtitle,
-      bullets: activeSlide?.bullets,
-      currentSlideIndex: currentSlideIndex + 1,
-      totalSlides: topicSlides.length,
-      slideMode: isSharingScreen && slideMode === 'screen' ? 'screen' : 'deck',
-      phase,
-      presenterName: currentPresenter?.name || 'Candidate',
-      presenterCollege: currentPresenter?.college || session.collegeCode || 'Institution',
-      aiGuidance: aiSpeech || '',
-    },
-    currentSpeakerId: currentPresenter?.id,
-    currentSpeakerName: currentPresenter?.name,
-    latestTranscriptText: liveSpeech || (transcripts.length > 0 ? transcripts[transcripts.length - 1].text : ''),
-    participantTiles: presentationStudents.map((st) => ({
-      id: st.id,
-      socketId: st.socketId,
-      userId: st.userId,
-      name: st.name,
-      college: st.college,
-      seatNumber: st.seatNumber,
-      isSpeaking: st.id === currentPresenter?.id ? (st.isUser ? isMicOn : st.isSpeaking) : st.isSpeaking,
-      cameraActive: st.isUser ? isCameraOn : st.cameraActive,
-      isUser: st.isUser,
-      isMuted: st.isUser ? !isMicOn : !st.micActive,
-      videoStream: st.isUser ? (videoStream || st.videoStream) : st.videoStream,
-    })),
-    autoStartOnActive: true,
-  });
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      (window as any).__erusStopAndUploadRecording = () =>
-        gdRecorder.stopAndUploadRecording(session.slotId || session.id);
-    }
-    return () => {
-      if (typeof window !== 'undefined') {
-        delete (window as any).__erusStopAndUploadRecording;
-      }
-    };
-  }, [gdRecorder, session.slotId, session.id]);
 
   // Activity Execution State (Serial Flow per PDF specification)
   const [phase, setPhase] = useState<PresentationPhase>('opening');
@@ -596,6 +539,64 @@ export const ClassroomPresentationRoom: React.FC<ClassroomPresentationRoomProps>
   const currentPresenter = presentationStudents[activeStudentIndex] || presentationStudents[0];
   const isUserPodiumPresenter = Boolean(currentPresenter?.isUser);
   const currentTopic = studentTopics[activeStudentIndex] || session.topic;
+
+  const activeSlide = topicSlides[currentSlideIndex] || topicSlides[0];
+
+  // Automated Presentation Video/Audio Recorder (Saved to Faculty Dashboard with presentation stage layout)
+  const gdRecorder = useGDRecorder({
+    slotId: session.slotId || session.id || 'slot-1',
+    isSessionActive: session.status === 'active',
+    localStream: videoStream,
+    localAudioStream: audioStream || rtcLocalAudioStream,
+    peerStreams: rtcPeerStreams,
+    recordVideo: true,
+    enabled: true,
+    topicTitle: currentTopic || session.topic || 'Classroom Presentation',
+    layoutMode: 'presentation',
+    screenStream: isSharingScreen && slideMode === 'screen' ? screenStream : null,
+    presentationInfo: {
+      badge: activeSlide?.badge,
+      title: activeSlide?.title,
+      subtitle: activeSlide?.subtitle,
+      bullets: activeSlide?.bullets,
+      currentSlideIndex: currentSlideIndex + 1,
+      totalSlides: topicSlides.length,
+      slideMode: isSharingScreen && slideMode === 'screen' ? 'screen' : 'deck',
+      phase,
+      presenterName: currentPresenter?.name || 'Candidate',
+      presenterCollege: currentPresenter?.college || session.collegeCode || 'Institution',
+      aiGuidance: aiSpeech || '',
+    },
+    currentSpeakerId: currentPresenter?.id,
+    currentSpeakerName: currentPresenter?.name,
+    latestTranscriptText: liveSpeech || (transcripts.length > 0 ? transcripts[transcripts.length - 1].text : ''),
+    participantTiles: presentationStudents.map((st) => ({
+      id: st.id,
+      socketId: st.socketId,
+      userId: st.userId,
+      name: st.name,
+      college: st.college,
+      seatNumber: st.seatNumber,
+      isSpeaking: st.id === currentPresenter?.id ? (st.isUser ? isMicOn : st.isSpeaking) : st.isSpeaking,
+      cameraActive: st.isUser ? isCameraOn : st.cameraActive,
+      isUser: st.isUser,
+      isMuted: st.isUser ? !isMicOn : !st.micActive,
+      videoStream: st.isUser ? (videoStream || st.videoStream) : st.videoStream,
+    })),
+    autoStartOnActive: true,
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).__erusStopAndUploadRecording = () =>
+        gdRecorder.stopAndUploadRecording(session.slotId || session.id);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        delete (window as any).__erusStopAndUploadRecording;
+      }
+    };
+  }, [gdRecorder, session.slotId, session.id]);
 
   // Append entry to live activity transcript feed
   const addTranscriptEntry = (speakerName: string, text: string, isFacilitator = false) => {
