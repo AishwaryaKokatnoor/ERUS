@@ -42,11 +42,16 @@ export class ErrorBoundary extends (React.Component as any) {
       });
     } catch {}
     this.setState({ hasError: false, error: null, errorInfo: null });
-    window.location.reload();
+    if (typeof window !== 'undefined') {
+      window.location.href = window.location.origin + window.location.pathname + '?v=' + Date.now();
+    }
   };
 
   private handleSoftRecovery = () => {
     this.setState({ hasError: false, error: null, errorInfo: null });
+    if (typeof window !== 'undefined') {
+      window.location.href = window.location.origin + window.location.pathname + '?v=' + Date.now();
+    }
   };
 
   public render() {
