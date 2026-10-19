@@ -18,17 +18,19 @@ export function useUserMedia(): UserMediaControls {
   const [audioLevel, setAudioLevel] = useState<number>(0);
   const [audioStream, setAudioStream] = useState<MediaStream | null>(null);
 
+  const videoStreamRef = useRef<MediaStream | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
-  // Toggle Camera
+  // Toggle Camera cleanly without interrupting audio analyzer or microphone
   const toggleCamera = useCallback(async () => {
     if (isCameraOn) {
       // Turn off camera
-      if (videoStream) {
-        videoStream.getTracks().forEach((track) => track.stop());
+      if (videoStreamRef.current) {
+        videoStreamRef.current.getTracks().forEach((track) => track.stop());
+        videoStreamRef.current = null;
       }
       setVideoStream(null);
       setIsCameraOn(false);
@@ -44,8 +46,9 @@ export function useUserMedia(): UserMediaControls {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
             video: {
-              width: { ideal: 640 },
-              height: { ideal: 480 },
+              width: { ideal: 640, max: 1280 },
+              height: { ideal: 480, max: 720 },
+              frameRate: { ideal: 30, max: 30 },
               facingMode: 'user',
             },
             audio: false,
@@ -59,6 +62,12 @@ export function useUserMedia(): UserMediaControls {
           });
         }
 
+        // Guarantee all tracks are enabled
+        stream.getVideoTracks().forEach((t) => {
+          t.enabled = true;
+        });
+
+        videoStreamRef.current = stream;
         setVideoStream(stream);
         setIsCameraOn(true);
         setCameraError(null);
@@ -68,12 +77,14 @@ export function useUserMedia(): UserMediaControls {
         setIsCameraOn(false);
       }
     }
-  }, [isCameraOn, videoStream]);
+  }, [isCameraOn]);
 
   // Audio level analyser for microphone feedback
   const startAudioAnalyser = useCallback(async (): Promise<MediaStream | null> => {
     try {
-      if (audioStreamRef.current) return audioStreamRef.current; // Already running
+      if (audioStreamRef.current && audioStreamRef.current.getAudioTracks().some((t) => t.readyState === 'live')) {
+        return audioStreamRef.current; // Already running
+      }
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -152,15 +163,16 @@ export function useUserMedia(): UserMediaControls {
     setAudioLevel(0);
   }, []);
 
-  // Cleanup all media tracks on unmount
+  // Cleanup all media tracks STRICTLY on unmount (does NOT stop mic when camera is toggled)
   useEffect(() => {
     return () => {
-      if (videoStream) {
-        videoStream.getTracks().forEach((track) => track.stop());
+      if (videoStreamRef.current) {
+        videoStreamRef.current.getTracks().forEach((track) => track.stop());
+        videoStreamRef.current = null;
       }
       stopAudioAnalyser();
     };
-  }, [videoStream, stopAudioAnalyser]);
+  }, [stopAudioAnalyser]);
 
   return {
     isCameraOn,

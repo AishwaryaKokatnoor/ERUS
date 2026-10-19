@@ -1,6 +1,6 @@
 import express from 'express';
 import http from 'http';
-import { Server as SocketIOServer } from 'socket.io';
+import { Server as SocketIOServer, Socket } from 'socket.io';
 import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';

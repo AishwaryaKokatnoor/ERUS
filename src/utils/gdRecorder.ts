@@ -442,7 +442,7 @@ export function useGDRecorder({
   // Helper to connect an audio stream to the mixer destination node with GC immunity
   const mixStreamIntoDestination = useCallback((stream: MediaStream) => {
     if (!audioContextRef.current || !destinationRef.current || !stream) return;
-    const audioTracks = stream.getAudioTracks().filter((t) => t.readyState === 'live');
+    const audioTracks = stream.getAudioTracks().filter((t) => t.readyState !== 'ended');
     if (audioTracks.length === 0) return;
 
     if (audioContextRef.current.state === 'suspended') {
@@ -450,6 +450,7 @@ export function useGDRecorder({
     }
 
     for (const track of audioTracks) {
+      try { track.enabled = true; } catch {}
       if (connectedTracksRef.current.has(track.id)) continue;
       try {
         const trackStream = stream.getAudioTracks().length === 1 ? stream : new MediaStream([track]);
@@ -489,7 +490,25 @@ export function useGDRecorder({
     }
   }, [enabled, isRecording, localStream, localAudioStream, peerStreams, mixStreamIntoDestination]);
 
-  // Active audio watchdog: continuously ensure all microphone & peer tracks remain connected throughout recording
+  // Guarantee AudioContext is running for recording by resuming on any user interaction
+  useEffect(() => {
+    if (!enabled) return;
+    const resumeCtx = () => {
+      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume().catch(() => {});
+      }
+    };
+    window.addEventListener('click', resumeCtx, { passive: true });
+    window.addEventListener('pointerdown', resumeCtx, { passive: true });
+    window.addEventListener('keydown', resumeCtx, { passive: true });
+    return () => {
+      window.removeEventListener('click', resumeCtx);
+      window.removeEventListener('pointerdown', resumeCtx);
+      window.removeEventListener('keydown', resumeCtx);
+    };
+  }, [enabled]);
+
+  // Active audio watchdog: continuously ensure all microphone, peer tracks & remote audio elements remain connected throughout recording
   useEffect(() => {
     if (!enabled || !isRecording) return;
     const watchdogInterval = setInterval(() => {
@@ -502,6 +521,15 @@ export function useGDRecorder({
         for (const peerStream of peerStreamsRef.current.values()) {
           mixStreamIntoDestination(peerStream);
         }
+      }
+      // Also capture any active remote-audio HTMLAudioElements created by WebRTC
+      if (typeof document !== 'undefined') {
+        const remoteAudioEls = document.querySelectorAll<HTMLAudioElement>('audio[id^="remote-audio-"]');
+        remoteAudioEls.forEach((el) => {
+          if (el.srcObject && (el.srcObject as MediaStream).getAudioTracks) {
+            mixStreamIntoDestination(el.srcObject as MediaStream);
+          }
+        });
       }
     }, 1500);
 

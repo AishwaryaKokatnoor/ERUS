@@ -966,7 +966,7 @@ export function useWebRTCRoom({
       if (cameraActive !== undefined) {
         const pc = peerConnectionsRef.current.get(peerSockId);
         if (pc) {
-          updatePeerStreamFromReceiversRef.current(peerSockId, pc, true);
+          updatePeerStreamFromReceiversRef.current(peerSockId, pc, false);
         }
       }
       setPeers((prev) => {

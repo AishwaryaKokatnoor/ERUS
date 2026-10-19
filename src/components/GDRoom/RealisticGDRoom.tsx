@@ -4681,7 +4681,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   );
 };
 
-// Sub-Component: HTML5 Video Stream Player for Live Webcam Feed
+// Sub-Component: HTML5 Video Stream Player for Live Webcam Feed (Optimized with React.memo & zero frame stutter)
 const VideoStreamPlayer: React.FC<{
   stream: MediaStream;
   className?: string;
@@ -4691,7 +4691,7 @@ const VideoStreamPlayer: React.FC<{
   isUser?: boolean;
   avatarFallback?: string;
   studentName?: string;
-}> = ({ stream, className, muted = true, participantId, seatNumber, isUser, avatarFallback, studentName }) => {
+}> = React.memo(({ stream, className, muted = true, participantId, seatNumber, isUser, avatarFallback, studentName }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isVideoLoaded, setIsVideoLoaded] = useState(Boolean(isUser));
 
@@ -4715,7 +4715,7 @@ const VideoStreamPlayer: React.FC<{
     // Ensure the incoming video track is enabled
     try { incomingVideoTrack.enabled = true; } catch {}
 
-    // Attach stream directly to video element
+    // Attach stream directly to video element only when different
     if (video.srcObject !== stream) {
       video.srcObject = stream;
     }
@@ -4725,7 +4725,9 @@ const VideoStreamPlayer: React.FC<{
       video.muted = true;
       video.defaultMuted = true;
       video.playsInline = true;
-      video.play().catch(() => {});
+      if (video.paused) {
+        video.play().catch(() => {});
+      }
       if (video.videoWidth > 0 && video.videoHeight > 0) {
         setIsVideoLoaded(true);
       }
@@ -4734,35 +4736,20 @@ const VideoStreamPlayer: React.FC<{
     checkVideoRender();
 
     incomingVideoTrack.addEventListener('unmute', checkVideoRender);
-
     video.addEventListener('loadedmetadata', checkVideoRender);
     video.addEventListener('loadeddata', checkVideoRender);
     video.addEventListener('canplay', checkVideoRender);
-    video.addEventListener('playing', checkVideoRender);
-    video.addEventListener('timeupdate', checkVideoRender);
-    video.addEventListener('resize', checkVideoRender);
 
-    const t1 = setTimeout(checkVideoRender, 200);
-    const t2 = setTimeout(checkVideoRender, 800);
-    const t3 = setTimeout(checkVideoRender, 2000);
-    const interval = setInterval(() => {
-      if (video && video.videoWidth > 0 && video.videoHeight > 0) {
-        setIsVideoLoaded(true);
-      }
-    }, 400);
+    const t1 = setTimeout(checkVideoRender, 150);
+    const t2 = setTimeout(checkVideoRender, 600);
 
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
-      clearTimeout(t3);
-      clearInterval(interval);
       incomingVideoTrack.removeEventListener('unmute', checkVideoRender);
       video.removeEventListener('loadedmetadata', checkVideoRender);
       video.removeEventListener('loadeddata', checkVideoRender);
       video.removeEventListener('canplay', checkVideoRender);
-      video.removeEventListener('playing', checkVideoRender);
-      video.removeEventListener('timeupdate', checkVideoRender);
-      video.removeEventListener('resize', checkVideoRender);
     };
   }, [stream, isUser]);
 
@@ -4790,13 +4777,13 @@ const VideoStreamPlayer: React.FC<{
         onLoadedMetadata={(e) => {
           const v = e.currentTarget;
           v.muted = true;
-          v.play().catch(() => {});
+          if (v.paused) v.play().catch(() => {});
           if (v.videoWidth > 0) setIsVideoLoaded(true);
         }}
         onCanPlay={(e) => {
           const v = e.currentTarget;
           v.muted = true;
-          v.play().catch(() => {});
+          if (v.paused) v.play().catch(() => {});
           if (v.videoWidth > 0) setIsVideoLoaded(true);
         }}
         data-participant-id={participantId || ''}
@@ -4807,7 +4794,7 @@ const VideoStreamPlayer: React.FC<{
       />
     </div>
   );
-};
+});
 
 // Sub-Component: Student Video / Camera Frame with Google Meet Badges & Live Webcam Streaming
 export const StudentVideoFrame: React.FC<{
