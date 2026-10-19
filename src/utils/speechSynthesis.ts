@@ -688,24 +688,27 @@ class RoomVoiceEngine {
   }
 
   public isSpeaking(): boolean {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return false;
-    const nativeSpeaking = Boolean(window.speechSynthesis.speaking);
-    const globalSpeaking = Boolean((window as any).__erusIsAiSpeaking);
-    if (!this.isCurrentlySpeaking && !nativeSpeaking && !globalSpeaking) return false;
-    // Safety check: if more than 25 seconds have elapsed since start of speech, it has naturally finished
-    if (this.speechStartedAt && Date.now() - this.speechStartedAt > 25000) {
+    if (typeof window === 'undefined') return false;
+    // Strictly rely on tracked engine speech state.
+    // In Chromium, native window.speechSynthesis.speaking frequently hangs true permanently.
+    if (!this.isCurrentlySpeaking) {
+      return false;
+    }
+    // Safety check: if more than 20 seconds have elapsed since start of speech, it has naturally finished
+    if (this.speechStartedAt && Date.now() - this.speechStartedAt > 20000) {
       this.isCurrentlySpeaking = false;
       if (typeof window !== 'undefined') {
         (window as any).__erusIsAiSpeaking = false;
+        (window as any).__erusLastAiSpeechTime = Date.now();
       }
       this.activeUtterances.clear();
       this.currentUtterance = null;
       return false;
     }
-    return this.isCurrentlySpeaking || nativeSpeaking || globalSpeaking;
+    return true;
   }
 
-  public isSpeakingOrRecentlyFinished(bufferMs: number = 2000): boolean {
+  public isSpeakingOrRecentlyFinished(bufferMs: number = 800): boolean {
     if (this.isSpeaking()) return true;
     const lastSpoken = typeof window !== 'undefined' ? (window as any).__erusLastAiSpeechTime || 0 : 0;
     return (Date.now() - lastSpoken) < bufferMs;

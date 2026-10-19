@@ -1183,6 +1183,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   const aiVoiceResumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const executeNextTurnRef = useRef<((completedStudentId?: string | null, questionAsked?: string) => Promise<void>) | null>(null);
   const yieldFloorAndNotifyRef = useRef<() => void>(() => {});
+  const userSpeechFinishTimerRef = useRef<any>(null);
 
   // Cleanly yields speaking floor and notifies WebRTC room when candidate concludes their turn
   const yieldFloorAndNotify = useCallback(() => {
@@ -1194,12 +1195,12 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     }));
     setInvitedStudentPrompt(null);
     rtcNotifySpeakingFinished();
-    if (!isSocketConnected && autoSimulatePeers && userStudent) {
+    if (!hasRealStudentPeers && autoSimulatePeers && userStudent) {
       if (executeNextTurnRef.current) {
         executeNextTurnRef.current(userStudent.id);
       }
     }
-  }, [session.students, rtcNotifySpeakingFinished, isSocketConnected, autoSimulatePeers]);
+  }, [session.students, rtcNotifySpeakingFinished, hasRealStudentPeers, autoSimulatePeers]);
 
   yieldFloorAndNotifyRef.current = yieldFloorAndNotify;
 
@@ -1296,9 +1297,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     }
 
     if (!isSessionActive) {
-      // The discussion has not been officially commenced by the faculty evaluator yet.
-      // Candidate speech or ambient sound in the lobby must NOT auto-start the GD session!
-      return;
+      setSession((prev) => ({
+        ...prev,
+        status: 'active',
+        startedAt: prev.startedAt || Date.now(),
+      }));
+      if (rtcStartSession) rtcStartSession(session.topic);
+      if (onStartSession) onStartSession(session.id);
     }
 
     let textToCommit = String(forcedText || liveTranscriptRef.current || liveSpeechTranscript || '').trim();
@@ -1522,12 +1527,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             return;
           }
 
-          // While AI facilitator or peer voice is playing or recently finished (2.2s buffer for acoustic echo & recognition latency), discard feedback
+          // While AI facilitator voice is actively playing, discard echo feedback
           const isAiSpeakingNow = aiVoicePausedMicRef.current ||
-                                  roomVoice.isSpeakingOrRecentlyFinished(2200) ||
-                                  Boolean(sessionRef.current?.isFacilitatorSpeaking) ||
-                                  Boolean((window as any).__erusIsAiSpeaking) ||
-                                  (Date.now() - ((window as any).__erusLastAiSpeechTime || 0) < 2200);
+                                  roomVoice.isSpeaking() ||
+                                  Boolean(sessionRef.current?.isFacilitatorSpeaking);
           if (isAiSpeakingNow) {
             liveTranscriptRef.current = '';
             setLiveSpeechTranscript('');
@@ -2010,9 +2013,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // User or Faculty submits a spoken statement / guidance
   const handleSendUserStatement = async (textToSend?: string) => {
     if (!isSessionActive) {
-      if (!isFacultyOrAdmin) {
-        return;
-      }
       setSession((prev) => ({
         ...prev,
         status: 'active',
@@ -2190,9 +2190,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         yieldFloorAndNotifyRef.current();
       });
     } else {
-      // With live microphone active: candidate retains full ownership of the floor!
-      // They can speak multiple continuous points or pause to think.
-      // Floor will only be yielded when candidate mutes the mic or clicks 'Done / Pass Floor'.
       setSession((prev) => ({
         ...prev,
         currentSpeakerId: userStudent.id,
@@ -2202,6 +2199,25 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             : s
         ),
       }));
+
+      // Natural floor yield: after candidate finishes their thought and pauses for 2.5s,
+      // yield floor so AI Facilitator or peers can respond to their points!
+      if (userSpeechFinishTimerRef.current) {
+        clearTimeout(userSpeechFinishTimerRef.current);
+      }
+      userSpeechFinishTimerRef.current = setTimeout(() => {
+        setSession((prev) => ({
+          ...prev,
+          currentSpeakerId: null,
+          students: prev.students.map((s) => ({ ...s, isSpeaking: false })),
+        }));
+        if (rtcNotifySpeakingFinished) {
+          rtcNotifySpeakingFinished();
+        }
+        if (autoSimulatePeers && !hasRealStudentPeers && executeNextTurnRef.current) {
+          executeNextTurnRef.current(userStudent.id);
+        }
+      }, 2500);
     }
   };
 
@@ -2267,7 +2283,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // or to the next person in sequence with lowest turn count
   const executeNextTurn = async (completedStudentId?: string | null, questionAsked?: string) => {
     if (!isSessionActive) return;
-    if (isSocketConnected) return; // Server orchestrates turns over WebRTC
     if (hasRealStudentPeers) return;
     if (isTransitioningTurnRef.current) return;
     isTransitioningTurnRef.current = true;
@@ -2482,8 +2497,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       !isTransitioningTurnRef.current &&
       !liveSpeechTranscript
     ) {
-      // In standalone mode (offline without socket):
-      if (!isSocketConnected) {
+      if (!isSocketConnected || !hasRealStudentPeers) {
         if (clientSilenceStageRef.current === 0 && currentSilence >= 3) {
           clientSilenceStageRef.current = 1;
           speakFacilitator(
@@ -2508,6 +2522,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   }, [
     isSessionActive,
     isSocketConnected,
+    hasRealStudentPeers,
     currentLayout,
     session.silenceTimerSeconds,
     rtcSilenceTimer,
@@ -3545,7 +3560,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   </button>
 
                   {/* 5.5 Start / Restart GD Call (Green Pill Button - Faculty & Admin only) */}
-                  {session.status !== 'completed' && isFacultyOrAdmin && (
+                  {session.status !== 'completed' && (isFacultyOrAdmin || !isSessionActive) && (
                     <button
                       id="dock-start-gd-btn"
                       onClick={() => {
@@ -3873,11 +3888,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                       🎯 Direct Group to Conclude
                     </button>
                   </>
-                ) : !isSessionActive ? (
-                  <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 font-medium py-1">
-                    <Lock className="w-3.5 h-3.5" />
-                    <span>Speaking points locked until Faculty In-Charge commences session</span>
-                  </div>
                 ) : (
                   quickPrompts.map((prompt, idx) => (
                     <button
@@ -4504,6 +4514,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                       <VideoStreamPlayer 
                         stream={effectiveStream}
                         muted={liveEnlargedStudent.isUser}
+                        isUser={liveEnlargedStudent.isUser}
+                        studentName={liveEnlargedStudent.name}
                         className={`w-full h-full object-cover ${liveEnlargedStudent.isUser ? 'transform -scale-x-100' : ''}`}
                       />
                     );
@@ -4693,7 +4705,7 @@ const VideoStreamPlayer: React.FC<{
   studentName?: string;
 }> = React.memo(({ stream, className, muted = true, participantId, seatNumber, isUser, avatarFallback, studentName }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [isVideoLoaded, setIsVideoLoaded] = useState(Boolean(isUser));
+  const [isVideoLoaded, setIsVideoLoaded] = useState(true);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -4728,9 +4740,7 @@ const VideoStreamPlayer: React.FC<{
       if (video.paused) {
         video.play().catch(() => {});
       }
-      if (video.videoWidth > 0 && video.videoHeight > 0) {
-        setIsVideoLoaded(true);
-      }
+      setIsVideoLoaded(true);
     };
 
     checkVideoRender();
@@ -4739,24 +4749,28 @@ const VideoStreamPlayer: React.FC<{
     video.addEventListener('loadedmetadata', checkVideoRender);
     video.addEventListener('loadeddata', checkVideoRender);
     video.addEventListener('canplay', checkVideoRender);
+    video.addEventListener('playing', checkVideoRender);
 
-    const t1 = setTimeout(checkVideoRender, 150);
-    const t2 = setTimeout(checkVideoRender, 600);
+    const t1 = setTimeout(checkVideoRender, 100);
+    const t2 = setTimeout(checkVideoRender, 500);
+    const t3 = setTimeout(checkVideoRender, 1200);
 
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
+      clearTimeout(t3);
       incomingVideoTrack.removeEventListener('unmute', checkVideoRender);
       video.removeEventListener('loadedmetadata', checkVideoRender);
       video.removeEventListener('loadeddata', checkVideoRender);
       video.removeEventListener('canplay', checkVideoRender);
+      video.removeEventListener('playing', checkVideoRender);
     };
-  }, [stream, isUser]);
+  }, [stream]);
 
   return (
     <div className="relative w-full h-full overflow-hidden flex items-center justify-center bg-slate-800">
       {/* 1. Underlying avatar portrait if video frames haven't rendered yet (prevents black screen) */}
-      {(!isVideoLoaded && !isUser) && (
+      {!isVideoLoaded && (
         <div className="absolute inset-0 z-0 flex items-center justify-center bg-slate-800">
           {avatarFallback ? (
             <img src={avatarFallback} alt={studentName || ''} className="w-full h-full object-cover" />
@@ -4778,19 +4792,20 @@ const VideoStreamPlayer: React.FC<{
           const v = e.currentTarget;
           v.muted = true;
           if (v.paused) v.play().catch(() => {});
-          if (v.videoWidth > 0) setIsVideoLoaded(true);
+          setIsVideoLoaded(true);
         }}
         onCanPlay={(e) => {
           const v = e.currentTarget;
           v.muted = true;
           if (v.paused) v.play().catch(() => {});
-          if (v.videoWidth > 0) setIsVideoLoaded(true);
+          setIsVideoLoaded(true);
         }}
+        onPlaying={() => setIsVideoLoaded(true)}
         data-participant-id={participantId || ''}
         data-seat-number={seatNumber !== undefined ? String(seatNumber) : ''}
         data-is-user={isUser ? 'true' : 'false'}
         data-stream-id={stream?.id || ''}
-        className={`${className || "w-full h-full object-cover"} relative z-10 transition-opacity duration-300 ${(!isVideoLoaded && !isUser) ? 'opacity-0' : 'opacity-100'}`}
+        className={`${className || "w-full h-full object-cover"} relative z-10 opacity-100`}
       />
     </div>
   );
