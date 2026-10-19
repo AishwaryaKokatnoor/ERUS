@@ -45,6 +45,11 @@ interface UseWebRTCRoomOptions {
     speakingDurationSeconds?: number;
     interruptionCount?: number;
   }) => void;
+  onPeerLeft?: (data: {
+    socketId?: string;
+    userId?: string;
+    seatNumber?: number;
+  }) => void;
   onRoomJoined?: (data: {
     assignedSeat?: number;
     transcripts?: GDTranscript[];
@@ -91,6 +96,7 @@ export function useWebRTCRoom({
   onSessionEnded,
   onAiParticipantSpeech,
   onPeerStatsUpdated,
+  onPeerLeft,
   onRoomJoined,
 }: UseWebRTCRoomOptions) {
   const topicRef = useRef<string | undefined>(topic);
@@ -156,12 +162,14 @@ export function useWebRTCRoom({
   const onSessionEndedRef = useRef(onSessionEnded);
   const onAiParticipantSpeechRef = useRef(onAiParticipantSpeech);
   const onPeerStatsUpdatedRef = useRef(onPeerStatsUpdated);
+  const onPeerLeftRef = useRef(onPeerLeft);
   onNewTranscriptRef.current = onNewTranscript;
   onFacilitatorInterventionRef.current = onFacilitatorIntervention;
   onSessionStartedRef.current = onSessionStarted;
   onSessionEndedRef.current = onSessionEnded;
   onAiParticipantSpeechRef.current = onAiParticipantSpeech;
   onPeerStatsUpdatedRef.current = onPeerStatsUpdated;
+  onPeerLeftRef.current = onPeerLeft;
   const onRoomJoinedRef = useRef(onRoomJoined);
   onRoomJoinedRef.current = onRoomJoined;
 
@@ -983,15 +991,37 @@ export function useWebRTCRoom({
     });
 
     // A peer disconnected from the slot
-    socket.on('peer-left', ({ socketId: leftSockId }) => {
+    socket.on('peer-left', ({ socketId: leftSockId, userId: leftUserId, seatNumber: leftSeatNumber }: any) => {
       if (!active) return;
-      detachRemoteAudioRef.current(leftSockId);
-      const pc = peerConnectionsRef.current.get(leftSockId);
-      if (pc) {
-        pc.close();
-        peerConnectionsRef.current.delete(leftSockId);
+      console.log(`[WebRTC Peer Left] Socket: ${leftSockId}, User: ${leftUserId}, Seat: ${leftSeatNumber}`);
+
+      if (leftSockId) {
+        detachRemoteAudioRef.current(leftSockId);
+        const pc = peerConnectionsRef.current.get(leftSockId);
+        if (pc) {
+          try { pc.close(); } catch {}
+          peerConnectionsRef.current.delete(leftSockId);
+        }
+        peerStreamsRef.current.delete(leftSockId);
       }
-      setPeers((prev) => prev.filter((p) => p.socketId !== leftSockId));
+      if (leftUserId) {
+        detachRemoteAudioRef.current(leftUserId);
+        peerStreamsRef.current.delete(leftUserId);
+      }
+      setPeerStreams(new Map(peerStreamsRef.current));
+
+      setPeers((prev) =>
+        prev.filter((p) => {
+          if (leftSockId && p.socketId === leftSockId) return false;
+          if (leftUserId && (p.userId === leftUserId || (p as any).id === leftUserId)) return false;
+          if (leftSeatNumber !== undefined && p.seatNumber === leftSeatNumber) return false;
+          return true;
+        })
+      );
+
+      if (onPeerLeftRef.current) {
+        onPeerLeftRef.current({ socketId: leftSockId, userId: leftUserId, seatNumber: leftSeatNumber });
+      }
     });
 
     // 20-Second Silence Deadlock Countdown Tick
@@ -1180,7 +1210,9 @@ export function useWebRTCRoom({
         el.srcObject = null;
         el.remove();
       });
-      audioElementsRef.current.clear();
+      try {
+        socket.emit('leave-gd-room', { slotId, user: currentUserRef.current });
+      } catch {}
 
       socket.disconnect();
     };

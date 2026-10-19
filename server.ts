@@ -10431,21 +10431,34 @@ io.on('connection', (socket) => {
   });
 
   // 5. Peer Disconnect Cleanup
-  socket.on('disconnect', () => {
+  const handlePeerDisconnect = (sock: Socket, explicitSlotId?: string, explicitUserId?: string) => {
     for (const [slotId, room] of LIVE_ROOMS.entries()) {
-      const peer = room.peers.get(socket.id);
+      if (explicitSlotId && slotId !== explicitSlotId) continue;
+
+      let peerKey = sock.id;
+      let peer = room.peers.get(sock.id);
+      if (!peer && explicitUserId) {
+        for (const [sId, p] of room.peers.entries()) {
+          if (p.userId === explicitUserId) {
+            peerKey = sId;
+            peer = p;
+            break;
+          }
+        }
+      }
+
       if (peer) {
         room.assignedSeats.delete(peer.seatNumber);
-        room.peers.delete(socket.id);
+        room.peers.delete(peerKey);
         syncAiParticipants(room);
 
-        if (room.currentSpeakerSocketId === socket.id) {
+        if (room.currentSpeakerSocketId === peerKey || room.currentSpeakerId === peer.userId) {
           room.currentSpeakerId = null;
           room.currentSpeakerSocketId = null;
         }
 
         io.to(`room-${slotId}`).emit('peer-left', {
-          socketId: socket.id,
+          socketId: peerKey,
           userId: peer.userId,
           seatNumber: peer.seatNumber,
         });
@@ -10461,6 +10474,14 @@ io.on('connection', (socket) => {
         break;
       }
     }
+  };
+
+  socket.on('leave-gd-room', (payload?: { slotId?: string; user?: any }) => {
+    handlePeerDisconnect(socket, payload?.slotId, payload?.user?.id);
+  });
+
+  socket.on('disconnect', () => {
+    handlePeerDisconnect(socket);
   });
 });
 

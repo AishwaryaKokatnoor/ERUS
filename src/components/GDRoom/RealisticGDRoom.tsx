@@ -363,6 +363,18 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         }),
       }));
     },
+    onPeerLeft: ({ socketId: leftSockId, userId: leftUserId, seatNumber: leftSeatNumber }) => {
+      setSession((prev) => ({
+        ...prev,
+        students: (prev.students || []).filter((s) => {
+          if (s.isUser) return true;
+          if (leftSockId && (s.id === leftSockId || s.socketId === leftSockId)) return false;
+          if (leftUserId && (s.id === leftUserId || s.userId === leftUserId)) return false;
+          if (leftSeatNumber !== undefined && s.seatNumber === leftSeatNumber) return false;
+          return true;
+        }),
+      }));
+    },
     onSessionEnded: () => {
       // Synchronized GD termination: faculty has completed the GD, so student view automatically finishes & evaluates
       if (gdRecorderRef.current?.isRecording) {
@@ -750,58 +762,52 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         });
       }
 
-      // 2. Keep other unique enrolled students from session.students
-      const existingStudents = Array.isArray(prev.students) ? prev.students : [];
-      const seenStudentIds = new Set<string>();
-      if (isStudentUser && currentUser?.id) {
-        seenStudentIds.add(currentUser.id);
-      }
-
-      for (const st of existingStudents) {
-        // Skip placeholders, empty seats, demo mocks, faculty, admins, or current user
-        if (
-          !st ||
-          st.isEmptySeat ||
-          st.isUser ||
-          st.id?.startsWith('seat-') ||
-          st.id?.startsWith('slot-stu-') ||
-          st.name?.startsWith('Seat ') ||
-          (st as any).role === 'faculty' ||
-          (st as any).role === 'college_admin' ||
-          (currentUser?.id && st.id === currentUser.id) ||
-          (currentUser?.name && st.name === currentUser.name)
-        ) {
-          continue;
-        }
-
-        // Deduplicate other students by ID or name
-        const dedupKey = st.id || st.name;
-        if (seenStudentIds.has(dedupKey)) continue;
-        seenStudentIds.add(dedupKey);
-
-        // Find an open seat for this student
-        let targetSeat = st.seatNumber;
-        if (!targetSeat || targetSeat > capacity || usedSeats.has(targetSeat)) {
-          targetSeat = undefined;
-          for (let sn = 1; sn <= capacity; sn++) {
-            if (!usedSeats.has(sn)) {
-              targetSeat = sn;
+      // 2. Synchronize active student peers connected over WebRTC (rtcPeers)
+      const validPeers = (rtcPeers || []).filter(
+        (p) => p && p.role !== 'faculty' && p.role !== 'college_admin' && p.role !== 'super_admin'
+      );
+      validPeers.forEach((peer) => {
+        let desiredSeat = Number(peer.seatNumber);
+        if (!desiredSeat || isNaN(desiredSeat) || desiredSeat < 1 || desiredSeat > capacity || usedSeats.has(desiredSeat)) {
+          desiredSeat = 1;
+          for (let s = 1; s <= capacity; s++) {
+            if (!usedSeats.has(s)) {
+              desiredSeat = s;
               break;
             }
           }
         }
-
-        if (targetSeat && targetSeat <= capacity) {
-          usedSeats.add(targetSeat);
-          seatMap.set(targetSeat, {
-            ...st,
-            seatNumber: targetSeat,
+        if (desiredSeat && desiredSeat <= capacity) {
+          usedSeats.add(desiredSeat);
+          const prevStudent = prev.students?.find(
+            (s) => s.id === peer.userId || s.id === peer.socketId || s.seatNumber === desiredSeat
+          );
+          seatMap.set(desiredSeat, {
+            id: peer.userId || peer.socketId,
+            socketId: peer.socketId,
+            userId: peer.userId,
+            seatNumber: desiredSeat,
+            name: peer.name || `Student ${desiredSeat}`,
+            avatar: peer.avatar || '',
+            college: peer.college || 'Campus Participant',
+            course: (peer as any).course || 'Engineering',
+            batch: (peer as any).batch || '2024-2028',
             isUser: false,
+            isRealPeer: true,
             isEmptySeat: false,
-            isRealPeer: false,
+            isSpeaking: !!peer.isSpeaking,
+            micActive: !!peer.micActive,
+            cameraActive: Boolean(peer.cameraActive),
+            speakingTurns: Math.max(peer.speakingTurns || 0, prevStudent?.speakingTurns || 0),
+            speakingDurationSeconds: Math.max(peer.speakingDurationSeconds || 0, prevStudent?.speakingDurationSeconds || 0),
+            hasRaisedHand: false,
+            interruptionCount: 0,
+            questionsAnswered: 0,
+            questionsInitiated: 0,
+            sentiment: 'neutral',
           });
         }
-      }
+      });
 
       // Deterministic array ordered by seatNumber containing real participants only
       const finalSeats: Student[] = Array.from(seatMap.values())
@@ -822,7 +828,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
       return { ...prev, students: finalSeats };
     });
-  }, [session.id, session.maxCapacity, setSession, isFaculty, currentUser?.id, currentUser?.name, currentUser?.role, rtcAssignedSeat]);
+  }, [session.id, session.maxCapacity, setSession, isFaculty, currentUser?.id, currentUser?.name, currentUser?.role, rtcAssignedSeat, rtcPeers]);
 
   // Active display students: merge connected user with live connected WebRTC peers & available desks
   // Active display students: merge connected user with live connected WebRTC peers & available desks
@@ -991,65 +997,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       });
     });
 
-    // 5. Also keep any persistent students from session.students who aren't already placed
-    const existingEnrolled = Array.isArray(session.students) ? session.students : [];
-    existingEnrolled.forEach((st) => {
-      if (
-        !st ||
-        st.isEmptySeat ||
-        st.isUser ||
-        st.isDemoAI ||
-        st.id?.startsWith('ai-') ||
-        st.name?.toLowerCase().includes('ai participant') ||
-        st.college?.toLowerCase().includes('ai participant') ||
-        st.id?.startsWith('seat-') ||
-        st.name?.startsWith('Seat ') ||
-        (st as any).role === 'faculty' ||
-        (st as any).role === 'college_admin'
-      ) {
-        return;
-      }
-      const alreadyPlaced = Array.from(seatMap.values()).some((p) => p.id === st.id || p.name === st.name);
-      if (alreadyPlaced) return;
-
-      let targetSeat = Number(st.seatNumber);
-      if (!targetSeat || isNaN(targetSeat) || targetSeat < 1 || targetSeat > capacity || usedSeats.has(targetSeat)) {
-        for (let s = 1; s <= capacity; s++) {
-          if (!usedSeats.has(s)) {
-            targetSeat = s;
-            break;
-          }
-        }
-      }
-      const matchingPeer = validStudentPeers.find(
-        (p) => p.userId === st.id || p.socketId === st.id || (p.name && st.name && p.name.toLowerCase() === st.name.toLowerCase())
-      );
-      let matchingStream = matchingPeer
-        ? (rtcPeerStreams.get(matchingPeer.socketId) || (matchingPeer.userId ? rtcPeerStreams.get(matchingPeer.userId) : null))
-        : (rtcPeerStreams.get(st.id) || null);
-      if (!matchingStream && rtcPeerStreams.size > 0) {
-        if (validStudentPeers.length <= 1 && rtcPeerStreams.size === 1) {
-          matchingStream = Array.from(rtcPeerStreams.values())[0];
-        }
-      }
-      const hasActiveVideo = Boolean(matchingStream && matchingStream.getVideoTracks().some((t) => t.readyState !== 'ended'));
-
-      if (targetSeat && !usedSeats.has(targetSeat) && targetSeat <= capacity) {
-        usedSeats.add(targetSeat);
-        seatMap.set(targetSeat, {
-          ...st,
-          seatNumber: targetSeat,
-          isUser: false,
-          isEmptySeat: false,
-          isRealPeer: Boolean(matchingPeer),
-          socketId: matchingPeer?.socketId || st.socketId,
-          videoStream: matchingStream || st.videoStream || null,
-          cameraActive: Boolean(matchingPeer ? matchingPeer.cameraActive : st.cameraActive),
-          isSpeaking: Boolean(matchingPeer?.isSpeaking || (st.id === session.currentSpeakerId)),
-          micActive: Boolean(matchingPeer?.micActive || st.micActive),
-        });
-      }
-    });
+    // 5. In ERUS live GD discussions, only actively connected peers (validStudentPeers) and
+    // the local user sit at the round table. When a student leaves or disconnects, their seat
+    // is immediately vacated so they do not linger as a ghost tile.
 
     // Only return actual filled participants (never generate empty placeholder desks)
     return Array.from(seatMap.values())
