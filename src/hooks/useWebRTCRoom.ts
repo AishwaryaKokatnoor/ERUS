@@ -65,6 +65,16 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
     { urls: 'stun:stun.services.mozilla.com' },
+    // OpenRelay Global Free TURN (ensures reliable NAT traversal across cellular/mobile CGNAT)
+    {
+      urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:443',
+        'turn:openrelay.metered.ca:443?transport=tcp',
+      ],
+      username: 'openrelay',
+      credential: 'openrelay',
+    },
   ],
   iceCandidatePoolSize: 10,
 };
@@ -316,10 +326,10 @@ export function useWebRTCRoom({
     }
   }, []);
 
-  const updatePeerStreamFromReceiversRef = useRef<(peerSocketId: string, pc: RTCPeerConnection) => void>(() => {});
+  const updatePeerStreamFromReceiversRef = useRef<(peerSocketId: string, pc: RTCPeerConnection, force?: boolean) => void>(() => {});
 
   // Helper: Update peerStreams directly from RTCPeerConnection receivers
-  const updatePeerStreamFromReceivers = useCallback((peerSocketId: string, pc: RTCPeerConnection) => {
+  const updatePeerStreamFromReceivers = useCallback((peerSocketId: string, pc: RTCPeerConnection, force = false) => {
     try {
       const receivers = pc.getReceivers();
       const liveAudioTracks = receivers
@@ -352,14 +362,15 @@ export function useWebRTCRoom({
       if (!audioTrackToUse && !videoTrackToUse) return;
 
       // Anti-flicker track deduplication:
-      // If the peerStream already contains these exact tracks, DO NOT recreate the MediaStream
-      if (existingStream) {
+      // Only skip if not forced AND tracks are identical AND track mute state hasn't changed
+      if (!force && existingStream) {
         const currentAudioTrack = existingStream.getAudioTracks()[0];
         const currentVideoTrack = existingStream.getVideoTracks()[0];
         const audioSame = (!audioTrackToUse && !currentAudioTrack) || (currentAudioTrack?.id === audioTrackToUse?.id);
         const videoSame = (!videoTrackToUse && !currentVideoTrack) || (currentVideoTrack?.id === videoTrackToUse?.id);
+        const muteStateSame = currentVideoTrack?.muted === videoTrackToUse?.muted;
 
-        if (audioSame && videoSame) {
+        if (audioSame && videoSame && muteStateSame) {
           // Stream already has the exact live tracks; do not recreate stream or trigger unnecessary re-renders
           if (audioTrackToUse) {
             attachRemoteAudio(peerSocketId, existingStream);
@@ -503,17 +514,20 @@ export function useWebRTCRoom({
     pc.ontrack = (event) => {
       console.log(`[WebRTC Peer ${peerSocketId}] Received remote track:`, event.track.kind, event.track.id);
       const incomingStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
-      event.track.addEventListener('unmute', () => {
-        console.log(`[WebRTC Peer ${peerSocketId}] Remote track unmuted:`, event.track.kind);
-        updatePeerStreamFromReceiversRef.current(peerSocketId, pc);
+      
+      const onTrackChange = () => {
+        console.log(`[WebRTC Peer ${peerSocketId}] Remote track state changed:`, event.track.kind, 'muted:', event.track.muted);
+        updatePeerStreamFromReceiversRef.current(peerSocketId, pc, true);
         if (event.track.kind === 'audio') {
           attachRemoteAudioRef.current(peerSocketId, incomingStream);
         }
-      });
-      event.track.addEventListener('ended', () => {
-        updatePeerStreamFromReceiversRef.current(peerSocketId, pc);
-      });
-      updatePeerStreamFromReceivers(peerSocketId, pc);
+      };
+
+      event.track.addEventListener('unmute', onTrackChange);
+      event.track.addEventListener('mute', onTrackChange);
+      event.track.addEventListener('ended', onTrackChange);
+
+      updatePeerStreamFromReceivers(peerSocketId, pc, true);
       if (event.track.kind === 'audio') {
         attachRemoteAudioRef.current(peerSocketId, incomingStream);
       }
@@ -522,7 +536,7 @@ export function useWebRTCRoom({
     pc.onconnectionstatechange = () => {
       console.log(`[WebRTC Peer ${peerSocketId}] Connection state:`, pc?.connectionState);
       if (pc?.connectionState === 'connected') {
-        updatePeerStreamFromReceiversRef.current(peerSocketId, pc);
+        updatePeerStreamFromReceiversRef.current(peerSocketId, pc, true);
         const audioEl = audioElementsRef.current.get(peerSocketId);
         if (audioEl) {
           audioEl.muted = false;
@@ -943,7 +957,7 @@ export function useWebRTCRoom({
       if (cameraActive !== undefined) {
         const pc = peerConnectionsRef.current.get(peerSockId);
         if (pc) {
-          updatePeerStreamFromReceiversRef.current(peerSockId, pc);
+          updatePeerStreamFromReceiversRef.current(peerSockId, pc, true);
         }
       }
       setPeers((prev) => {

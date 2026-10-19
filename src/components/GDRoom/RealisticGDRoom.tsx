@@ -4759,35 +4759,40 @@ const VideoStreamPlayer: React.FC<{
     const incomingVideoTrack = stream.getVideoTracks().find((t) => t.readyState !== 'ended');
     if (!incomingVideoTrack) return;
 
-    const currentStream = video.srcObject as MediaStream | null;
-    const currentVideoTrack = currentStream?.getVideoTracks()[0];
+    // Ensure the incoming video track is enabled
+    try { incomingVideoTrack.enabled = true; } catch {}
 
-    // Anti-flicker protection: If this video element already has this exact track running, NEVER reassign srcObject!
-    if (currentStream && currentVideoTrack && currentVideoTrack.id === incomingVideoTrack.id && currentVideoTrack.readyState === 'live') {
-      if (video.paused) {
-        video.play().catch(() => {});
-      }
-      return;
+    // Attach stream directly to video element
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
     }
 
-    // Attach clean stream with the active video track
-    const pureStream = new MediaStream([incomingVideoTrack]);
-    video.srcObject = pureStream;
-
-    const playPromise = video.play();
-    if (playPromise !== undefined) {
-      playPromise.catch(() => {});
-    }
-
-    const handleUnmute = () => {
-      if (video && video.paused) {
-        video.play().catch(() => {});
+    const tryPlay = () => {
+      if (!video) return;
+      video.muted = true;
+      video.defaultMuted = true;
+      video.playsInline = true;
+      const playPromise = video.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {});
       }
     };
 
-    incomingVideoTrack.addEventListener('unmute', handleUnmute);
+    tryPlay();
+
+    incomingVideoTrack.addEventListener('unmute', tryPlay);
+    incomingVideoTrack.addEventListener('mute', tryPlay);
+
+    video.addEventListener('loadedmetadata', tryPlay);
+    video.addEventListener('canplay', tryPlay);
+    video.addEventListener('resize', tryPlay);
+
     return () => {
-      incomingVideoTrack.removeEventListener('unmute', handleUnmute);
+      incomingVideoTrack.removeEventListener('unmute', tryPlay);
+      incomingVideoTrack.removeEventListener('mute', tryPlay);
+      video.removeEventListener('loadedmetadata', tryPlay);
+      video.removeEventListener('canplay', tryPlay);
+      video.removeEventListener('resize', tryPlay);
     };
   }, [stream]);
 
@@ -4890,7 +4895,7 @@ export const StudentVideoFrame: React.FC<{
         </div>
       ) : isLiveWebcam && effectiveStream ? (
         <VideoStreamPlayer 
-          key={student.id || `seat-${student.seatNumber}`}
+          key={`${student.id || `seat-${student.seatNumber}`}-${effectiveStream.id}-${effectiveStream.getVideoTracks()[0]?.id || 'live'}`}
           stream={effectiveStream} 
           muted={true}
           participantId={student.id}
