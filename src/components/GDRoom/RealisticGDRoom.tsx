@@ -938,7 +938,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         isEmptySeat: false,
         isSpeaking: !!peer.isSpeaking,
         micActive: !!peer.micActive,
-        cameraActive: Boolean(peer.cameraActive || hasActiveRemoteVideo),
+        cameraActive: Boolean(peer.cameraActive),
         speakingTurns: effectiveTurns,
         speakingDurationSeconds: effectiveDuration,
         volumeLevel: peer.volumeLevel || 0,
@@ -1044,7 +1044,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           isRealPeer: Boolean(matchingPeer),
           socketId: matchingPeer?.socketId || st.socketId,
           videoStream: matchingStream || st.videoStream || null,
-          cameraActive: Boolean(matchingPeer?.cameraActive || hasActiveVideo || st.cameraActive),
+          cameraActive: Boolean(matchingPeer ? matchingPeer.cameraActive : st.cameraActive),
           isSpeaking: Boolean(matchingPeer?.isSpeaking || (st.id === session.currentSpeakerId)),
           micActive: Boolean(matchingPeer?.micActive || st.micActive),
         });
@@ -4739,8 +4739,11 @@ const VideoStreamPlayer: React.FC<{
   participantId?: string;
   seatNumber?: number;
   isUser?: boolean;
-}> = ({ stream, className, muted = true, participantId, seatNumber, isUser }) => {
+  avatarFallback?: string;
+  studentName?: string;
+}> = ({ stream, className, muted = true, participantId, seatNumber, isUser, avatarFallback, studentName }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [isVideoLoaded, setIsVideoLoaded] = useState(Boolean(isUser));
 
   useEffect(() => {
     const video = videoRef.current;
@@ -4767,57 +4770,83 @@ const VideoStreamPlayer: React.FC<{
       video.srcObject = stream;
     }
 
-    const tryPlay = () => {
+    const checkVideoRender = () => {
       if (!video) return;
       video.muted = true;
       video.defaultMuted = true;
       video.playsInline = true;
-      const playPromise = video.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(() => {});
+      video.play().catch(() => {});
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        setIsVideoLoaded(true);
       }
     };
 
-    tryPlay();
+    checkVideoRender();
 
-    incomingVideoTrack.addEventListener('unmute', tryPlay);
-    incomingVideoTrack.addEventListener('mute', tryPlay);
+    incomingVideoTrack.addEventListener('unmute', checkVideoRender);
+    incomingVideoTrack.addEventListener('mute', () => {
+      if (incomingVideoTrack.muted) setIsVideoLoaded(false);
+    });
 
-    video.addEventListener('loadedmetadata', tryPlay);
-    video.addEventListener('canplay', tryPlay);
-    video.addEventListener('resize', tryPlay);
+    video.addEventListener('loadedmetadata', checkVideoRender);
+    video.addEventListener('loadeddata', checkVideoRender);
+    video.addEventListener('canplay', checkVideoRender);
+    video.addEventListener('playing', checkVideoRender);
+    video.addEventListener('resize', checkVideoRender);
+
+    const interval = setInterval(checkVideoRender, 600);
 
     return () => {
-      incomingVideoTrack.removeEventListener('unmute', tryPlay);
-      incomingVideoTrack.removeEventListener('mute', tryPlay);
-      video.removeEventListener('loadedmetadata', tryPlay);
-      video.removeEventListener('canplay', tryPlay);
-      video.removeEventListener('resize', tryPlay);
+      clearInterval(interval);
+      incomingVideoTrack.removeEventListener('unmute', checkVideoRender);
+      video.removeEventListener('loadedmetadata', checkVideoRender);
+      video.removeEventListener('loadeddata', checkVideoRender);
+      video.removeEventListener('canplay', checkVideoRender);
+      video.removeEventListener('playing', checkVideoRender);
+      video.removeEventListener('resize', checkVideoRender);
     };
-  }, [stream]);
+  }, [stream, isUser]);
 
   return (
-    <video
-      ref={videoRef}
-      autoPlay
-      playsInline
-      muted
-      onLoadedMetadata={(e) => {
-        const v = e.currentTarget;
-        v.muted = true;
-        v.play().catch(() => {});
-      }}
-      onCanPlay={(e) => {
-        const v = e.currentTarget;
-        v.muted = true;
-        v.play().catch(() => {});
-      }}
-      data-participant-id={participantId || ''}
-      data-seat-number={seatNumber !== undefined ? String(seatNumber) : ''}
-      data-is-user={isUser ? 'true' : 'false'}
-      data-stream-id={stream?.id || ''}
-      className={className || "w-full h-full object-cover"}
-    />
+    <div className="relative w-full h-full overflow-hidden flex items-center justify-center bg-slate-800">
+      {/* 1. Underlying avatar portrait if video frames haven't rendered yet (prevents black screen) */}
+      {(!isVideoLoaded && !isUser) && (
+        <div className="absolute inset-0 z-0 flex items-center justify-center bg-slate-800">
+          {avatarFallback ? (
+            <img src={avatarFallback} alt={studentName || ''} className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-indigo-700 to-purple-600 flex items-center justify-center text-white font-bold text-sm">
+              {(studentName || 'S').charAt(0)}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 2. HTML5 Video Player */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        onLoadedMetadata={(e) => {
+          const v = e.currentTarget;
+          v.muted = true;
+          v.play().catch(() => {});
+          if (v.videoWidth > 0) setIsVideoLoaded(true);
+        }}
+        onCanPlay={(e) => {
+          const v = e.currentTarget;
+          v.muted = true;
+          v.play().catch(() => {});
+          if (v.videoWidth > 0) setIsVideoLoaded(true);
+        }}
+        data-participant-id={participantId || ''}
+        data-seat-number={seatNumber !== undefined ? String(seatNumber) : ''}
+        data-is-user={isUser ? 'true' : 'false'}
+        data-stream-id={stream?.id || ''}
+        className={`${className || "w-full h-full object-cover"} relative z-10 transition-opacity duration-300 ${(!isVideoLoaded && !isUser) ? 'opacity-0' : 'opacity-100'}`}
+      />
+    </div>
   );
 };
 
@@ -4858,7 +4887,7 @@ export const StudentVideoFrame: React.FC<{
     effectiveStream.getVideoTracks().some((t) => t.readyState !== 'ended');
   const isLiveWebcam =
     (isUser && isUserCameraOn && !!videoStream) ||
-    (!isUser && !!effectiveStream && hasRemoteVideoTrack);
+    (!isUser && !!effectiveStream && student.cameraActive !== false && hasRemoteVideoTrack);
   const isMicLive = isUser ? isListeningMic : (isCurrentSpeaker || student.isSpeaking);
 
   // Clear human face portrait avatar fallback (using SVG Avataaars portraits seeded by name)
@@ -4901,6 +4930,8 @@ export const StudentVideoFrame: React.FC<{
           participantId={student.id}
           seatNumber={student.seatNumber}
           isUser={isUser}
+          avatarFallback={resolvedAvatar}
+          studentName={student.name}
           className={`w-full h-full object-cover ${isUser ? 'transform -scale-x-100' : ''}`} 
         />
       ) : isCameraEnabled ? (
