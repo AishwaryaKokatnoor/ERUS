@@ -39,8 +39,23 @@ async function runTests() {
     console.error('[Server stderr]:', d.toString().trim());
   });
 
-  // Wait 2 seconds for server to boot
-  await new Promise((r) => setTimeout(r, 2500));
+  // Wait for server to boot with readiness polling
+  let ready = false;
+  for (let i = 0; i < 30; i++) {
+    try {
+      const res = await request({ hostname: '127.0.0.1', port: PORT, path: '/api/health', method: 'GET' });
+      if (res.statusCode === 200) {
+        ready = true;
+        break;
+      }
+    } catch {}
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (!ready) {
+    console.warn('⚠️ Server readiness polling timed out, continuing with test execution...');
+  } else {
+    console.log('✅ Server is ready and listening on port ' + PORT);
+  }
 
   const results = [];
 

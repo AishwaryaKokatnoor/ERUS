@@ -1270,7 +1270,7 @@ async function persistBookingToMongoDB(
         status,
         bookedAt: new Date(),
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
   } catch (e: any) {
     console.warn('[MongoDB] Save booking error:', e.message);
@@ -1295,7 +1295,7 @@ async function persistTranscriptToMongoDB(t: BackendTranscript) {
         type: t.type || 'statement',
         sentiment: t.sentiment || 'neutral',
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
   } catch (e: any) {
     console.warn('[MongoDB] Save transcript error:', e.message);
@@ -5604,7 +5604,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
       await UserModel.findOneAndUpdate(
         { email },
         { password: newPassword },
-        { new: true }
+        { returnDocument: 'after' }
       );
     } catch (e: any) {
       console.warn('[MongoDB] Failed to update password on reset:', e.message);
@@ -7391,7 +7391,7 @@ async function persistAssessmentReport(rawReport: any) {
           aiRecommendations: report.aiRecommendations || [],
           fullReportJson: report,
         },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: 'after' }
       );
       report.id = repId;
       persistedDurably = true;
@@ -10527,16 +10527,29 @@ async function setupVite() {
   });
 
   // Initialize MongoDB connection, tables and sub-tables in background without delaying port binding
-  (async () => {
-    try {
-      await connectMongoDB();
-      await initMongoDBTablesAndSubTables();
-      await syncMongoDBWithPersistentState();
-    } catch (dbErr: any) {
-      console.warn('[MongoDB Background Init Warning]:', dbErr.message);
-    }
-  })();
+  ensureMongoReady();
 }
 
-setupVite();
+let mongoInitPromise: Promise<void> | null = null;
+export async function ensureMongoReady() {
+  if (!mongoInitPromise) {
+    mongoInitPromise = (async () => {
+      try {
+        await connectMongoDB();
+        await initMongoDBTablesAndSubTables();
+        await syncMongoDBWithPersistentState();
+      } catch (dbErr: any) {
+        console.warn('[MongoDB Background Init Warning]:', dbErr.message);
+      }
+    })();
+  }
+  return mongoInitPromise;
+}
+
+if (!process.env.VERCEL) {
+  setupVite();
+}
+
+export { app, httpServer };
+export default app;
 
