@@ -7,3 +7,4 @@ coverage/
 .env*
 !.env.example
 .erus_backend_state.json
+.vercel

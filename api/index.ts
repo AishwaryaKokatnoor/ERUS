@@ -1,11 +1,17 @@
 import type { Request, Response } from 'express';
-import app, { ensureMongoReady } from '../server';
+// @ts-ignore
+import serverBundle from '../dist/server.cjs';
+
+const app = serverBundle.app || serverBundle.default || serverBundle;
+const ensureMongoReady = serverBundle.ensureMongoReady;
 
 export default async function handler(req: Request, res: Response) {
-  try {
-    await ensureMongoReady();
-  } catch (err: any) {
-    console.warn('[Vercel Serverless] MongoDB init error:', err?.message);
+  if (typeof ensureMongoReady === 'function') {
+    try {
+      await ensureMongoReady();
+    } catch (err: any) {
+      console.warn('[Vercel Serverless] Mongo ready warning:', err?.message);
+    }
   }
   return app(req, res);
 }
