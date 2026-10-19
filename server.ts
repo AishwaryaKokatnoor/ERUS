@@ -8439,6 +8439,7 @@ interface LiveGDRoomState {
   speechYieldTimer?: NodeJS.Timeout;
   overlapTimer?: NodeJS.Timeout;
   lastOverlapWarningTime?: number;
+  lastSpeakerTranscriptAt?: number;
   askedQuestions: Set<string>;
   facilitatorSpeakingUntil?: number;
   silenceInterventionCount?: number;

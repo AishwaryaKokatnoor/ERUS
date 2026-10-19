@@ -343,9 +343,9 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
         const deletedIds = getDeletedSlotIds();
         const filtered = slotData.filter((s: any) => !deletedIds.has(s.id) && !deletedSlotIds.has(s.id));
         setSlots((prev) => {
-          const prevMap = new Map(prev.map((ps) => [ps.id, ps]));
+          const prevMap = new Map<string, any>(prev.map((ps: any) => [ps.id, ps]));
           return filtered.map((s: any) => {
-            const p = prevMap.get(s.id);
+            const p: any = prevMap.get(s.id);
             if (!p) return s;
             const pTopic = (p.topic || '').trim();
             const sTopic = (s.topic || '').trim();

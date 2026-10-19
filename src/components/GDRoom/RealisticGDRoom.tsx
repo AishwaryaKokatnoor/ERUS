@@ -1088,6 +1088,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   // Only filled seats: strictly identical to activeDisplayStudents
   const filledStudents = activeDisplayStudents;
+  const activeStudentUser = !isFaculty ? activeDisplayStudents.find((s) => s.isUser) : null;
+  const isUserSpeakingLive = !isFaculty && !rtcIsMicMuted && isListeningMic && (rtcIsSpeakingLive || Boolean(liveSpeechTranscript));
 
   // Fixed, Deterministic Round Table Seating (Zero Flickering / No Seat Teleportation)
   const roundTablePositionedStudents = useMemo(() => {
@@ -1201,8 +1203,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     onFinishSession();
   }, [gdRecorder, session.id, session.slotId, isFacultyOrAdmin, rtcFinishSession, onFinishSession, liveSpeechTranscript, setSession]);
 
-  const activeStudentUser = !isFaculty ? activeDisplayStudents.find((s) => s.isUser) : null;
-  const isUserSpeakingLive = !isFaculty && !rtcIsMicMuted && isListeningMic && (rtcIsSpeakingLive || Boolean(liveSpeechTranscript));
   const currentSpeakerStudent = activeDisplayStudents.find((s) => s.id === session.currentSpeakerId) ||
     activeDisplayStudents.find((s) => s.isSpeaking) ||
     (isUserSpeakingLive ? activeStudentUser : null) ||
@@ -2485,14 +2485,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           speakFacilitator(
             'The floor is open for discussion. Please feel free to share your thoughts.',
             'silence_instruction_1',
-            'guiding'
+            'moderation'
           );
         } else if (clientSilenceStageRef.current === 1 && currentSilence >= 6) {
           clientSilenceStageRef.current = 2;
           speakFacilitator(
             'The floor is open. Let us keep the momentum going—anyone who has not spoken yet, please share your perspective on this topic.',
             'silence_instruction_2',
-            'encouraging'
+            'moderation'
           );
         } else if (clientSilenceStageRef.current === 2 && currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
           clientSilenceStageRef.current = 3;
