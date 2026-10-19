@@ -4780,21 +4780,9 @@ const VideoStreamPlayer: React.FC<{
 }> = ({ stream, className, muted = true, participantId, seatNumber, isUser }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Isolate live video tracks into a pure video stream to prevent audio-policy restrictions from blocking autoplay
-  const videoTracks = useMemo(() => {
-    return stream ? stream.getVideoTracks().filter((t) => t.readyState !== 'ended') : [];
-  }, [stream]);
-
-  const pureVideoStream = useMemo(() => {
-    if (!stream) return null;
-    const liveTracks = stream.getVideoTracks().filter((t) => t.readyState !== 'ended');
-    if (liveTracks.length === 0) return stream;
-    return new MediaStream(liveTracks);
-  }, [stream, videoTracks.length]);
-
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !pureVideoStream) return;
+    if (!video || !stream) return;
 
     // Direct DOM property enforcement required for browser WebRTC autoplay compliance
     video.muted = true;
@@ -4806,46 +4794,40 @@ const VideoStreamPlayer: React.FC<{
       video.setAttribute('autoplay', '');
     } catch {}
 
-    if (video.srcObject !== pureVideoStream) {
-      video.srcObject = pureVideoStream;
+    const incomingVideoTrack = stream.getVideoTracks().find((t) => t.readyState !== 'ended');
+    if (!incomingVideoTrack) return;
+
+    const currentStream = video.srcObject as MediaStream | null;
+    const currentVideoTrack = currentStream?.getVideoTracks()[0];
+
+    // Anti-flicker protection: If this video element already has this exact track running, NEVER reassign srcObject!
+    if (currentStream && currentVideoTrack && currentVideoTrack.id === incomingVideoTrack.id && currentVideoTrack.readyState === 'live') {
+      if (video.paused) {
+        video.play().catch(() => {});
+      }
+      return;
     }
 
-    const forcePlay = () => {
-      if (!video) return;
-      video.muted = true;
-      const playPromise = video.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(() => {});
-      }
-    };
+    // Attach clean stream with the active video track
+    const pureStream = new MediaStream([incomingVideoTrack]);
+    video.srcObject = pureStream;
 
-    forcePlay();
+    const playPromise = video.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(() => {});
+    }
 
     const handleUnmute = () => {
-      if (!video) return;
-      video.muted = true;
-      if (video.srcObject !== pureVideoStream) {
-        video.srcObject = pureVideoStream;
+      if (video && video.paused) {
+        video.play().catch(() => {});
       }
-      forcePlay();
     };
 
-    videoTracks.forEach((track) => {
-      track.addEventListener('unmute', handleUnmute);
-    });
-
-    const handleTrackAdded = () => {
-      forcePlay();
-    };
-    pureVideoStream.addEventListener('addtrack', handleTrackAdded);
-
+    incomingVideoTrack.addEventListener('unmute', handleUnmute);
     return () => {
-      videoTracks.forEach((track) => {
-        track.removeEventListener('unmute', handleUnmute);
-      });
-      pureVideoStream.removeEventListener('addtrack', handleTrackAdded);
+      incomingVideoTrack.removeEventListener('unmute', handleUnmute);
     };
-  }, [pureVideoStream, videoTracks]);
+  }, [stream]);
 
   return (
     <video
@@ -4909,7 +4891,7 @@ export const StudentVideoFrame: React.FC<{
     effectiveStream.getVideoTracks().some((t) => t.readyState !== 'ended');
   const isLiveWebcam =
     (isUser && isUserCameraOn && !!videoStream) ||
-    (!isUser && (student.cameraActive || hasRemoteVideoTrack) && !!effectiveStream && hasRemoteVideoTrack);
+    (!isUser && !!effectiveStream && hasRemoteVideoTrack);
   const isMicLive = isUser ? isListeningMic : (isCurrentSpeaker || student.isSpeaking);
 
   // Clear human face portrait avatar fallback (using SVG Avataaars portraits seeded by name)
@@ -4946,6 +4928,7 @@ export const StudentVideoFrame: React.FC<{
         </div>
       ) : isLiveWebcam && effectiveStream ? (
         <VideoStreamPlayer 
+          key={student.id || `seat-${student.seatNumber}`}
           stream={effectiveStream} 
           muted={true}
           participantId={student.id}

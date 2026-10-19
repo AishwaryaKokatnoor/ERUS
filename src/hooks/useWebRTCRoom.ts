@@ -349,8 +349,30 @@ export function useWebRTCRoom({
         videoTrackToUse = existingStream.getVideoTracks().find((t) => t.readyState !== 'ended') || null;
       }
 
+      if (!audioTrackToUse && !videoTrackToUse) return;
+
+      // Anti-flicker track deduplication:
+      // If the peerStream already contains these exact tracks, DO NOT recreate the MediaStream
+      if (existingStream) {
+        const currentAudioTrack = existingStream.getAudioTracks()[0];
+        const currentVideoTrack = existingStream.getVideoTracks()[0];
+        const audioSame = (!audioTrackToUse && !currentAudioTrack) || (currentAudioTrack?.id === audioTrackToUse?.id);
+        const videoSame = (!videoTrackToUse && !currentVideoTrack) || (currentVideoTrack?.id === videoTrackToUse?.id);
+
+        if (audioSame && videoSame) {
+          // Stream already has the exact live tracks; do not recreate stream or trigger unnecessary re-renders
+          if (audioTrackToUse) {
+            attachRemoteAudio(peerSocketId, existingStream);
+          }
+          return;
+        }
+      }
+
       const tracksToUse: MediaStreamTrack[] = [];
-      if (audioTrackToUse) tracksToUse.push(audioTrackToUse);
+      if (audioTrackToUse) {
+        try { audioTrackToUse.enabled = true; } catch {}
+        tracksToUse.push(audioTrackToUse);
+      }
       if (videoTrackToUse) {
         try { videoTrackToUse.enabled = true; } catch {}
         tracksToUse.push(videoTrackToUse);
@@ -358,27 +380,14 @@ export function useWebRTCRoom({
 
       if (tracksToUse.length === 0) return;
 
-      // Always create a clean MediaStream with the selected active tracks
-      // Ensuring videoTrackToUse is at index 0 of getVideoTracks()
+      // Clean MediaStream with the selected active tracks
       const updatedStream = new MediaStream(tracksToUse);
       peerStreamsRef.current.set(peerSocketId, updatedStream);
       setPeerStreams(new Map(peerStreamsRef.current));
 
       if (audioTrackToUse) {
-        attachRemoteAudio(peerSocketId, new MediaStream([audioTrackToUse]));
+        attachRemoteAudio(peerSocketId, updatedStream);
       }
-
-      tracksToUse.forEach((track) => {
-        track.addEventListener('unmute', () => {
-          console.log(`[WebRTC Peer ${peerSocketId}] Track ${track.kind} unmuted`);
-          if (updatePeerStreamFromReceiversRef.current) {
-            updatePeerStreamFromReceiversRef.current(peerSocketId, pc);
-          }
-          if (track.kind === 'audio') {
-            attachRemoteAudio(peerSocketId, new MediaStream([track]));
-          }
-        });
-      });
     } catch (e) {
       console.warn('[WebRTC updatePeerStreamFromReceivers warning]:', e);
     }
