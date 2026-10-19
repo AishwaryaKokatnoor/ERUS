@@ -4848,7 +4848,7 @@ const VideoStreamPlayer: React.FC<{
       data-participant-id={participantId || ''}
       data-seat-number={seatNumber !== undefined ? String(seatNumber) : ''}
       data-is-user={isUser ? 'true' : 'false'}
-      data-stream-id={pureVideoStream?.id || ''}
+      data-stream-id={stream?.id || ''}
       className={className || "w-full h-full object-cover"}
     />
   );
