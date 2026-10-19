@@ -588,6 +588,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     }
   }, [session.status, currentUser?.role, onFinishSession, session.id, session.slotId]);
 
+  // Synchronize live WebRTC floor speaker into session state so all clients immediately zoom the speaker seat
+  useEffect(() => {
+    if (rtcFloorSpeakerId !== undefined && rtcFloorSpeakerId !== session.currentSpeakerId) {
+      setSession((prev) => ({
+        ...prev,
+        currentSpeakerId: rtcFloorSpeakerId,
+      }));
+    }
+  }, [rtcFloorSpeakerId, session.currentSpeakerId, setSession]);
+
   // Continuous local silence stopwatch fallback to ensure 3s triggers even during socket network lag
   const [localSilenceSeconds, setLocalSilenceSeconds] = useState(0);
 
@@ -1021,6 +1031,19 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           }
         }
       }
+      const matchingPeer = validStudentPeers.find(
+        (p) => p.userId === st.id || p.socketId === st.id || (p.name && st.name && p.name.toLowerCase() === st.name.toLowerCase())
+      );
+      let matchingStream = matchingPeer
+        ? (rtcPeerStreams.get(matchingPeer.socketId) || (matchingPeer.userId ? rtcPeerStreams.get(matchingPeer.userId) : null))
+        : (rtcPeerStreams.get(st.id) || null);
+      if (!matchingStream && rtcPeerStreams.size > 0) {
+        if (validStudentPeers.length <= 1 && rtcPeerStreams.size === 1) {
+          matchingStream = Array.from(rtcPeerStreams.values())[0];
+        }
+      }
+      const hasActiveVideo = Boolean(matchingStream && matchingStream.getVideoTracks().some((t) => t.readyState !== 'ended'));
+
       if (targetSeat && !usedSeats.has(targetSeat) && targetSeat <= capacity) {
         usedSeats.add(targetSeat);
         seatMap.set(targetSeat, {
@@ -1028,7 +1051,12 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           seatNumber: targetSeat,
           isUser: false,
           isEmptySeat: false,
-          isRealPeer: false,
+          isRealPeer: Boolean(matchingPeer),
+          socketId: matchingPeer?.socketId || st.socketId,
+          videoStream: matchingStream || st.videoStream || null,
+          cameraActive: Boolean(matchingPeer?.cameraActive || hasActiveVideo || st.cameraActive),
+          isSpeaking: Boolean(matchingPeer?.isSpeaking || (st.id === session.currentSpeakerId)),
+          micActive: Boolean(matchingPeer?.micActive || st.micActive),
         });
       }
     });
@@ -1077,13 +1105,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     return students.map((student, idx) => {
       const relativeIdx = (idx - baseOffset + n) % n;
       const angle = Math.PI / 2 + (relativeIdx * 2 * Math.PI) / n;
+      const isSpk = session.currentSpeakerId === student.id || student.isSpeaking || (student.isUser && isUserSpeakingLive);
       return {
         student,
         angle,
-        zoomLevel: 'normal' as const,
+        zoomLevel: isSpk ? ('zoomed' as const) : ('normal' as const),
       };
     });
-  }, [filledStudents]);
+  }, [filledStudents, session.currentSpeakerId, isUserSpeakingLive]);
 
   const [isFinalizingRecording, setIsFinalizingRecording] = useState(false);
 
@@ -3213,17 +3242,20 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                       const R = count > 12 ? 37 : count > 8 ? 35 : 34; // Flexible circular radius % for compact circle and clear video cards
                       const leftPct = 50 + R * Math.cos(angle);
                       const topPct = 50 + R * Math.sin(angle);
-                      const isSpk = session.currentSpeakerId === student.id || student.isSpeaking;
+                      const isSpk = session.currentSpeakerId === student.id || student.isSpeaking || (student.isUser && isUserSpeakingLive) || zoomLevel === 'zoomed';
 
                       return (
                         <div
                           key={student.id}
-                          className="absolute pointer-events-auto"
+                          className={`absolute pointer-events-auto transition-transform duration-300 ease-out ${
+                            isSpk ? 'z-40' : 'z-10'
+                          }`}
                           style={{
                             left: `${leftPct}%`,
                             top: `${topPct}%`,
-                            transform: 'translate(-50%, -50%)',
-                            zIndex: isSpk ? 30 : 10,
+                            transform: `translate(-50%, -50%) ${isSpk ? 'scale(1.22)' : 'scale(1)'}`,
+                            transformOrigin: 'center center',
+                            zIndex: isSpk ? 40 : 10,
                           }}
                         >
                           <StudentPodCard 
@@ -3328,40 +3360,48 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
                   {/* Outer Ring Seating: TOP ROW */}
                   <div className="absolute -top-12 sm:-top-14 inset-x-3 sm:inset-x-8 flex justify-between gap-1 sm:gap-2">
-                    {filledStudents.slice(0, Math.ceil(filledStudents.length / 2)).map((student) => (
-                      <StudentPodCard 
-                        key={student.id} 
-                        student={student} 
-                        isCurrentSpeaker={student.id === currentSpeakerStudent?.id}
-                        position="top"
-                        isUserCameraOn={isCameraOn}
-                        videoStream={videoStream}
-                        audioLevel={audioLevel}
-                        isListeningMic={isListeningMic}
-                        isFaculty={isFaculty}
-                        onAddNote={handleOpenNoteModal}
-                        onEnlarge={handleToggleEnlargeStudent}
-                      />
-                    ))}
+                    {filledStudents.slice(0, Math.ceil(filledStudents.length / 2)).map((student) => {
+                      const isSpk = student.id === currentSpeakerStudent?.id || student.isSpeaking || (student.isUser && isUserSpeakingLive);
+                      return (
+                        <StudentPodCard 
+                          key={student.id} 
+                          student={student} 
+                          isCurrentSpeaker={isSpk}
+                          zoomLevel={isSpk ? 'zoomed' : 'normal'}
+                          position="top"
+                          isUserCameraOn={isCameraOn}
+                          videoStream={videoStream}
+                          audioLevel={audioLevel}
+                          isListeningMic={isListeningMic}
+                          isFaculty={isFaculty}
+                          onAddNote={handleOpenNoteModal}
+                          onEnlarge={handleToggleEnlargeStudent}
+                        />
+                      );
+                    })}
                   </div>
 
                   {/* Outer Ring Seating: BOTTOM ROW */}
                   <div className="absolute -bottom-12 sm:-bottom-14 inset-x-3 sm:inset-x-8 flex justify-between gap-1 sm:gap-2">
-                    {filledStudents.slice(Math.ceil(filledStudents.length / 2)).map((student) => (
-                      <StudentPodCard 
-                        key={student.id} 
-                        student={student} 
-                        isCurrentSpeaker={student.id === currentSpeakerStudent?.id}
-                        position="bottom"
-                        isUserCameraOn={isCameraOn}
-                        videoStream={videoStream}
-                        audioLevel={audioLevel}
-                        isListeningMic={isListeningMic}
-                        isFaculty={isFaculty}
-                        onAddNote={handleOpenNoteModal}
-                        onEnlarge={handleToggleEnlargeStudent}
-                      />
-                    ))}
+                    {filledStudents.slice(Math.ceil(filledStudents.length / 2)).map((student) => {
+                      const isSpk = student.id === currentSpeakerStudent?.id || student.isSpeaking || (student.isUser && isUserSpeakingLive);
+                      return (
+                        <StudentPodCard 
+                          key={student.id} 
+                          student={student} 
+                          isCurrentSpeaker={isSpk}
+                          zoomLevel={isSpk ? 'zoomed' : 'normal'}
+                          position="bottom"
+                          isUserCameraOn={isCameraOn}
+                          videoStream={videoStream}
+                          audioLevel={audioLevel}
+                          isListeningMic={isListeningMic}
+                          isFaculty={isFaculty}
+                          onAddNote={handleOpenNoteModal}
+                          onEnlarge={handleToggleEnlargeStudent}
+                        />
+                      );
+                    })}
                   </div>
 
                 </div>
@@ -3382,6 +3422,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                     <span className="text-[11px] font-mono text-slate-500">
                       • {activeDisplayStudents.filter(s => !s.isEmptySeat).length} Enrolled Candidates
                     </span>
+                    {rtcIsAudioAutoplayBlocked && (
+                      <button
+                        type="button"
+                        onClick={() => rtcResumeAudioPlayback()}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 animate-bounce shadow-md cursor-pointer border border-emerald-300"
+                        title="Browser paused audio until first user interaction. Click here to enable candidate audio."
+                      >
+                        <Volume2 className="w-3.5 h-3.5" />
+                        <span>Click to Unmute Candidate Audio</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -4701,6 +4752,9 @@ const VideoStreamPlayer: React.FC<{
       autoPlay
       playsInline
       muted={muted}
+      onLoadedMetadata={() => {
+        videoRef.current?.play().catch(() => {});
+      }}
       data-participant-id={participantId || ''}
       data-seat-number={seatNumber !== undefined ? String(seatNumber) : ''}
       data-is-user={isUser ? 'true' : 'false'}
@@ -4742,11 +4796,11 @@ export const StudentVideoFrame: React.FC<{
   const effectiveStream = isUser ? videoStream : student.videoStream;
   const hasRemoteVideoTrack =
     !isUser &&
-    !!student.videoStream &&
-    student.videoStream.getVideoTracks().some((t) => t.readyState === 'live' && t.enabled);
+    !!effectiveStream &&
+    effectiveStream.getVideoTracks().some((t) => t.readyState !== 'ended');
   const isLiveWebcam =
     (isUser && isUserCameraOn && !!videoStream) ||
-    (!isUser && !!student.videoStream && (student.cameraActive === true || (student.cameraActive !== false && hasRemoteVideoTrack)));
+    (!isUser && !!effectiveStream && (hasRemoteVideoTrack || student.cameraActive === true));
   const isCameraEnabled = isUser ? isUserCameraOn : (student.cameraActive !== false || hasRemoteVideoTrack);
   const isMicLive = isUser ? isListeningMic : (isCurrentSpeaker || student.isSpeaking);
 
@@ -4931,13 +4985,13 @@ export const StudentPodCard: React.FC<{
   topPct,
 }) => {
   const isUser = !isFaculty && !!student.isUser;
-  const isZoomedSpeaker = isCurrentSpeaker;
+  const isZoomedSpeaker = isCurrentSpeaker || zoomLevel === 'zoomed' || student.isSpeaking;
 
   return (
     <div 
       onDoubleClick={() => !student.isEmptySeat && onEnlarge?.(student)}
       title={student.isEmptySeat ? 'Open Desk' : `${student.name} • Double-click to enlarge spotlight`}
-      className={`flex flex-col items-center group pointer-events-auto ${
+      className={`flex flex-col items-center group pointer-events-auto transition-transform duration-300 ${
         student.isEmptySeat ? '' : 'cursor-pointer'
       } z-20`}
     >
@@ -4957,7 +5011,7 @@ export const StudentPodCard: React.FC<{
           : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700'
       }`}>
         <span>Seat {student.seatNumber}</span>
-        {isZoomedSpeaker && <span className="text-[10px] bg-white/25 px-1.5 py-0.2 rounded font-black tracking-wide">🎙️ SPEAKER</span>}
+        {isZoomedSpeaker && <span className="text-[10px] bg-white/30 px-1.5 py-0.2 rounded font-black tracking-wide animate-pulse">🎙️ SPEAKER</span>}
         {isUser && !isZoomedSpeaker && <span className="text-[9px] bg-white/20 px-1 rounded">YOU</span>}
         {student.isRealPeer && !isUser && !isZoomedSpeaker && <span className="text-[9px] bg-emerald-400 text-emerald-950 px-1 rounded font-bold">LIVE</span>}
         {student.isEmptySeat && <span className="text-[9px] opacity-70">OPEN</span>}
@@ -4979,13 +5033,16 @@ export const StudentPodCard: React.FC<{
       {/* 2. Student Video / Avatar Bubble (Stable dimensions with active speaker ring & glow) */}
       <div className="relative">
         {/* Speaking Voice Waves Aura */}
-        {(isCurrentSpeaker || isZoomedSpeaker) && (
-          <div className="absolute -inset-2 rounded-3xl bg-emerald-500/25 animate-pulse pointer-events-none" />
+        {isZoomedSpeaker && (
+          <>
+            <div className="absolute -inset-3 rounded-3xl bg-emerald-500/30 animate-ping opacity-60 pointer-events-none" />
+            <div className="absolute -inset-2 rounded-3xl bg-emerald-500/25 animate-pulse pointer-events-none" />
+          </>
         )}
 
-        <div className={`w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-2xl sm:rounded-3xl overflow-hidden border-2 transition-all shadow-md relative bg-slate-900 ${
-          isCurrentSpeaker
-            ? 'border-emerald-500 dark:border-emerald-400 ring-4 ring-emerald-500/60 shadow-emerald-500/40 shadow-xl'
+        <div className={`w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-2xl sm:rounded-3xl overflow-hidden border-2 transition-all duration-300 shadow-md relative bg-slate-900 ${
+          isZoomedSpeaker
+            ? 'border-emerald-400 dark:border-emerald-300 ring-4 ring-emerald-500/80 shadow-2xl shadow-emerald-500/50 scale-105'
             : student.isEmptySeat
             ? 'border-dashed border-slate-300 dark:border-slate-700 bg-slate-100/60 dark:bg-slate-900/60 shadow-none'
             : isUser 
@@ -5026,7 +5083,7 @@ export const StudentPodCard: React.FC<{
       </div>
 
       {/* 3. Student Name & Turns (Positioned cleanly below avatar with zero overlap) */}
-      <div className="text-center mt-1 max-w-[100px] sm:max-w-[120px]">
+      <div className="text-center mt-1 max-w-[100px] sm:max-w-[120px] flex flex-col items-center">
         <p className={`font-semibold truncate leading-tight ${
           isZoomedSpeaker
             ? 'text-xs sm:text-sm text-emerald-800 dark:text-emerald-300 font-bold'
@@ -5045,6 +5102,12 @@ export const StudentPodCard: React.FC<{
         <span className={`font-mono block mt-0.5 ${isZoomedSpeaker ? 'text-[10px] text-emerald-700 dark:text-emerald-400 font-bold' : 'text-[10px] text-slate-500 dark:text-slate-400'}`}>
           {student.isEmptySeat ? 'Waiting...' : `${student.speakingTurns || 0} turns • ${student.speakingDurationSeconds || 0}s`}
         </span>
+        {isZoomedSpeaker && (
+          <span className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[9px] font-black tracking-wider uppercase shadow-md animate-pulse">
+            <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping inline-block" />
+            Speaking
+          </span>
+        )}
       </div>
 
     </div>

@@ -254,8 +254,29 @@ export function useWebRTCRoom({
 
   // Helper: Synchronize local audio and video tracks across all transceivers on a peer connection
   const syncTracksToPeerConnection = useCallback(async (pc: RTCPeerConnection) => {
-    const isFacultyUser = currentUserRef.current?.role === 'faculty';
-    if (isFacultyUser) return;
+    const isFacultyUser = currentUserRef.current?.role === 'faculty' || currentUserRef.current?.role === 'college_admin' || currentUserRef.current?.role === 'super_admin';
+    if (isFacultyUser) {
+      // Ensure transceivers exist with direction 'recvonly' so faculty/observer reliably receives remote audio and video
+      const transceivers = pc.getTransceivers();
+      const audioTransceiver = transceivers.find(
+        (t) => t.receiver?.track?.kind === 'audio' || t.sender?.track?.kind === 'audio'
+      );
+      if (!audioTransceiver) {
+        try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch {}
+      } else {
+        try { audioTransceiver.direction = 'recvonly'; } catch {}
+      }
+
+      const videoTransceiver = transceivers.find(
+        (t) => t.receiver?.track?.kind === 'video' || t.sender?.track?.kind === 'video'
+      );
+      if (!videoTransceiver) {
+        try { pc.addTransceiver('video', { direction: 'recvonly' }); } catch {}
+      } else {
+        try { videoTransceiver.direction = 'recvonly'; } catch {}
+      }
+      return;
+    }
 
     const audioTrack = localStreamRef.current ? localStreamRef.current.getAudioTracks()[0] || null : null;
     const videoTrack = (isCameraOnRef.current && videoStreamRef.current) ? videoStreamRef.current.getVideoTracks()[0] || null : null;
@@ -350,35 +371,39 @@ export function useWebRTCRoom({
 
   // Helper: Ensure audio & video transceivers exist BEFORE creating an SDP Offer
   const ensureTransceiversForOffer = useCallback((pc: RTCPeerConnection) => {
-    const isFacultyUser = currentUserRef.current?.role === 'faculty';
+    const isFacultyUser = currentUserRef.current?.role === 'faculty' || currentUserRef.current?.role === 'college_admin' || currentUserRef.current?.role === 'super_admin';
     const transceivers = pc.getTransceivers();
 
-    const hasAudio = transceivers.some(
+    const audioTransceiver = transceivers.find(
       (t) => t.receiver?.track?.kind === 'audio' || t.sender?.track?.kind === 'audio'
     );
-    if (!hasAudio) {
+    if (!audioTransceiver) {
       const audioTrack = (!isFacultyUser && localStreamRef.current) ? localStreamRef.current.getAudioTracks()[0] || null : null;
       try {
         if (audioTrack) {
           pc.addTransceiver(audioTrack, { direction: 'sendrecv' });
         } else {
-          pc.addTransceiver('audio', { direction: 'sendrecv' });
+          pc.addTransceiver('audio', { direction: isFacultyUser ? 'recvonly' : 'sendrecv' });
         }
       } catch {}
+    } else if (isFacultyUser) {
+      try { audioTransceiver.direction = 'recvonly'; } catch {}
     }
 
-    const hasVideo = transceivers.some(
+    const videoTransceiver = transceivers.find(
       (t) => t.receiver?.track?.kind === 'video' || t.sender?.track?.kind === 'video'
     );
-    if (!hasVideo) {
+    if (!videoTransceiver) {
       const videoTrack = (!isFacultyUser && isCameraOnRef.current && videoStreamRef.current) ? videoStreamRef.current.getVideoTracks()[0] || null : null;
       try {
         if (videoTrack) {
           pc.addTransceiver(videoTrack, { direction: 'sendrecv' });
         } else {
-          pc.addTransceiver('video', { direction: 'sendrecv' });
+          pc.addTransceiver('video', { direction: isFacultyUser ? 'recvonly' : 'sendrecv' });
         }
       } catch {}
+    } else if (isFacultyUser) {
+      try { videoTransceiver.direction = 'recvonly'; } catch {}
     }
   }, []);
 
@@ -425,7 +450,25 @@ export function useWebRTCRoom({
 
     // When remote track (audio or video) is received from peer
     pc.ontrack = (event) => {
-      console.log(`[WebRTC Peer ${peerSocketId}] Received remote track:`, event.track.kind);
+      console.log(`[WebRTC Peer ${peerSocketId}] Received remote track:`, event.track.kind, event.track.id);
+      if (event.streams && event.streams[0]) {
+        const stream = event.streams[0];
+        const existing = peerStreamsRef.current.get(peerSocketId);
+        if (existing) {
+          stream.getTracks().forEach((t) => {
+            if (!existing.getTracks().some((et) => et.id === t.id)) {
+              existing.addTrack(t);
+            }
+          });
+          peerStreamsRef.current.set(peerSocketId, existing);
+        } else {
+          peerStreamsRef.current.set(peerSocketId, stream);
+        }
+        setPeerStreams(new Map(peerStreamsRef.current));
+        if (event.track.kind === 'audio') {
+          attachRemoteAudio(peerSocketId, existing || stream);
+        }
+      }
       updatePeerStreamFromReceivers(peerSocketId, pc);
     };
 

@@ -10154,7 +10154,30 @@ io.on('connection', (socket) => {
           isFloorLocked: false,
           floorVersion: room.floorVersion,
         });
+      } else if (room.currentSpeakerId) {
+        room.currentSpeakerId = null;
+        room.currentSpeakerSocketId = null;
+        room.floorVersion += 1;
+        io.to(`room-${safeSlotId}`).emit('floor-state', {
+          speakerId: null,
+          speakerName: null,
+          speakerSocketId: null,
+          isFloorLocked: false,
+          floorVersion: room.floorVersion,
+        });
       }
+
+      // CRITICAL: Must emit peer-speaking-updated to room so faculty and observers receive active speaker & camera state
+      io.to(`room-${safeSlotId}`).emit('peer-speaking-updated', {
+        socketId: socket.id,
+        userId: peer.userId,
+        seatNumber: peer.seatNumber,
+        role: peer.role,
+        isSpeaking: peer.isSpeaking,
+        micActive: peer.micActive,
+        cameraActive: peer.cameraActive,
+        volumeLevel: volumeLevel || 0,
+      });
       return;
     }
 
