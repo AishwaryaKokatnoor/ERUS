@@ -944,7 +944,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         isEmptySeat: false,
         isSpeaking: !!peer.isSpeaking,
         micActive: !!peer.micActive,
-        cameraActive: Boolean(peer.cameraActive),
+        cameraActive: Boolean(peer.cameraActive || hasActiveRemoteVideo),
         speakingTurns: effectiveTurns,
         speakingDurationSeconds: effectiveDuration,
         volumeLevel: peer.volumeLevel || 0,
@@ -4739,19 +4739,29 @@ const VideoStreamPlayer: React.FC<{
     video.addEventListener('loadeddata', checkVideoRender);
     video.addEventListener('canplay', checkVideoRender);
     video.addEventListener('playing', checkVideoRender);
+    video.addEventListener('timeupdate', checkVideoRender);
     video.addEventListener('resize', checkVideoRender);
 
     const t1 = setTimeout(checkVideoRender, 200);
-    const t2 = setTimeout(checkVideoRender, 1000);
+    const t2 = setTimeout(checkVideoRender, 800);
+    const t3 = setTimeout(checkVideoRender, 2000);
+    const interval = setInterval(() => {
+      if (video && video.videoWidth > 0 && video.videoHeight > 0) {
+        setIsVideoLoaded(true);
+      }
+    }, 400);
 
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
+      clearTimeout(t3);
+      clearInterval(interval);
       incomingVideoTrack.removeEventListener('unmute', checkVideoRender);
       video.removeEventListener('loadedmetadata', checkVideoRender);
       video.removeEventListener('loadeddata', checkVideoRender);
       video.removeEventListener('canplay', checkVideoRender);
       video.removeEventListener('playing', checkVideoRender);
+      video.removeEventListener('timeupdate', checkVideoRender);
       video.removeEventListener('resize', checkVideoRender);
     };
   }, [stream, isUser]);
@@ -4829,14 +4839,14 @@ export const StudentVideoFrame: React.FC<{
 }) => {
   const isUser = !isFaculty && !!student.isUser;
   const effectiveStream = isUser ? videoStream : student.videoStream;
-  const isCameraEnabled = isUser ? isUserCameraOn : student.cameraActive !== false;
   const hasRemoteVideoTrack =
     !isUser &&
     !!effectiveStream &&
     effectiveStream.getVideoTracks().some((t) => t.readyState !== 'ended');
+  const isCameraEnabled = isUser ? isUserCameraOn : Boolean(student.cameraActive || hasRemoteVideoTrack);
   const isLiveWebcam =
     (isUser && isUserCameraOn && !!videoStream) ||
-    (!isUser && !!effectiveStream && student.cameraActive !== false && hasRemoteVideoTrack);
+    (!isUser && !!effectiveStream && (student.cameraActive || hasRemoteVideoTrack));
   const isMicLive = isUser ? isListeningMic : (isCurrentSpeaker || student.isSpeaking);
 
   // Clear human face portrait avatar fallback (using SVG Avataaars portraits seeded by name)

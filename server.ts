@@ -10087,7 +10087,15 @@ io.on('connection', (socket) => {
   // 3. Speaking Activity & Floor State
   socket.on('peer-speaking-state', ({ slotId, isSpeaking, micActive, cameraActive, volumeLevel }) => {
     const safeSlotId = slotId || 'session-101';
-    const room = LIVE_ROOMS.get(safeSlotId);
+    let room = LIVE_ROOMS.get(safeSlotId);
+    if (!room) {
+      for (const [, r] of LIVE_ROOMS.entries()) {
+        if (r.peers.has(socket.id)) {
+          room = r;
+          break;
+        }
+      }
+    }
     if (!room) return;
 
     const peer = room.peers.get(socket.id);

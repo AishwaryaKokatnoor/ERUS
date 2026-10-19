@@ -370,15 +370,16 @@ export function useWebRTCRoom({
       if (!audioTrackToUse && !videoTrackToUse) return;
 
       // Anti-flicker track deduplication:
-      // If the existing stream already contains the identical audio and video tracks,
+      // If the existing stream already contains the identical audio and video tracks (and same mute state),
       // reuse the existing stream so we don't recreate MediaStream objects or trigger re-render cascades.
-      if (existingStream) {
+      if (!force && existingStream) {
         const currentAudioTrack = existingStream.getAudioTracks()[0];
         const currentVideoTrack = existingStream.getVideoTracks()[0];
         const audioSame = (!audioTrackToUse && !currentAudioTrack) || (currentAudioTrack?.id === audioTrackToUse?.id);
         const videoSame = (!videoTrackToUse && !currentVideoTrack) || (currentVideoTrack?.id === videoTrackToUse?.id);
+        const muteStateSame = currentVideoTrack?.muted === videoTrackToUse?.muted;
 
-        if (audioSame && videoSame) {
+        if (audioSame && videoSame && muteStateSame) {
           // Stream already has the exact live tracks; do not recreate stream or trigger unnecessary re-renders
           if (audioTrackToUse) {
             attachRemoteAudio(peerSocketId, existingStream);
