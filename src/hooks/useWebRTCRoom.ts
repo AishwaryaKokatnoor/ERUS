@@ -327,6 +327,8 @@ export function useWebRTCRoom({
     }
   }, []);
 
+  const updatePeerStreamFromReceiversRef = useRef<(peerSocketId: string, pc: RTCPeerConnection) => void>(() => {});
+
   // Helper: Update peerStreams directly from RTCPeerConnection receivers
   const updatePeerStreamFromReceivers = useCallback((peerSocketId: string, pc: RTCPeerConnection) => {
     try {
@@ -360,7 +362,10 @@ export function useWebRTCRoom({
 
       const tracksToUse: MediaStreamTrack[] = [];
       if (audioTrackToUse) tracksToUse.push(audioTrackToUse);
-      if (videoTrackToUse) tracksToUse.push(videoTrackToUse);
+      if (videoTrackToUse) {
+        try { videoTrackToUse.enabled = true; } catch {}
+        tracksToUse.push(videoTrackToUse);
+      }
 
       if (tracksToUse.length === 0) return;
 
@@ -377,9 +382,8 @@ export function useWebRTCRoom({
       tracksToUse.forEach((track) => {
         track.addEventListener('unmute', () => {
           console.log(`[WebRTC Peer ${peerSocketId}] Track ${track.kind} unmuted`);
-          const current = peerStreamsRef.current.get(peerSocketId);
-          if (current) {
-            setPeerStreams(new Map(peerStreamsRef.current));
+          if (updatePeerStreamFromReceiversRef.current) {
+            updatePeerStreamFromReceiversRef.current(peerSocketId, pc);
           }
           if (track.kind === 'audio') {
             attachRemoteAudio(peerSocketId, new MediaStream([track]));
@@ -390,6 +394,7 @@ export function useWebRTCRoom({
       console.warn('[WebRTC updatePeerStreamFromReceivers warning]:', e);
     }
   }, [attachRemoteAudio]);
+  updatePeerStreamFromReceiversRef.current = updatePeerStreamFromReceivers;
 
   // Helper: Ensure audio & video transceivers exist BEFORE creating an SDP Offer
   const ensureTransceiversForOffer = useCallback((pc: RTCPeerConnection) => {
@@ -546,8 +551,6 @@ export function useWebRTCRoom({
   ensureTransceiversForOfferRef.current = ensureTransceiversForOffer;
   const syncTracksToPeerConnectionRef = useRef(syncTracksToPeerConnection);
   syncTracksToPeerConnectionRef.current = syncTracksToPeerConnection;
-  const updatePeerStreamFromReceiversRef = useRef(updatePeerStreamFromReceivers);
-  updatePeerStreamFromReceiversRef.current = updatePeerStreamFromReceivers;
   const renegotiatePeerRef = useRef(renegotiatePeer);
   renegotiatePeerRef.current = renegotiatePeer;
 

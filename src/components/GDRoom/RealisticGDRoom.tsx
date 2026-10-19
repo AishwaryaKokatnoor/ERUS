@@ -1277,6 +1277,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         clearTimeout(aiVoiceResumeTimerRef.current);
         aiVoiceResumeTimerRef.current = null;
       }
+
+      // Immediately abort recognition and clear live buffers to prevent AI voice from leaking into candidate transcript
+      committedResultIndexRef.current = -1;
+      liveTranscriptRef.current = '';
+      setLiveSpeechTranscript('');
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {}
+      }
+
       // Absolute max pause timeout: safety net in case audio hangs indefinitely
       const maxTimer = setTimeout(() => {
         aiVoicePausedMicRef.current = false;
@@ -1287,9 +1298,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       const checkVoiceFinished = () => {
         if (!roomVoice.isSpeaking()) {
           clearTimeout(maxTimer);
-          aiVoicePausedMicRef.current = false;
           setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
           aiVoiceResumeTimerRef.current = null;
+          setTimeout(() => {
+            aiVoicePausedMicRef.current = false;
+            committedResultIndexRef.current = -1;
+            liveTranscriptRef.current = '';
+            setLiveSpeechTranscript('');
+          }, 1000);
         } else {
           aiVoiceResumeTimerRef.current = setTimeout(checkVoiceFinished, 400);
         }
@@ -1302,9 +1318,16 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         clearTimeout(aiVoiceResumeTimerRef.current);
         aiVoiceResumeTimerRef.current = null;
       }
-      aiVoicePausedMicRef.current = false;
       setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
       notifyFacilitatorSpeechEndedRef.current();
+
+      // Delay 1000ms after AI finishes speaking to prevent acoustic room echo bleed
+      setTimeout(() => {
+        aiVoicePausedMicRef.current = false;
+        committedResultIndexRef.current = -1;
+        liveTranscriptRef.current = '';
+        setLiveSpeechTranscript('');
+      }, 1000);
     };
 
     window.addEventListener('erus-ai-voice-start', handleAiVoiceStart);
@@ -1338,8 +1361,43 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       return;
     }
 
-    const textToCommit = String(forcedText || liveTranscriptRef.current || liveSpeechTranscript || '').trim();
+    let textToCommit = String(forcedText || liveTranscriptRef.current || liveSpeechTranscript || '').trim();
     if (!textToCommit) return;
+
+    // Acoustic Echo Cancellation: Discard speech picked up from AI facilitator prompts or questions
+    const knownAiPrompts = [
+      sessionRef.current?.facilitatorSpeech,
+      session.topic,
+      "the floor is open for discussion",
+      "please feel free to share your thoughts",
+      "welcome everyone to today's group discussion",
+      "if you have to challenge one goal assumption",
+      "let's hear from",
+    ].filter(Boolean) as string[];
+
+    const lowerCandidate = textToCommit.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+    for (const prompt of knownAiPrompts) {
+      const lowerPrompt = prompt.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!lowerPrompt || lowerPrompt.length < 8) continue;
+
+      if (lowerCandidate.startsWith(lowerPrompt)) {
+        const promptWordCount = lowerPrompt.split(' ').length;
+        const candidateWords = textToCommit.split(/\s+/);
+        textToCommit = candidateWords.slice(promptWordCount).join(' ').trim();
+        break;
+      } else if (lowerPrompt.includes(lowerCandidate) || lowerCandidate === lowerPrompt) {
+        textToCommit = '';
+        break;
+      }
+    }
+
+    if (!textToCommit || textToCommit.length < 3) {
+      liveTranscriptRef.current = '';
+      setLiveSpeechTranscript('');
+      committedResultIndexRef.current = -1;
+      return;
+    }
 
     // Reset live buffers
     liveTranscriptRef.current = '';
@@ -1525,13 +1583,15 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           }
 
           // While AI facilitator or peer voice is playing or recently finished (2.2s buffer for acoustic echo & recognition latency), discard feedback
-          const isAiSpeakingNow = roomVoice.isSpeakingOrRecentlyFinished(2200) ||
+          const isAiSpeakingNow = aiVoicePausedMicRef.current ||
+                                  roomVoice.isSpeakingOrRecentlyFinished(2200) ||
                                   Boolean(sessionRef.current?.isFacilitatorSpeaking) ||
                                   Boolean((window as any).__erusIsAiSpeaking) ||
                                   (Date.now() - ((window as any).__erusLastAiSpeechTime || 0) < 2200);
           if (isAiSpeakingNow) {
             liveTranscriptRef.current = '';
             setLiveSpeechTranscript('');
+            committedResultIndexRef.current = event.results.length - 1;
             return;
           }
 
@@ -4720,58 +4780,93 @@ const VideoStreamPlayer: React.FC<{
 }> = ({ stream, className, muted = true, participantId, seatNumber, isUser }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  // Isolate live video tracks into a pure video stream to prevent audio-policy restrictions from blocking autoplay
+  const videoTracks = useMemo(() => {
+    return stream ? stream.getVideoTracks().filter((t) => t.readyState !== 'ended') : [];
+  }, [stream]);
+
+  const pureVideoStream = useMemo(() => {
+    if (!stream) return null;
+    const liveTracks = stream.getVideoTracks().filter((t) => t.readyState !== 'ended');
+    if (liveTracks.length === 0) return stream;
+    return new MediaStream(liveTracks);
+  }, [stream, videoTracks.length]);
+
   useEffect(() => {
     const video = videoRef.current;
-    if (video && stream) {
-      if (video.srcObject !== stream) {
-        video.srcObject = stream;
-      }
-      const playVideo = () => {
-        if (video.paused) {
-          video.play().catch(() => {});
-        }
-      };
-      playVideo();
+    if (!video || !pureVideoStream) return;
 
-      const handleTrackEvent = () => {
-        if (video.srcObject !== stream) {
-          video.srcObject = stream;
-        }
-        playVideo();
-      };
+    // Direct DOM property enforcement required for browser WebRTC autoplay compliance
+    video.muted = true;
+    video.defaultMuted = true;
+    video.playsInline = true;
+    try {
+      video.setAttribute('muted', '');
+      video.setAttribute('playsinline', '');
+      video.setAttribute('autoplay', '');
+    } catch {}
 
-      stream.addEventListener('addtrack', handleTrackEvent);
-      stream.addEventListener('removetrack', handleTrackEvent);
-      stream.getVideoTracks().forEach((track) => {
-        track.addEventListener('unmute', playVideo);
-      });
-
-      return () => {
-        stream.removeEventListener('addtrack', handleTrackEvent);
-        stream.removeEventListener('removetrack', handleTrackEvent);
-        stream.getVideoTracks().forEach((track) => {
-          track.removeEventListener('unmute', playVideo);
-        });
-      };
+    if (video.srcObject !== pureVideoStream) {
+      video.srcObject = pureVideoStream;
     }
-  }, [stream]);
+
+    const forcePlay = () => {
+      if (!video) return;
+      video.muted = true;
+      const playPromise = video.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {});
+      }
+    };
+
+    forcePlay();
+
+    const handleUnmute = () => {
+      if (!video) return;
+      video.muted = true;
+      if (video.srcObject !== pureVideoStream) {
+        video.srcObject = pureVideoStream;
+      }
+      forcePlay();
+    };
+
+    videoTracks.forEach((track) => {
+      track.addEventListener('unmute', handleUnmute);
+    });
+
+    const handleTrackAdded = () => {
+      forcePlay();
+    };
+    pureVideoStream.addEventListener('addtrack', handleTrackAdded);
+
+    return () => {
+      videoTracks.forEach((track) => {
+        track.removeEventListener('unmute', handleUnmute);
+      });
+      pureVideoStream.removeEventListener('addtrack', handleTrackAdded);
+    };
+  }, [pureVideoStream, videoTracks]);
 
   return (
     <video
       ref={videoRef}
       autoPlay
       playsInline
-      muted={muted}
-      onLoadedMetadata={() => {
-        videoRef.current?.play().catch(() => {});
+      muted
+      onLoadedMetadata={(e) => {
+        const v = e.currentTarget;
+        v.muted = true;
+        v.play().catch(() => {});
       }}
-      onCanPlay={() => {
-        videoRef.current?.play().catch(() => {});
+      onCanPlay={(e) => {
+        const v = e.currentTarget;
+        v.muted = true;
+        v.play().catch(() => {});
       }}
       data-participant-id={participantId || ''}
       data-seat-number={seatNumber !== undefined ? String(seatNumber) : ''}
       data-is-user={isUser ? 'true' : 'false'}
-      data-stream-id={stream?.id || ''}
+      data-stream-id={pureVideoStream?.id || ''}
       className={className || "w-full h-full object-cover"}
     />
   );
