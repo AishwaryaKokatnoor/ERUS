@@ -129,7 +129,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   const handleSendUserStatementRef = useRef<(textToSend?: string) => Promise<void>>(() => Promise.resolve());
   const notifyFacilitatorSpeechEndedRef = useRef<() => void>(() => {});
   const [isListeningMic, setIsListeningMic] = useState(!isFaculty);
-  const [interruptionWarning, setInterruptionWarning] = useState<string | null>(null);
+
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   // Server-side Socket.IO is now the single source of truth for AI turns.
   // Keeping the legacy local simulator enabled can queue a second voice while
@@ -418,15 +418,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       const intText = String(intervention?.text || '').trim();
       if (!intText) return;
 
-      // If this is an interruption warning, display the prominent warning banner only if multiple participants exist
-      if (intervention.action === 'interruption_warning') {
-        const activeParticipants = filledStudents.filter((s) => !s.isEmptySeat && !s.id?.includes('empty') && !s.name?.startsWith('Seat '));
-        if (activeParticipants.length <= 1) {
-          // Solo participant: interruption is physically impossible
-          return;
-        }
-        setInterruptionWarning(intText);
-        setTimeout(() => setInterruptionWarning(null), 6500);
+      // Suppress interruption warning banners or voice completely so the live discussion is never disturbed
+      if (intervention.action === 'interruption_warning' || intervention.action === 'interruption_arbitration') {
+        return;
       }
 
       // Suppress duplicate opening welcome: never speak welcome again if client already vocalized it
@@ -446,7 +440,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       const normNew = normalizePrompt(intText);
       const normLast = normalizePrompt(lastFacilitatorInterventionTextRef.current || '');
       const isExemptDeduplication =
-        intervention.action === 'interruption_warning' ||
         intervention.action === 'silence_instruction_1' ||
         intervention.action === 'silence_instruction_2' ||
         intervention.action === 'deadlock_intervention' ||
@@ -2169,11 +2162,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             s.isSpeaking
         );
         if (interruptedStudent) {
-          const firstSpeakerName = interruptedStudent.name || 'the previous speaker';
-          const warningMessage = `One at a time, please. Let ${firstSpeakerName} complete their thought before responding.`;
-          setInterruptionWarning(warningMessage);
-          speakFacilitator(warningMessage, 'interruption_arbitration', 'moderation');
-          setTimeout(() => setInterruptionWarning(null), 6500);
+          userStudent.interruptionCount = (userStudent.interruptionCount || 0) + 1;
         }
       }
     }
@@ -2631,31 +2620,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto p-3 sm:p-6 space-y-5 [overflow-anchor:none]">
-      {/* AI Facilitator Voice Overlap Guidance Floating Banner (Non-disruptive, Zero Layout Shift) */}
-      {interruptionWarning && (
-        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 max-w-xl w-[92vw] sm:w-full p-3.5 rounded-2xl bg-amber-500/95 dark:bg-amber-950/95 border-2 border-amber-400 text-slate-900 dark:text-amber-100 shadow-2xl flex items-center justify-between gap-3 backdrop-blur-md animate-in fade-in slide-in-from-top-4 duration-200 pointer-events-auto">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-xl bg-amber-400 dark:bg-amber-500 text-slate-950 flex items-center justify-center font-bold text-sm shrink-0 shadow-md">
-              ⚠️
-            </div>
-            <div className="min-w-0">
-              <span className="text-[10px] font-black uppercase tracking-wider text-amber-950 dark:text-amber-300 block">
-                Discussion Decorum Notice
-              </span>
-              <p className="text-xs sm:text-sm font-semibold truncate sm:whitespace-normal">
-                {interruptionWarning}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setInterruptionWarning(null)}
-            className="px-2.5 py-1 rounded-lg bg-amber-600/30 hover:bg-amber-600/50 dark:bg-amber-800/60 dark:hover:bg-amber-700 text-xs font-bold transition-colors cursor-pointer shrink-0"
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
+
 
       
       {/* Session Title & Facilitator Broadcast Banner */}

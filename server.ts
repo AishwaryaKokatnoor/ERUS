@@ -6620,10 +6620,6 @@ Generate your response in JSON format with:
       const dynamicUnasked = dynamicDeadlockBackups.find((q) => !isAsked(q));
       speech = unaskedDeadlock || dynamicUnasked || `Looking at "${topic}" from a fresh angle: what fundamental assumption in our discussion deserves deeper scrutiny?`;
       actionType = 'deadlock_recovery';
-    } else if (interruptionDetected) {
-      speech = `Kindly allow the speaker to conclude their thoughts before taking the floor. Let us maintain mutual respect and speaking decorum.`;
-      actionType = 'rebalance_turn';
-      isProbing = false;
     } else if (phase === 'conclusion') {
       speech = `Thank you everyone. We have had a comprehensive and thoughtful discussion covering both opportunities and practical challenges. The session is now concluded, and individual assessment reports will be compiled.`;
       actionType = 'conclude';
@@ -10220,35 +10216,10 @@ io.on('connection', (socket) => {
             const now = Date.now();
             if (now - (room.lastOverlapWarningTime || 0) > 12000) {
               room.lastOverlapWarningTime = now;
-              const spk1 = distinctCurrentSpeakers[0];
               const spk2 = distinctCurrentSpeakers[1];
               spk2.interruptionCount = (spk2.interruptionCount || 0) + 1;
 
-              const warningMsg = `Please allow ${spk1.name} to finish their statement before speaking. Let's maintain proper discussion decorum.`;
-              const interventionTx: BackendTranscript = {
-                id: `t-overlap-${Date.now()}`,
-                sessionId: room.slotId,
-                speakerId: 'facilitator',
-                speakerName: 'AI Facilitator (ERUS)',
-                seatNumber: null,
-                isFacilitator: true,
-                timestamp: '00:00',
-                timestampSeconds: Date.now(),
-                text: warningMsg,
-                type: 'intervention',
-                sentiment: 'neutral',
-              };
-              room.transcripts.push(interventionTx);
-              persistTranscriptToMongoDB(interventionTx);
-
-              io.to(`room-${safeSlotId}`).emit('facilitator-intervention', {
-                text: warningMsg,
-                action: 'interruption_warning',
-                targetUserId: spk2.userId,
-                targetSeatNumber: spk2.seatNumber,
-                transcript: interventionTx,
-              });
-
+              // Silently track and update backend stats without disturbing the live GD session with audio or banners
               io.to(`room-${safeSlotId}`).emit('peer-stats-updated', {
                 socketId: spk2.socketId,
                 userId: spk2.userId,
