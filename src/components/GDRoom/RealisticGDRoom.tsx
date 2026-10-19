@@ -136,9 +136,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // a real participant is speaking, so it is disabled for live GDs.
   const [autoSimulatePeers, setAutoSimulatePeers] = useState(false);
   const [invitedStudentPrompt, setInvitedStudentPrompt] = useState<{ student: Student; reason: string; promptText?: string } | null>(null);
-  const [currentLayout, setCurrentLayout] = useState<GDRoomLayoutType>(() => {
-    return session.roomLayout === 'speaker_center' ? 'speaker_center' : 'round_table';
-  });
+  const [currentLayout, setCurrentLayout] = useState<GDRoomLayoutType>('round_table');
 
   const hasInitiatedOpeningRef = useRef<boolean>(false);
   const isTransitioningTurnRef = useRef<boolean>(false);
@@ -264,11 +262,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   };
 
   useEffect(() => {
-    const desiredLayout: GDRoomLayoutType = session.roomLayout === 'speaker_center' ? 'speaker_center' : 'round_table';
-    if (desiredLayout !== currentLayout) {
-      setCurrentLayout(desiredLayout);
+    if (session.roomLayout === 'classroom') {
+      setCurrentLayout('classroom');
     }
-  }, [session.roomLayout, currentLayout]);
+  }, [session.roomLayout]);
 
   // Synchronize webcam live state to user's student state (only when currentUser is a student participant)
   useEffect(() => {

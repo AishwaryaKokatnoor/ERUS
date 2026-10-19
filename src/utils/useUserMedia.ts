@@ -40,14 +40,24 @@ export function useUserMedia(): UserMediaControls {
           throw new Error('Webcam access not supported in this browser.');
         }
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            facingMode: 'user',
-          },
-          audio: false,
-        });
+        let stream: MediaStream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+              facingMode: 'user',
+            },
+            audio: false,
+          });
+        } catch (constraintErr) {
+          console.warn('Retrying getUserMedia with basic video constraints for laptop camera compatibility:', constraintErr);
+          // Fallback for laptops and USB webcams that reject facingMode or ideal dimensions
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
+        }
 
         setVideoStream(stream);
         setIsCameraOn(true);

@@ -726,7 +726,7 @@ function GDAppContent() {
     const activeSlot: GDSession = {
       ...(targetSlot.id === session.id ? session : targetSlot),
       activityType: isPresentation ? 'presentation' : 'gd',
-      roomLayout: isPresentation ? 'classroom' : (targetSlot.roomLayout === 'speaker_center' ? 'speaker_center' : 'round_table'),
+      roomLayout: isPresentation ? 'classroom' : 'round_table',
       status: 'active',
       silenceTimerSeconds: 0,
       currentPhase: 'intro',
@@ -750,7 +750,7 @@ function GDAppContent() {
       prevSlots.map((s) => (s.id === targetSlotId ? { 
         ...s, 
         activityType: isPresentation ? 'presentation' : 'gd',
-        roomLayout: isPresentation ? 'classroom' : (s.roomLayout === 'speaker_center' ? 'speaker_center' : 'round_table'),
+        roomLayout: isPresentation ? 'classroom' : 'round_table',
         status: 'active', 
         startedAt: sessionStartTime,
         students: (s.students && s.students.length > 0 ? s.students : baseStudents).map((st) => ({
@@ -1562,7 +1562,7 @@ function GDAppContent() {
     const activeSlot: GDSession = {
       ...targetSlot,
       activityType: isPresentation ? 'presentation' : 'gd',
-      roomLayout: isPresentation ? 'classroom' : (targetSlot.roomLayout === 'speaker_center' ? 'speaker_center' : 'round_table'),
+      roomLayout: isPresentation ? 'classroom' : 'round_table',
       status: targetStatus,
       maxCapacity: targetMaxCap,
       enrolledCount: newTargetEnrolledCount,
