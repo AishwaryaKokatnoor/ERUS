@@ -65,22 +65,6 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
     { urls: 'stun:stun.services.mozilla.com' },
-    // Free high-availability public TURN relay for users behind mobile hotspots / symmetric NAT / college firewalls
-    {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
   ],
   iceCandidatePoolSize: 10,
 };
@@ -185,8 +169,12 @@ export function useWebRTCRoom({
       audioEl.volume = 1.0;
       audioEl.muted = false;
       audioEl.style.position = 'fixed';
-      audioEl.style.top = '-9999px';
-      audioEl.style.left = '-9999px';
+      audioEl.style.width = '1px';
+      audioEl.style.height = '1px';
+      audioEl.style.opacity = '0.01';
+      audioEl.style.pointerEvents = 'none';
+      audioEl.style.bottom = '0px';
+      audioEl.style.right = '0px';
       (audioEl as any).playsInline = true;
       document.body.appendChild(audioEl);
       audioElementsRef.current.set(peerSocketId, audioEl);
@@ -195,6 +183,7 @@ export function useWebRTCRoom({
     const currentStream = audioEl.srcObject as MediaStream | null;
     const currentTrack = currentStream?.getAudioTracks()[0];
     const incomingTrack = audioTracks[0];
+    try { incomingTrack.enabled = true; } catch {}
 
     // Only assign srcObject if it is missing or the track ID changed
     if (!currentStream || !currentTrack || currentTrack.id !== incomingTrack.id) {
@@ -485,9 +474,18 @@ export function useWebRTCRoom({
     // ICE Candidate exchange
     pc.onicecandidate = (event) => {
       if (event.candidate && socketRef.current) {
+        const candidatePayload =
+          typeof event.candidate.toJSON === 'function'
+            ? event.candidate.toJSON()
+            : {
+                candidate: event.candidate.candidate,
+                sdpMid: event.candidate.sdpMid,
+                sdpMLineIndex: event.candidate.sdpMLineIndex,
+                usernameFragment: (event.candidate as any).usernameFragment,
+              };
         socketRef.current.emit('signal-send', {
           to: peerSocketId,
-          signal: { candidate: event.candidate },
+          signal: { candidate: candidatePayload },
         });
       }
     };
@@ -495,11 +493,12 @@ export function useWebRTCRoom({
     // When remote track (audio or video) is received from peer
     pc.ontrack = (event) => {
       console.log(`[WebRTC Peer ${peerSocketId}] Received remote track:`, event.track.kind, event.track.id);
+      const incomingStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
       event.track.addEventListener('unmute', () => {
         console.log(`[WebRTC Peer ${peerSocketId}] Remote track unmuted:`, event.track.kind);
         updatePeerStreamFromReceiversRef.current(peerSocketId, pc);
         if (event.track.kind === 'audio') {
-          attachRemoteAudioRef.current(peerSocketId, new MediaStream([event.track]));
+          attachRemoteAudioRef.current(peerSocketId, incomingStream);
         }
       });
       event.track.addEventListener('ended', () => {
@@ -507,7 +506,7 @@ export function useWebRTCRoom({
       });
       updatePeerStreamFromReceivers(peerSocketId, pc);
       if (event.track.kind === 'audio') {
-        attachRemoteAudioRef.current(peerSocketId, new MediaStream([event.track]));
+        attachRemoteAudioRef.current(peerSocketId, incomingStream);
       }
     };
 
@@ -849,8 +848,14 @@ export function useWebRTCRoom({
                 // Impolite peer ignores colliding offer; remote polite peer will roll back
                 return;
               }
-              // Polite peer rolls back local offer to accept incoming offer
-              await pc.setLocalDescription({ type: 'rollback' });
+              // Polite peer rolls back local offer to accept incoming offer ONLY if in have-local-offer state
+              if (pc.signalingState === 'have-local-offer') {
+                try {
+                  await pc.setLocalDescription({ type: 'rollback' });
+                } catch (rbErr) {
+                  console.warn('[WebRTC rollback non-fatal]:', rbErr);
+                }
+              }
             }
 
             await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
@@ -892,14 +897,17 @@ export function useWebRTCRoom({
             }
           }
         } else if (signal.candidate) {
-          if (pc.remoteDescription && pc.remoteDescription.type) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-            } catch (candErr) {}
-          } else {
-            const q = iceCandidateQueueRef.current.get(from) || [];
-            q.push(signal.candidate);
-            iceCandidateQueueRef.current.set(from, q);
+          const rawCand = signal.candidate;
+          if (rawCand && (rawCand.candidate || rawCand.sdpMid !== undefined || rawCand.sdpMLineIndex !== undefined)) {
+            if (pc.remoteDescription && pc.remoteDescription.type) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(rawCand));
+              } catch (candErr) {}
+            } else {
+              const q = iceCandidateQueueRef.current.get(from) || [];
+              q.push(rawCand);
+              iceCandidateQueueRef.current.set(from, q);
+            }
           }
         }
       } catch (e) {

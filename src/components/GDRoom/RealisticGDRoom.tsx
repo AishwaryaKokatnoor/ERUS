@@ -4902,14 +4902,14 @@ export const StudentVideoFrame: React.FC<{
 }) => {
   const isUser = !isFaculty && !!student.isUser;
   const effectiveStream = isUser ? videoStream : student.videoStream;
-  const isCameraEnabled = isUser ? isUserCameraOn : student.cameraActive === true;
+  const isCameraEnabled = isUser ? isUserCameraOn : student.cameraActive !== false;
   const hasRemoteVideoTrack =
     !isUser &&
     !!effectiveStream &&
     effectiveStream.getVideoTracks().some((t) => t.readyState !== 'ended');
   const isLiveWebcam =
     (isUser && isUserCameraOn && !!videoStream) ||
-    (!isUser && isCameraEnabled && !!effectiveStream && hasRemoteVideoTrack);
+    (!isUser && (student.cameraActive || hasRemoteVideoTrack) && !!effectiveStream && hasRemoteVideoTrack);
   const isMicLive = isUser ? isListeningMic : (isCurrentSpeaker || student.isSpeaking);
 
   // Clear human face portrait avatar fallback (using SVG Avataaars portraits seeded by name)
