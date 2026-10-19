@@ -173,7 +173,7 @@ export function useWebRTCRoom({
 
   // 1. Play incoming peer audio stream through browser speakers via HTMLAudioElement & Web Audio API
   const attachRemoteAudio = useCallback((peerSocketId: string, stream: MediaStream) => {
-    const audioTracks = stream.getAudioTracks().filter((t) => t.readyState === 'live');
+    const audioTracks = stream.getAudioTracks().filter((t) => t.readyState !== 'ended');
     if (audioTracks.length === 0) return;
 
     // HTMLAudioElement in DOM as resilient playback engine
@@ -184,6 +184,9 @@ export function useWebRTCRoom({
       audioEl.autoplay = true;
       audioEl.volume = 1.0;
       audioEl.muted = false;
+      audioEl.style.position = 'fixed';
+      audioEl.style.top = '-9999px';
+      audioEl.style.left = '-9999px';
       (audioEl as any).playsInline = true;
       document.body.appendChild(audioEl);
       audioElementsRef.current.set(peerSocketId, audioEl);
@@ -193,10 +196,9 @@ export function useWebRTCRoom({
     const currentTrack = currentStream?.getAudioTracks()[0];
     const incomingTrack = audioTracks[0];
 
-    // CRITICAL: Only assign srcObject if it is missing or the track ID changed!
-    // Replacing srcObject continuously on already-playing streams kills audio in Chromium.
+    // Only assign srcObject if it is missing or the track ID changed
     if (!currentStream || !currentTrack || currentTrack.id !== incomingTrack.id) {
-      audioEl.srcObject = new MediaStream(audioTracks);
+      audioEl.srcObject = new MediaStream([incomingTrack]);
     }
     audioEl.muted = false;
     audioEl.volume = 1.0;
@@ -219,11 +221,14 @@ export function useWebRTCRoom({
 
     playAudio();
 
-    audioTracks.forEach((t) => {
-      t.onunmute = () => {
-        playAudio();
-      };
+    incomingTrack.addEventListener('unmute', () => {
+      console.log(`[WebRTC Peer ${peerSocketId}] Incoming audio track unmuted - playing`);
+      playAudio();
     });
+
+    audioEl.oncanplay = () => {
+      playAudio();
+    };
 
     // Dual-channel reliability: Also ensure Web Audio API AudioContext is active
     try {
@@ -370,7 +375,7 @@ export function useWebRTCRoom({
       }
 
       tracksToUse.forEach((track) => {
-        track.onunmute = () => {
+        track.addEventListener('unmute', () => {
           console.log(`[WebRTC Peer ${peerSocketId}] Track ${track.kind} unmuted`);
           const current = peerStreamsRef.current.get(peerSocketId);
           if (current) {
@@ -379,7 +384,7 @@ export function useWebRTCRoom({
           if (track.kind === 'audio') {
             attachRemoteAudio(peerSocketId, new MediaStream([track]));
           }
-        };
+        });
       });
     } catch (e) {
       console.warn('[WebRTC updatePeerStreamFromReceivers warning]:', e);
@@ -405,6 +410,8 @@ export function useWebRTCRoom({
       } catch {}
     } else if (isFacultyUser) {
       try { audioTransceiver.direction = 'recvonly'; } catch {}
+    } else {
+      try { audioTransceiver.direction = 'sendrecv'; } catch {}
     }
 
     const videoTransceiver = transceivers.find(
@@ -421,6 +428,8 @@ export function useWebRTCRoom({
       } catch {}
     } else if (isFacultyUser) {
       try { videoTransceiver.direction = 'recvonly'; } catch {}
+    } else {
+      try { videoTransceiver.direction = 'sendrecv'; } catch {}
     }
   }, []);
 
@@ -455,6 +464,9 @@ export function useWebRTCRoom({
     }
   }, [ensureTransceiversForOffer, syncTracksToPeerConnection]);
 
+  const attachRemoteAudioRef = useRef(attachRemoteAudio);
+  attachRemoteAudioRef.current = attachRemoteAudio;
+
   // 3. Create or get RTCPeerConnection for a specific peer
   const getOrCreatePeerConnection = useCallback((peerSocketId: string): RTCPeerConnection => {
     let pc = peerConnectionsRef.current.get(peerSocketId);
@@ -478,21 +490,30 @@ export function useWebRTCRoom({
     // When remote track (audio or video) is received from peer
     pc.ontrack = (event) => {
       console.log(`[WebRTC Peer ${peerSocketId}] Received remote track:`, event.track.kind, event.track.id);
-      event.track.onunmute = () => {
+      event.track.addEventListener('unmute', () => {
         console.log(`[WebRTC Peer ${peerSocketId}] Remote track unmuted:`, event.track.kind);
         updatePeerStreamFromReceiversRef.current(peerSocketId, pc);
-      };
-      event.track.onended = () => {
+        if (event.track.kind === 'audio') {
+          attachRemoteAudioRef.current(peerSocketId, new MediaStream([event.track]));
+        }
+      });
+      event.track.addEventListener('ended', () => {
         updatePeerStreamFromReceiversRef.current(peerSocketId, pc);
-      };
+      });
       updatePeerStreamFromReceivers(peerSocketId, pc);
+      if (event.track.kind === 'audio') {
+        attachRemoteAudioRef.current(peerSocketId, new MediaStream([event.track]));
+      }
     };
 
     pc.onconnectionstatechange = () => {
       console.log(`[WebRTC Peer ${peerSocketId}] Connection state:`, pc?.connectionState);
       if (pc?.connectionState === 'connected') {
+        updatePeerStreamFromReceiversRef.current(peerSocketId, pc);
         const audioEl = audioElementsRef.current.get(peerSocketId);
-        if (audioEl && audioEl.paused) {
+        if (audioEl) {
+          audioEl.muted = false;
+          audioEl.volume = 1.0;
           audioEl.play().catch(() => {});
         }
       } else if (pc?.connectionState === 'failed') {
@@ -568,9 +589,7 @@ export function useWebRTCRoom({
       // Attach tracks to any peer connections that were established before mic was ready
       peerConnectionsRef.current.forEach((pc, peerSocketId) => {
         syncTracksToPeerConnectionRef.current(pc).then(() => {
-          if (pc.signalingState === 'stable') {
-            renegotiatePeerRef.current(peerSocketId, pc);
-          }
+          renegotiatePeerRef.current(peerSocketId, pc);
         });
       });
 
@@ -670,10 +689,11 @@ export function useWebRTCRoom({
       audioElementsRef.current.forEach((el) => {
         el.muted = false;
         el.volume = 1.0;
-        if (el.srcObject && el.paused) {
+        if (el.srcObject) {
           el.play().catch(() => {});
         }
       });
+      setIsAudioAutoplayBlocked(false);
     };
 
     window.addEventListener('click', unlockAllAudio, { passive: true });
@@ -887,14 +907,23 @@ export function useWebRTCRoom({
     // A peer updated speaking/mic/camera state
     socket.on('peer-speaking-updated', ({ socketId: peerSockId, isSpeaking, micActive, cameraActive, volumeLevel: peerVol }) => {
       if (!active) return;
-      if ((isSpeaking || micActive) && audioElementsRef.current.has(peerSockId)) {
+      if (isSpeaking || micActive) {
         const audioEl = audioElementsRef.current.get(peerSockId);
         if (audioEl) {
           audioEl.muted = false;
           audioEl.volume = 1.0;
-          if (audioEl.paused) {
-            audioEl.play().catch(() => {});
+          audioEl.play().catch(() => {});
+        } else {
+          const pc = peerConnectionsRef.current.get(peerSockId);
+          if (pc) {
+            updatePeerStreamFromReceiversRef.current(peerSockId, pc);
           }
+        }
+      }
+      if (cameraActive !== undefined) {
+        const pc = peerConnectionsRef.current.get(peerSockId);
+        if (pc) {
+          updatePeerStreamFromReceiversRef.current(peerSockId, pc);
         }
       }
       setPeers((prev) => {
@@ -1069,13 +1098,6 @@ export function useWebRTCRoom({
       if (data?.simulationMode) {
         setSimulationMode(true);
         setAiParticipants(Array.isArray(data.aiParticipants) ? data.aiParticipants : []);
-        if (localStreamRef.current) {
-          localStreamRef.current.getAudioTracks().forEach((track) => {
-            track.enabled = false;
-          });
-        }
-        setIsMicMuted(true);
-        setIsSpeakingLive(false);
       }
       if (onSessionStartedRef.current) {
         onSessionStartedRef.current(data);
@@ -1220,9 +1242,7 @@ export function useWebRTCRoom({
     peerConnectionsRef.current.forEach(async (pc, peerSocketId) => {
       try {
         await syncTracksToPeerConnectionRef.current(pc);
-        if (pc.signalingState === 'stable') {
-          await renegotiatePeerRef.current(peerSocketId, pc);
-        }
+        await renegotiatePeerRef.current(peerSocketId, pc);
       } catch (err) {
         console.warn('[WebRTC Video Track Sync Notice]:', err);
       }

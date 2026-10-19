@@ -1107,14 +1107,19 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     return students.map((student, idx) => {
       const relativeIdx = (idx - baseOffset + n) % n;
       const angle = Math.PI / 2 + (relativeIdx * 2 * Math.PI) / n;
-      const isSpk = session.currentSpeakerId === student.id || student.isSpeaking || (student.isUser && isUserSpeakingLive);
+      const isSpk = Boolean(
+        student.isSpeaking ||
+        (student.isUser && isUserSpeakingLive) ||
+        (session.currentSpeakerId && (student.id === session.currentSpeakerId || student.userId === session.currentSpeakerId || student.socketId === session.currentSpeakerId)) ||
+        (rtcFloorSpeakerId && (student.id === rtcFloorSpeakerId || student.userId === rtcFloorSpeakerId || student.socketId === rtcFloorSpeakerId || (student.seatNumber !== undefined && String(student.seatNumber) === String(rtcFloorSpeakerId))))
+      );
       return {
         student,
         angle,
         zoomLevel: isSpk ? ('zoomed' as const) : ('normal' as const),
       };
     });
-  }, [filledStudents, session.currentSpeakerId, isUserSpeakingLive]);
+  }, [filledStudents, session.currentSpeakerId, rtcFloorSpeakerId, isUserSpeakingLive]);
 
   const [isFinalizingRecording, setIsFinalizingRecording] = useState(false);
 
@@ -1203,13 +1208,15 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     onFinishSession();
   }, [gdRecorder, session.id, session.slotId, isFacultyOrAdmin, rtcFinishSession, onFinishSession, liveSpeechTranscript, setSession]);
 
-  const currentSpeakerStudent = activeDisplayStudents.find((s) => s.id === session.currentSpeakerId) ||
-    activeDisplayStudents.find((s) => s.isSpeaking) ||
+  const currentSpeakerStudent =
     (isUserSpeakingLive ? activeStudentUser : null) ||
+    (rtcFloorSpeakerId ? activeDisplayStudents.find((s) => s.id === rtcFloorSpeakerId || s.userId === rtcFloorSpeakerId || s.socketId === rtcFloorSpeakerId || String(s.seatNumber) === String(rtcFloorSpeakerId)) : null) ||
+    (session.currentSpeakerId ? activeDisplayStudents.find((s) => s.id === session.currentSpeakerId || s.userId === session.currentSpeakerId || s.socketId === session.currentSpeakerId) : null) ||
+    activeDisplayStudents.find((s) => s.isSpeaking) ||
     activeDisplayStudents.find((s) => s.id === latestSpeakerTranscript?.speakerId) ||
     activeStudentUser ||
     activeDisplayStudents[0];
-  const isSpeakingLive = !!(session.currentSpeakerId || isUserSpeakingLive || activeDisplayStudents.some((s) => s.isSpeaking));
+  const isSpeakingLive = !!(session.currentSpeakerId || rtcFloorSpeakerId || isUserSpeakingLive || activeDisplayStudents.some((s) => s.isSpeaking));
   
   const liveEnlargedStudent = useMemo(() => {
     if (!enlargedStudent) return null;
@@ -1326,13 +1333,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     }
 
     if (!isSessionActive) {
-      setSession((prev) => ({
-        ...prev,
-        status: 'active',
-        startedAt: prev.startedAt || Date.now(),
-      }));
-      if (rtcStartSession) rtcStartSession(session.topic);
-      if (onStartSession) onStartSession(session.id);
+      // The discussion has not been officially commenced by the faculty evaluator yet.
+      // Candidate speech or ambient sound in the lobby must NOT auto-start the GD session!
+      return;
     }
 
     const textToCommit = String(forcedText || liveTranscriptRef.current || liveSpeechTranscript || '').trim();
@@ -1643,7 +1646,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             isRecognitionRunningRef.current = false;
             stopAudioAnalyserRef.current();
             stopMediaRecorderFallback();
-            rtcSetMicEnabledRef.current(false);
             if (!isFacultyRef.current) {
               setSession((prev) => ({
                 ...prev,
@@ -1667,7 +1669,6 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
           setIsListeningMic(false);
           stopAudioAnalyserRef.current();
           stopMediaRecorderFallback();
-          rtcSetMicEnabledRef.current(false);
         };
 
         recognition.start();
@@ -2009,6 +2010,9 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
   // User or Faculty submits a spoken statement / guidance
   const handleSendUserStatement = async (textToSend?: string) => {
     if (!isSessionActive) {
+      if (!isFacultyOrAdmin) {
+        return;
+      }
       setSession((prev) => ({
         ...prev,
         status: 'active',
@@ -3246,20 +3250,27 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                       const R = count > 12 ? 37 : count > 8 ? 35 : 34; // Flexible circular radius % for compact circle and clear video cards
                       const leftPct = 50 + R * Math.cos(angle);
                       const topPct = 50 + R * Math.sin(angle);
-                      const isSpk = session.currentSpeakerId === student.id || student.isSpeaking || (student.isUser && isUserSpeakingLive) || zoomLevel === 'zoomed';
+                      const isSpk = Boolean(
+                        student.isSpeaking ||
+                        (student.isUser && isUserSpeakingLive) ||
+                        zoomLevel === 'zoomed' ||
+                        (session.currentSpeakerId && (student.id === session.currentSpeakerId || student.userId === session.currentSpeakerId || student.socketId === session.currentSpeakerId)) ||
+                        (rtcFloorSpeakerId && (student.id === rtcFloorSpeakerId || student.userId === rtcFloorSpeakerId || student.socketId === rtcFloorSpeakerId || (student.seatNumber !== undefined && String(student.seatNumber) === String(rtcFloorSpeakerId)))) ||
+                        (currentSpeakerStudent && student.id === currentSpeakerStudent.id && isSpeakingLive)
+                      );
 
                       return (
                         <div
                           key={student.id}
-                          className={`absolute pointer-events-auto transition-transform duration-300 ease-out ${
-                            isSpk ? 'z-40' : 'z-10'
+                          className={`absolute pointer-events-auto transition-all duration-300 ease-out ${
+                            isSpk ? 'z-50' : 'z-10'
                           }`}
                           style={{
                             left: `${leftPct}%`,
                             top: `${topPct}%`,
-                            transform: `translate(-50%, -50%) ${isSpk ? 'scale(1.22)' : 'scale(1)'}`,
+                            transform: `translate(-50%, -50%) ${isSpk ? 'scale(1.32)' : 'scale(1)'}`,
                             transformOrigin: 'center center',
-                            zIndex: isSpk ? 40 : 10,
+                            zIndex: isSpk ? 50 : 10,
                           }}
                         >
                           <StudentPodCard 
@@ -4715,35 +4726,31 @@ const VideoStreamPlayer: React.FC<{
       if (video.srcObject !== stream) {
         video.srcObject = stream;
       }
-      video.play().catch(() => {});
-
-      const handleUnmute = () => {
-        try {
-          // In Chromium, re-binding srcObject upon track unmute guarantees the video decoder renders
-          video.srcObject = null;
-          video.srcObject = stream;
+      const playVideo = () => {
+        if (video.paused) {
           video.play().catch(() => {});
-        } catch {}
-      };
-
-      const handleAddTrack = (e: MediaStreamTrackEvent) => {
-        if (e.track.kind === 'video') {
-          e.track.addEventListener('unmute', handleUnmute);
         }
-        handleUnmute();
+      };
+      playVideo();
+
+      const handleTrackEvent = () => {
+        if (video.srcObject !== stream) {
+          video.srcObject = stream;
+        }
+        playVideo();
       };
 
-      stream.addEventListener('addtrack', handleAddTrack);
-      stream.addEventListener('removetrack', handleUnmute);
+      stream.addEventListener('addtrack', handleTrackEvent);
+      stream.addEventListener('removetrack', handleTrackEvent);
       stream.getVideoTracks().forEach((track) => {
-        track.addEventListener('unmute', handleUnmute);
+        track.addEventListener('unmute', playVideo);
       });
 
       return () => {
-        stream.removeEventListener('addtrack', handleAddTrack);
-        stream.removeEventListener('removetrack', handleUnmute);
+        stream.removeEventListener('addtrack', handleTrackEvent);
+        stream.removeEventListener('removetrack', handleTrackEvent);
         stream.getVideoTracks().forEach((track) => {
-          track.removeEventListener('unmute', handleUnmute);
+          track.removeEventListener('unmute', playVideo);
         });
       };
     }
@@ -4756,6 +4763,9 @@ const VideoStreamPlayer: React.FC<{
       playsInline
       muted={muted}
       onLoadedMetadata={() => {
+        videoRef.current?.play().catch(() => {});
+      }}
+      onCanPlay={() => {
         videoRef.current?.play().catch(() => {});
       }}
       data-participant-id={participantId || ''}
@@ -4797,14 +4807,14 @@ export const StudentVideoFrame: React.FC<{
 }) => {
   const isUser = !isFaculty && !!student.isUser;
   const effectiveStream = isUser ? videoStream : student.videoStream;
+  const isCameraEnabled = isUser ? isUserCameraOn : student.cameraActive === true;
   const hasRemoteVideoTrack =
     !isUser &&
     !!effectiveStream &&
     effectiveStream.getVideoTracks().some((t) => t.readyState !== 'ended');
   const isLiveWebcam =
     (isUser && isUserCameraOn && !!videoStream) ||
-    (!isUser && !!effectiveStream && (hasRemoteVideoTrack || student.cameraActive === true));
-  const isCameraEnabled = isUser ? isUserCameraOn : (student.cameraActive !== false || hasRemoteVideoTrack);
+    (!isUser && isCameraEnabled && !!effectiveStream && hasRemoteVideoTrack);
   const isMicLive = isUser ? isListeningMic : (isCurrentSpeaker || student.isSpeaking);
 
   // Clear human face portrait avatar fallback (using SVG Avataaars portraits seeded by name)
