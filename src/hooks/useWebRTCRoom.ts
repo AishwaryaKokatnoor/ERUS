@@ -292,7 +292,7 @@ export function useWebRTCRoom({
     if (audioTransceivers.length === 0) {
       try {
         if (audioTrack) {
-          pc.addTransceiver(audioTrack, { direction: 'sendrecv' });
+          pc.addTransceiver(audioTrack, { direction: 'sendrecv', streams: localStreamRef.current ? [localStreamRef.current] : [] });
         } else {
           pc.addTransceiver('audio', { direction: 'sendrecv' });
         }
@@ -309,7 +309,7 @@ export function useWebRTCRoom({
     if (videoTransceivers.length === 0) {
       try {
         if (videoTrack) {
-          pc.addTransceiver(videoTrack, { direction: 'sendrecv' });
+          pc.addTransceiver(videoTrack, { direction: 'sendrecv', streams: videoStreamRef.current ? [videoStreamRef.current] : [] });
         } else {
           pc.addTransceiver('video', { direction: 'sendrecv' });
         }
@@ -326,39 +326,56 @@ export function useWebRTCRoom({
   const updatePeerStreamFromReceivers = useCallback((peerSocketId: string, pc: RTCPeerConnection) => {
     try {
       const receivers = pc.getReceivers();
-      const liveTracks = receivers
+      const liveAudioTracks = receivers
         .map((r) => r.track)
-        .filter((t): t is MediaStreamTrack => Boolean(t && t.readyState !== 'ended'));
+        .filter((t): t is MediaStreamTrack => Boolean(t && t.kind === 'audio' && t.readyState !== 'ended'));
 
-      if (liveTracks.length === 0) return;
+      const liveVideoTracks = receivers
+        .map((r) => r.track)
+        .filter((t): t is MediaStreamTrack => Boolean(t && t.kind === 'video' && t.readyState !== 'ended'));
 
       const existingStream = peerStreamsRef.current.get(peerSocketId);
-      const trackMap = new Map<string, MediaStreamTrack>();
 
-      if (existingStream) {
-        existingStream.getTracks().forEach((t) => {
-          if (t.readyState !== 'ended') trackMap.set(t.id, t);
-        });
+      // Select exactly ONE latest live audio track
+      let audioTrackToUse: MediaStreamTrack | null = null;
+      if (liveAudioTracks.length > 0) {
+        audioTrackToUse = liveAudioTracks[liveAudioTracks.length - 1];
+      } else if (existingStream) {
+        audioTrackToUse = existingStream.getAudioTracks().find((t) => t.readyState !== 'ended') || null;
       }
-      liveTracks.forEach((t) => {
-        trackMap.set(t.id, t);
-      });
 
-      const allTracks = Array.from(trackMap.values());
-      const updatedStream = new MediaStream(allTracks);
+      // Select exactly ONE latest live video track (prefer unmuted/active if multiple)
+      let videoTrackToUse: MediaStreamTrack | null = null;
+      if (liveVideoTracks.length > 0) {
+        const unmutedTracks = liveVideoTracks.filter((t) => !t.muted);
+        videoTrackToUse = unmutedTracks.length > 0 ? unmutedTracks[unmutedTracks.length - 1] : liveVideoTracks[liveVideoTracks.length - 1];
+      } else if (existingStream) {
+        videoTrackToUse = existingStream.getVideoTracks().find((t) => t.readyState !== 'ended') || null;
+      }
+
+      const tracksToUse: MediaStreamTrack[] = [];
+      if (audioTrackToUse) tracksToUse.push(audioTrackToUse);
+      if (videoTrackToUse) tracksToUse.push(videoTrackToUse);
+
+      if (tracksToUse.length === 0) return;
+
+      // Always create a clean MediaStream with the selected active tracks
+      // Ensuring videoTrackToUse is at index 0 of getVideoTracks()
+      const updatedStream = new MediaStream(tracksToUse);
       peerStreamsRef.current.set(peerSocketId, updatedStream);
       setPeerStreams(new Map(peerStreamsRef.current));
 
-      const audioTracks = allTracks.filter((t) => t.kind === 'audio');
-      if (audioTracks.length > 0) {
-        attachRemoteAudio(peerSocketId, new MediaStream(audioTracks));
+      if (audioTrackToUse) {
+        attachRemoteAudio(peerSocketId, new MediaStream([audioTrackToUse]));
       }
 
-      allTracks.forEach((track) => {
+      tracksToUse.forEach((track) => {
         track.onunmute = () => {
-          const refreshed = new MediaStream(allTracks);
-          peerStreamsRef.current.set(peerSocketId, refreshed);
-          setPeerStreams(new Map(peerStreamsRef.current));
+          console.log(`[WebRTC Peer ${peerSocketId}] Track ${track.kind} unmuted`);
+          const current = peerStreamsRef.current.get(peerSocketId);
+          if (current) {
+            setPeerStreams(new Map(peerStreamsRef.current));
+          }
           if (track.kind === 'audio') {
             attachRemoteAudio(peerSocketId, new MediaStream([track]));
           }
@@ -381,7 +398,7 @@ export function useWebRTCRoom({
       const audioTrack = (!isFacultyUser && localStreamRef.current) ? localStreamRef.current.getAudioTracks()[0] || null : null;
       try {
         if (audioTrack) {
-          pc.addTransceiver(audioTrack, { direction: 'sendrecv' });
+          pc.addTransceiver(audioTrack, { direction: 'sendrecv', streams: localStreamRef.current ? [localStreamRef.current] : [] });
         } else {
           pc.addTransceiver('audio', { direction: isFacultyUser ? 'recvonly' : 'sendrecv' });
         }
@@ -397,7 +414,7 @@ export function useWebRTCRoom({
       const videoTrack = (!isFacultyUser && isCameraOnRef.current && videoStreamRef.current) ? videoStreamRef.current.getVideoTracks()[0] || null : null;
       try {
         if (videoTrack) {
-          pc.addTransceiver(videoTrack, { direction: 'sendrecv' });
+          pc.addTransceiver(videoTrack, { direction: 'sendrecv', streams: videoStreamRef.current ? [videoStreamRef.current] : [] });
         } else {
           pc.addTransceiver('video', { direction: isFacultyUser ? 'recvonly' : 'sendrecv' });
         }
@@ -409,7 +426,17 @@ export function useWebRTCRoom({
 
   // Helper: Renegotiate SDP offer with a specific peer when media tracks or directions change
   const renegotiatePeer = useCallback(async (peerSocketId: string, pc: RTCPeerConnection) => {
-    if (!socketRef.current || pc.signalingState !== 'stable') return;
+    if (!socketRef.current) return;
+    if (pc.signalingState !== 'stable') {
+      const handleStable = () => {
+        if (pc.signalingState === 'stable') {
+          pc.removeEventListener('signalingstatechange', handleStable);
+          renegotiatePeer(peerSocketId, pc);
+        }
+      };
+      pc.addEventListener('signalingstatechange', handleStable);
+      return;
+    }
     try {
       ensureTransceiversForOffer(pc);
       await syncTracksToPeerConnection(pc);
@@ -451,24 +478,13 @@ export function useWebRTCRoom({
     // When remote track (audio or video) is received from peer
     pc.ontrack = (event) => {
       console.log(`[WebRTC Peer ${peerSocketId}] Received remote track:`, event.track.kind, event.track.id);
-      if (event.streams && event.streams[0]) {
-        const stream = event.streams[0];
-        const existing = peerStreamsRef.current.get(peerSocketId);
-        if (existing) {
-          stream.getTracks().forEach((t) => {
-            if (!existing.getTracks().some((et) => et.id === t.id)) {
-              existing.addTrack(t);
-            }
-          });
-          peerStreamsRef.current.set(peerSocketId, existing);
-        } else {
-          peerStreamsRef.current.set(peerSocketId, stream);
-        }
-        setPeerStreams(new Map(peerStreamsRef.current));
-        if (event.track.kind === 'audio') {
-          attachRemoteAudio(peerSocketId, existing || stream);
-        }
-      }
+      event.track.onunmute = () => {
+        console.log(`[WebRTC Peer ${peerSocketId}] Remote track unmuted:`, event.track.kind);
+        updatePeerStreamFromReceiversRef.current(peerSocketId, pc);
+      };
+      event.track.onended = () => {
+        updatePeerStreamFromReceiversRef.current(peerSocketId, pc);
+      };
       updatePeerStreamFromReceivers(peerSocketId, pc);
     };
 

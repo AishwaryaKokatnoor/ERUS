@@ -4717,34 +4717,33 @@ const VideoStreamPlayer: React.FC<{
       }
       video.play().catch(() => {});
 
-      const handlePlay = () => {
-        if (video.srcObject !== stream) {
+      const handleUnmute = () => {
+        try {
+          // In Chromium, re-binding srcObject upon track unmute guarantees the video decoder renders
+          video.srcObject = null;
           video.srcObject = stream;
-        }
-        video.play().catch(() => {});
+          video.play().catch(() => {});
+        } catch {}
       };
 
       const handleAddTrack = (e: MediaStreamTrackEvent) => {
         if (e.track.kind === 'video') {
-          e.track.addEventListener('unmute', handlePlay);
+          e.track.addEventListener('unmute', handleUnmute);
         }
-        // Force srcObject refresh so browsers render newly added remote WebRTC video tracks
-        video.srcObject = null;
-        video.srcObject = stream;
-        video.play().catch(() => {});
+        handleUnmute();
       };
 
       stream.addEventListener('addtrack', handleAddTrack);
-      stream.addEventListener('removetrack', handlePlay);
+      stream.addEventListener('removetrack', handleUnmute);
       stream.getVideoTracks().forEach((track) => {
-        track.addEventListener('unmute', handlePlay);
+        track.addEventListener('unmute', handleUnmute);
       });
 
       return () => {
         stream.removeEventListener('addtrack', handleAddTrack);
-        stream.removeEventListener('removetrack', handlePlay);
+        stream.removeEventListener('removetrack', handleUnmute);
         stream.getVideoTracks().forEach((track) => {
-          track.removeEventListener('unmute', handlePlay);
+          track.removeEventListener('unmute', handleUnmute);
         });
       };
     }
