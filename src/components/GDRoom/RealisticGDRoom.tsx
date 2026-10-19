@@ -114,8 +114,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     });
   }, [transcripts]);
 
-  const isFaculty = currentUser?.role === 'faculty';
-  const isFacultyOrAdmin = currentUser?.role === 'faculty' || currentUser?.role === 'college_admin' || currentUser?.role === 'super_admin';
+  const isFaculty = currentUser?.role === 'faculty' || currentUser?.role === 'college_admin' || currentUser?.role === 'super_admin';
+  const isFacultyOrAdmin = isFaculty;
   const canStartSession = isFacultyOrAdmin;
   const isStudent = currentUser?.role === 'student';
 
@@ -1468,12 +1468,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (isFaculty) return;
     const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     const recognitionStartTime = { current: Date.now() };
     const lastResultReceivedTime = { current: Date.now() };
 
     const startRecognitionInstance = () => {
+      if (isFacultyRef.current) return;
       if (!isListeningMicRef.current) return;
       if (!SpeechRecognitionClass) {
         console.warn('SpeechRecognition API not supported in this browser; acoustic speech detection will be active.');
@@ -1713,8 +1715,10 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       setTimeout(startRecognitionInstance, 300);
     }
 
-    // Save helper reference so it can be revived if needed
-    (window as any).__startErusSpeechRecognition = startRecognitionInstance;
+    // Save helper reference so it can be revived if needed (only for students)
+    if (!isFaculty) {
+      (window as any).__startErusSpeechRecognition = startRecognitionInstance;
+    }
 
     return () => {
       clearInterval(watchdog);
@@ -1731,7 +1735,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         recognitionRef.current = null;
       }
     };
-  }, []);
+  }, [isFaculty]);
 
   const activateContinuousMicrophone = useCallback(async () => {
     if (isFaculty) return;

@@ -517,6 +517,13 @@ export function useWebRTCRoom({
   // 4. Initialize Local Microphone & Real-time Volume Analyzer
   const initLocalMicrophone = useCallback(async () => {
     try {
+      const isFacultyUser = currentUserRef.current?.role === 'faculty' || currentUserRef.current?.role === 'college_admin' || currentUserRef.current?.role === 'super_admin';
+      if (isFacultyUser) {
+        setIsMicMuted(true);
+        isMicMutedRef.current = true;
+        return null;
+      }
+
       if (localStreamRef.current && localStreamRef.current.getAudioTracks().some((t) => t.readyState === 'live')) {
         return localStreamRef.current;
       }
@@ -537,11 +544,10 @@ export function useWebRTCRoom({
       setLocalAudioStream(stream);
 
       // Continuous open mic: start with audio tracks active for students (no manual unmuting needed)
-      const isFacultyUser = currentUserRef.current?.role === 'faculty';
       stream.getAudioTracks().forEach((track) => {
-        track.enabled = !isFacultyUser;
+        track.enabled = true;
       });
-      setIsMicMuted(Boolean(isFacultyUser));
+      setIsMicMuted(false);
 
       // Attach tracks to any peer connections that were established before mic was ready
       peerConnectionsRef.current.forEach((pc, peerSocketId) => {
@@ -680,8 +686,9 @@ export function useWebRTCRoom({
       if (!active) return;
       setConnected(true);
 
-      // Acquire microphone (only for student participants - faculty is pure listener)
-      if (currentUserRef.current?.role !== 'faculty') {
+      // Acquire microphone (only for student participants - faculty/observer is pure listener)
+      const isFacultyUser = currentUserRef.current?.role === 'faculty' || currentUserRef.current?.role === 'college_admin' || currentUserRef.current?.role === 'super_admin';
+      if (!isFacultyUser) {
         await initLocalMicrophoneRef.current();
       }
 
@@ -1109,8 +1116,15 @@ export function useWebRTCRoom({
 
   // Set explicit microphone enabled state (true = unmuted, false = muted)
   const setMicEnabled = useCallback(async (enabled: boolean) => {
+    const isFacultyUser = currentUserRef.current?.role === 'faculty' || currentUserRef.current?.role === 'college_admin' || currentUserRef.current?.role === 'super_admin';
+    if (isFacultyUser) {
+      setIsMicMuted(true);
+      isMicMutedRef.current = true;
+      return;
+    }
+
     // If mic not yet acquired, initialize it now
-    if (!localStreamRef.current && currentUserRef.current?.role !== 'faculty') {
+    if (!localStreamRef.current) {
       await initLocalMicrophone();
     }
 
@@ -1156,6 +1170,9 @@ export function useWebRTCRoom({
 
   // Toggle local microphone mute
   const toggleMute = useCallback(() => {
+    const isFacultyUser = currentUserRef.current?.role === 'faculty' || currentUserRef.current?.role === 'college_admin' || currentUserRef.current?.role === 'super_admin';
+    if (isFacultyUser) return;
+
     if (localStreamRef.current) {
       const audioTrack = localStreamRef.current.getAudioTracks()[0];
       if (audioTrack) {
@@ -1170,7 +1187,8 @@ export function useWebRTCRoom({
 
   // Synchronize local webcam video track & cameraActive state to all active WebRTC peer connections
   useEffect(() => {
-    if (currentUserRef.current?.role === 'faculty') return;
+    const isFacultyUser = currentUserRef.current?.role === 'faculty' || currentUserRef.current?.role === 'college_admin' || currentUserRef.current?.role === 'super_admin';
+    if (isFacultyUser) return;
 
     // Broadcast cameraActive state immediately to all room peers
     if (socketRef.current && socketRef.current.connected) {

@@ -1878,19 +1878,6 @@ export function useGDRecorder({
         mixStreamIntoDestination(localAudioStream);
       } else if (localStream && localStream.getAudioTracks().length > 0) {
         mixStreamIntoDestination(localStream);
-      } else {
-        try {
-          const mic = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-            },
-          });
-          mixStreamIntoDestination(mic);
-        } catch (micErr) {
-          console.warn('[GD Recorder] Mic stream fallback skipped:', micErr);
-        }
       }
 
       if (peerStreams) {
