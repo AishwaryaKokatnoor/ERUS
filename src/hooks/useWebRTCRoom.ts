@@ -362,15 +362,15 @@ export function useWebRTCRoom({
       if (!audioTrackToUse && !videoTrackToUse) return;
 
       // Anti-flicker track deduplication:
-      // Only skip if not forced AND tracks are identical AND track mute state hasn't changed
-      if (!force && existingStream) {
+      // If the existing stream already contains the identical audio and video tracks,
+      // reuse the existing stream so we don't recreate MediaStream objects or trigger re-render cascades.
+      if (existingStream) {
         const currentAudioTrack = existingStream.getAudioTracks()[0];
         const currentVideoTrack = existingStream.getVideoTracks()[0];
         const audioSame = (!audioTrackToUse && !currentAudioTrack) || (currentAudioTrack?.id === audioTrackToUse?.id);
         const videoSame = (!videoTrackToUse && !currentVideoTrack) || (currentVideoTrack?.id === videoTrackToUse?.id);
-        const muteStateSame = currentVideoTrack?.muted === videoTrackToUse?.muted;
 
-        if (audioSame && videoSame && muteStateSame) {
+        if (audioSame && videoSame) {
           // Stream already has the exact live tracks; do not recreate stream or trigger unnecessary re-renders
           if (audioTrackToUse) {
             attachRemoteAudio(peerSocketId, existingStream);
@@ -524,7 +524,7 @@ export function useWebRTCRoom({
       };
 
       event.track.addEventListener('unmute', onTrackChange);
-      event.track.addEventListener('mute', onTrackChange);
+      // Do not attach 'mute' listener: WebRTC tracks frequently fire brief mute events during normal packet handling
       event.track.addEventListener('ended', onTrackChange);
 
       updatePeerStreamFromReceivers(peerSocketId, pc, true);

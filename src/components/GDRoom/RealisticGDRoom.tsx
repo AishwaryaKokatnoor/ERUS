@@ -4784,9 +4784,6 @@ const VideoStreamPlayer: React.FC<{
     checkVideoRender();
 
     incomingVideoTrack.addEventListener('unmute', checkVideoRender);
-    incomingVideoTrack.addEventListener('mute', () => {
-      if (incomingVideoTrack.muted) setIsVideoLoaded(false);
-    });
 
     video.addEventListener('loadedmetadata', checkVideoRender);
     video.addEventListener('loadeddata', checkVideoRender);
@@ -4794,10 +4791,12 @@ const VideoStreamPlayer: React.FC<{
     video.addEventListener('playing', checkVideoRender);
     video.addEventListener('resize', checkVideoRender);
 
-    const interval = setInterval(checkVideoRender, 600);
+    const t1 = setTimeout(checkVideoRender, 200);
+    const t2 = setTimeout(checkVideoRender, 1000);
 
     return () => {
-      clearInterval(interval);
+      clearTimeout(t1);
+      clearTimeout(t2);
       incomingVideoTrack.removeEventListener('unmute', checkVideoRender);
       video.removeEventListener('loadedmetadata', checkVideoRender);
       video.removeEventListener('loadeddata', checkVideoRender);
@@ -4924,7 +4923,7 @@ export const StudentVideoFrame: React.FC<{
         </div>
       ) : isLiveWebcam && effectiveStream ? (
         <VideoStreamPlayer 
-          key={`${student.id || `seat-${student.seatNumber}`}-${effectiveStream.id}-${effectiveStream.getVideoTracks()[0]?.id || 'live'}`}
+          key={student.id || `seat-${student.seatNumber}`}
           stream={effectiveStream} 
           muted={true}
           participantId={student.id}
