@@ -6151,7 +6151,7 @@ function formatUserResponse(u: any) {
 }
 
 // Health Check (Deployment & Railway liveness probe)
-app.get('/api/health', async (req, res) => {
+app.get(['/api/health', '/health'], async (req, res) => {
   if (!isMongoConnected()) {
     await connectMongoDB();
   }
