@@ -150,11 +150,12 @@ function GDAppContent() {
       setCurrentTab(currentUser?.role === 'student' ? 'topics' : 'faculty');
       return;
     }
-    if (currentTab === 'room' && (session?.status === 'completed' || isSlotCompletedLocally(session?.id))) {
+    // Guard: Only redirect outside of active room session
+    if (currentTab === 'room' && session?.status === 'completed' && !session?.isSessionActive && !(window as any).__erusInActiveRoom) {
       setCurrentTab('report');
       return;
     }
-  }, [currentUser, currentTab, session?.id, session?.status]);
+  }, [currentUser, currentTab, session?.id, session?.status, session?.isSessionActive]);
 
   // Guard: When currentUser is faculty or admin, ensure all students have isUser: false so observer mode is respected
   useEffect(() => {
@@ -305,13 +306,17 @@ function GDAppContent() {
             const fresh = mappedSlots.find((s) => s.id === prev.id);
             if (!fresh) return prev;
 
-            const isCompletedNow = fresh.status === 'completed' || isSlotCompletedLocally(fresh.id);
+            const isCompletedNow = fresh.status === 'completed';
 
-            // If session was completed while user is in room, automatically finish GD and transition to report
-            if (isCompletedNow && prev.status !== 'completed' && currentTab === 'room') {
-              setTimeout(() => {
+            // If session was completed by faculty while user is in room, smoothly trigger conclusion
+            if (isCompletedNow && prev.status === 'active' && currentTab === 'room') {
+              if (typeof (window as any).__erusStopAndUploadRecording === 'function') {
+                (window as any).__erusStopAndUploadRecording().catch(() => {}).finally(() => {
+                  handleFinishSession();
+                });
+              } else {
                 handleFinishSession();
-              }, 50);
+              }
             }
 
             const resolvedStatus = isCompletedNow
@@ -416,10 +421,22 @@ function GDAppContent() {
             }
           }
           if (currentTab === 'room') {
-            if (currentUser.role === 'student') {
-              handleFinishSession();
+            if (typeof (window as any).__erusStopAndUploadRecording === 'function') {
+              (window as any).__erusStopAndUploadRecording()
+                .catch(() => {})
+                .finally(() => {
+                  if (currentUser.role === 'student') {
+                    handleFinishSession();
+                  } else {
+                    setCurrentTab('report');
+                  }
+                });
             } else {
-              setCurrentTab('report');
+              if (currentUser.role === 'student') {
+                handleFinishSession();
+              } else {
+                setCurrentTab('report');
+              }
             }
           }
         }

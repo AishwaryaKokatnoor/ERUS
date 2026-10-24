@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
+import path from 'path';
 import dotenv from 'dotenv';
 import dns from 'dns';
 
@@ -67,10 +68,7 @@ function candidateMongoUris(raw: string): string[] {
   const trimmed = raw.trim();
   if (!trimmed) return ['mongodb://127.0.0.1:27017/erus'];
 
-  // 1. Direct user-provided URI should always be attempted first
-  list.push(trimmed);
-
-  // 2. If it's a mongodb:// URI (like Railway internal or localhost) with credentials
+  // 1. If it's a mongodb:// URI (like Railway internal or localhost) with credentials
   if (trimmed.startsWith('mongodb://') && trimmed.includes('@')) {
     const withoutQuery = trimmed.split('?')[0].replace(/\/+$/, '');
     const queryPart = trimmed.split('?')[1] || '';
@@ -80,26 +78,52 @@ function candidateMongoUris(raw: string): string[] {
       const q = queryPart
         ? (queryPart.includes('authSource=') ? queryPart : `${queryPart}&authSource=admin`)
         : 'authSource=admin';
+      // Prioritize /erus with authSource=admin so Mongoose connects to the erus database rather than default "test"
       list.push(`${withoutQuery}/erus?${q}`);
       list.push(`${withoutQuery}/railway?${q}`);
+      list.push(trimmed);
     } else if (!trimmed.includes('authSource=')) {
       const separator = trimmed.includes('?') ? '&' : '?';
       list.push(`${trimmed}${separator}authSource=admin`);
+      list.push(trimmed);
+    } else {
+      list.push(trimmed);
     }
-  }
-
-  // 3. If it's a mongodb+srv:// URI with no path before ? (e.g. mongodb+srv://host/?)
-  if (trimmed.startsWith('mongodb+srv://')) {
+  } else if (trimmed.startsWith('mongodb+srv://')) {
     const withoutQuery = trimmed.split('?')[0].replace(/\/+$/, '');
     const queryPart = trimmed.split('?')[1] ? `?${trimmed.split('?')[1]}` : '';
-    // Check if path has a DB name (e.g. host.net/erus vs host.net)
     const hostPart = withoutQuery.replace('mongodb+srv://', '');
     if (!hostPart.includes('/')) {
-      list.unshift(`${withoutQuery}/erus${queryPart}`);
+      list.push(`${withoutQuery}/erus${queryPart}`);
     }
+    list.push(trimmed);
+  } else {
+    list.push(trimmed);
   }
 
   return list;
+}
+
+// Lifecycle event listeners for continuous automatic self-healing
+if (!mongoose.connection.listenerCount('disconnected')) {
+  mongoose.connection.on('connected', () => {
+    isConnected = true;
+    lastMongoError = null;
+    console.log(`[MongoDB] Active connection established to database "${mongoose.connection.name}"`);
+  });
+
+  mongoose.connection.on('disconnected', () => {
+    isConnected = false;
+    console.warn('[MongoDB] Connection lost. Auto-reconnecting in 3s...');
+    setTimeout(() => {
+      connectMongoDB().catch(() => {});
+    }, 3000);
+  });
+
+  mongoose.connection.on('error', (err: any) => {
+    lastMongoError = err.message;
+    console.warn('[MongoDB] Runtime error event:', err.message);
+  });
 }
 
 export async function connectMongoDB(): Promise<boolean> {
@@ -152,6 +176,128 @@ export async function connectMongoDB(): Promise<boolean> {
 
 export function isMongoConnected(): boolean {
   return isConnected && mongoose.connection.readyState === 1;
+}
+
+// =========================================================================
+// MONGODB GRIDFS STORAGE (Persistent Video & Audio Chunks across deployments)
+// =========================================================================
+let recordingsBucket: mongoose.mongo.GridFSBucket | null = null;
+
+export function getRecordingsBucket(): mongoose.mongo.GridFSBucket | null {
+  if (recordingsBucket && mongoose.connection.readyState === 1) {
+    return recordingsBucket;
+  }
+  if (mongoose.connection.readyState === 1 && mongoose.connection.db) {
+    recordingsBucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
+      bucketName: 'gd_recordings',
+    });
+    return recordingsBucket;
+  }
+  return null;
+}
+
+export async function saveRecordingToGridFS(
+  filename: string,
+  buffer: Buffer,
+  metadata?: Record<string, any>
+): Promise<string | null> {
+  const bucket = getRecordingsBucket();
+  if (!bucket) {
+    console.warn('[MongoDB GridFS] Bucket not available to save recording:', filename);
+    return null;
+  }
+  try {
+    // Clean up older records for this filename to save space and avoid duplicate chunks
+    try {
+      const existing = await bucket.find({ filename }).toArray();
+      for (const doc of existing) {
+        await bucket.delete(doc._id);
+      }
+    } catch {}
+
+    const contentType = metadata?.contentType || (filename.endsWith('.mp4') ? 'video/mp4' : 'video/webm');
+
+    return await new Promise<string>((resolve, reject) => {
+      const uploadStream = bucket.openUploadStream(filename, {
+        contentType,
+        metadata: {
+          contentType,
+          slotId: metadata?.slotId || '',
+          altSlotId: metadata?.altSlotId || '',
+          durationSeconds: metadata?.durationSeconds || 0,
+          recordedAt: metadata?.recordedAt || new Date().toISOString(),
+          recordedBy: metadata?.recordedBy || '',
+          fileSizeBytes: buffer.length,
+          ...metadata,
+        },
+      } as any);
+
+      uploadStream.on('finish', () => {
+        console.log(`[MongoDB GridFS] Permanently stored ${buffer.length} bytes for "${filename}" (ID: ${uploadStream.id})`);
+        resolve(uploadStream.id.toString());
+      });
+
+      uploadStream.on('error', (err) => {
+        console.error(`[MongoDB GridFS] Upload stream error for "${filename}":`, err);
+        reject(err);
+      });
+
+      uploadStream.end(buffer);
+    });
+  } catch (err: any) {
+    console.error(`[MongoDB GridFS] Failed to save recording "${filename}":`, err.message);
+    return null;
+  }
+}
+
+export async function findRecordingInGridFS(filenameOrSlotId: string): Promise<any | null> {
+  const bucket = getRecordingsBucket();
+  if (!bucket) return null;
+  try {
+    const raw = String(filenameOrSlotId || '').trim();
+    if (!raw) return null;
+
+    const baseName = path.basename(raw);
+    const cleanSlot = raw
+      .replace(/^gd-recording-/, '')
+      .replace(/-\d+\.(webm|mp4|ogg|wav)$/, '');
+    const altSlot = cleanSlot.startsWith('slot-')
+      ? cleanSlot.replace('slot-', 'session-')
+      : cleanSlot.startsWith('session-')
+      ? cleanSlot.replace('session-', 'slot-')
+      : '';
+
+    const queries: any[] = [
+      { filename: baseName },
+      { filename: raw },
+      { 'metadata.slotId': raw },
+      { 'metadata.slotId': cleanSlot },
+      ...(altSlot ? [{ 'metadata.slotId': altSlot }] : []),
+      { 'metadata.altSlotId': raw },
+      { filename: new RegExp(cleanSlot.replace(/[^a-zA-Z0-9_-]/g, '_'), 'i') },
+    ];
+
+    for (const q of queries) {
+      const docs = await bucket.find(q).sort({ uploadDate: -1 }).limit(1).toArray();
+      if (docs && docs.length > 0) {
+        return docs[0];
+      }
+    }
+  } catch (err: any) {
+    console.warn('[MongoDB GridFS] Lookup error:', err.message);
+  }
+  return null;
+}
+
+export function openGridFSDownloadStream(id: any, options?: { start?: number; end?: number }) {
+  const bucket = getRecordingsBucket();
+  if (!bucket) return null;
+  try {
+    return bucket.openDownloadStream(id, options);
+  } catch (err: any) {
+    console.warn('[MongoDB GridFS] Download stream error:', err.message);
+    return null;
+  }
 }
 
 // =========================================================================

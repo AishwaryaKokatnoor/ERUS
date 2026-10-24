@@ -2158,9 +2158,9 @@ export function useGDRecorder({
         const currentSecs = durationCounterRef.current;
         setRecordingDurationSeconds(currentSecs);
 
-        // Background checkpoint upload at 3s and every 8s thereafter
+        // Background checkpoint upload at 5s and every 5s thereafter for maximum recording durability
         if (
-          (currentSecs === 3 || currentSecs % 8 === 0) &&
+          (currentSecs === 5 || currentSecs % 5 === 0) &&
           chunksRef.current.length > 0 &&
           slotIdRef.current &&
           !isCheckpointUploadingRef.current
@@ -2169,16 +2169,24 @@ export function useGDRecorder({
           const mime = mimeTypeRef.current || (recordVideo ? 'video/webm' : 'audio/webm');
           const snapshotBlob = new Blob(chunksRef.current, { type: mime });
           if (snapshotBlob.size > 0) {
-            uploadGDRecording(slotIdRef.current, snapshotBlob, currentSecs)
-              .then((res) => {
-                if (res?.recordingUrl) {
-                  setRecordingUrl(res.recordingUrl);
-                }
-              })
-              .catch(() => {})
-              .finally(() => {
-                isCheckpointUploadingRef.current = false;
-              });
+            const doCheckpointUpload = (retries = 2) => {
+              uploadGDRecording(slotIdRef.current, snapshotBlob, currentSecs)
+                .then((res) => {
+                  if (res?.recordingUrl) {
+                    setRecordingUrl(res.recordingUrl);
+                  }
+                })
+                .catch((err) => {
+                  console.warn('[GD Recorder] Checkpoint upload failed, retries left:', retries, err);
+                  if (retries > 0) {
+                    setTimeout(() => doCheckpointUpload(retries - 1), 3000);
+                  }
+                })
+                .finally(() => {
+                  isCheckpointUploadingRef.current = false;
+                });
+            };
+            doCheckpointUpload();
           } else {
             isCheckpointUploadingRef.current = false;
           }
@@ -2335,6 +2343,39 @@ export function useGDRecorder({
       startRecording();
     }
   }, [enabled, autoStartOnActive, isSessionActive, isRecording, startRecording]);
+
+  // Page Visibility: flush recording chunks to server when screen comes back
+  // This prevents loss of recording data if the screen locks or tab switches
+  useEffect(() => {
+    if (!enabled) return;
+    const handleRecorderVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        // If we are actively recording, do a checkpoint upload immediately
+        if (isRecording && !isCheckpointUploadingRef.current && chunksRef.current.length > 0 && slotIdRef.current) {
+          console.log('[GD Recorder] Screen visible again - flushing recording checkpoint...');
+          isCheckpointUploadingRef.current = true;
+          const mime = mimeTypeRef.current || (recordVideo ? 'video/webm' : 'audio/webm');
+          const snapshotBlob = new Blob(chunksRef.current, { type: mime });
+          if (snapshotBlob.size > 0) {
+            uploadGDRecording(slotIdRef.current, snapshotBlob, durationCounterRef.current || 0)
+              .then((res) => {
+                if (res?.recordingUrl) setRecordingUrl(res.recordingUrl);
+              })
+              .catch(() => {})
+              .finally(() => { isCheckpointUploadingRef.current = false; });
+          } else {
+            isCheckpointUploadingRef.current = false;
+          }
+        }
+        // Ensure AudioContext is running after screen unlock
+        if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+          audioContextRef.current.resume().catch(() => {});
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleRecorderVisibility);
+    return () => document.removeEventListener('visibilitychange', handleRecorderVisibility);
+  }, [enabled, isRecording, recordVideo]);
 
   // Clean up on unmount — also ensure any recorded chunks are uploaded to server before disposal
   useEffect(() => {

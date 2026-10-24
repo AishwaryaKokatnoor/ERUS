@@ -12,13 +12,16 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
 import { GoogleGenAI, Type } from '@google/genai';
-import { createServer as createViteServer } from 'vite';
 import {
   connectMongoDB,
   initMongoDBTablesAndSubTables,
   isMongoConnected,
   getMongoLastError,
   getActiveMongoUri,
+  getRecordingsBucket,
+  saveRecordingToGridFS,
+  findRecordingInGridFS,
+  openGridFSDownloadStream,
   CollegeModel,
   UserModel,
   GDSessionModel,
@@ -53,22 +56,157 @@ const RECORDINGS_DIR = path.join(process.cwd(), 'uploads', 'recordings');
 if (!fs.existsSync(RECORDINGS_DIR)) {
   fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
 }
-app.use(
-  '/uploads/recordings',
-  (req, res, next) => {
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    next();
-  },
-  express.static(RECORDINGS_DIR, {
-    setHeaders: (res, filePath) => {
-      if (filePath.endsWith('.webm')) {
-        res.setHeader('Content-Type', 'video/webm');
-      } else if (filePath.endsWith('.mp4')) {
-        res.setHeader('Content-Type', 'video/mp4');
+
+// Resilient recording streaming handler supporting byte ranges (HTTP 206 Partial Content)
+// and seamless fallback to MongoDB GridFS persistent storage
+async function streamRecordingResponse(req: express.Request, res: express.Response, rawTarget: string) {
+  const filename = path.basename(String(rawTarget || '').trim());
+  if (!filename) {
+    return res.status(400).json({ success: false, error: 'Recording identifier required' });
+  }
+
+  const diskPath = path.join(RECORDINGS_DIR, filename);
+
+  // 1. Check local disk
+  if (fs.existsSync(diskPath)) {
+    try {
+      const stat = fs.statSync(diskPath);
+      if (stat.size > 0) {
+        const range = req.headers.range;
+        const contentType = filename.endsWith('.mp4')
+          ? 'video/mp4'
+          : filename.endsWith('.ogg')
+          ? 'audio/ogg'
+          : filename.endsWith('.wav')
+          ? 'audio/wav'
+          : 'video/webm';
+
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+
+        if (range) {
+          const parts = range.replace(/bytes=/, '').split('-');
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+
+          if (start >= stat.size || end >= stat.size || start > end) {
+            res.setHeader('Content-Range', `bytes */${stat.size}`);
+            return res.status(416).end();
+          }
+
+          const chunkSize = end - start + 1;
+          res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+            'Content-Length': chunkSize,
+            'Content-Type': contentType,
+          });
+          fs.createReadStream(diskPath, { start, end }).pipe(res);
+        } else {
+          res.writeHead(200, {
+            'Content-Length': stat.size,
+            'Content-Type': contentType,
+          });
+          fs.createReadStream(diskPath).pipe(res);
+        }
+        return;
       }
-    },
-  })
+    } catch (diskErr: any) {
+      console.warn('[Disk Stream Error]:', diskErr.message);
+    }
+  }
+
+  // 2. Check MongoDB GridFS
+  if (isMongoConnected()) {
+    try {
+      const gridDoc = await findRecordingInGridFS(filename);
+      if (gridDoc && gridDoc.length > 0) {
+        const totalSize = gridDoc.length;
+        const contentType =
+          gridDoc.contentType ||
+          (gridDoc.filename?.endsWith('.mp4')
+            ? 'video/mp4'
+            : gridDoc.filename?.endsWith('.ogg')
+            ? 'audio/ogg'
+            : gridDoc.filename?.endsWith('.wav')
+            ? 'audio/wav'
+            : 'video/webm');
+        const range = req.headers.range;
+
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+
+        // Restore file to disk asynchronously for fast local caching
+        try {
+          const downloadForCache = openGridFSDownloadStream(gridDoc._id);
+          if (downloadForCache) {
+            const cacheWriteStream = fs.createWriteStream(diskPath);
+            downloadForCache.pipe(cacheWriteStream);
+            cacheWriteStream.on('error', () => {});
+          }
+        } catch {}
+
+        if (range) {
+          const parts = range.replace(/bytes=/, '').split('-');
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+
+          if (start >= totalSize || end >= totalSize || start > end) {
+            res.setHeader('Content-Range', `bytes */${totalSize}`);
+            return res.status(416).end();
+          }
+
+          const chunkSize = end - start + 1;
+          res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+            'Content-Length': chunkSize,
+            'Content-Type': contentType,
+          });
+          const stream = openGridFSDownloadStream(gridDoc._id, { start, end: end + 1 });
+          if (stream) {
+            stream.pipe(res);
+            return;
+          }
+        } else {
+          res.writeHead(200, {
+            'Content-Length': totalSize,
+            'Content-Type': contentType,
+          });
+          const stream = openGridFSDownloadStream(gridDoc._id);
+          if (stream) {
+            stream.pipe(res);
+            return;
+          }
+        }
+      }
+    } catch (gridErr: any) {
+      console.warn('[GridFS Stream Warn]:', gridErr.message);
+    }
+  }
+
+  // 3. Fallback: Never fall through to HTML index.html
+  res.status(404).json({
+    success: false,
+    error: 'Recorded video stream file is not present on server disk or database.',
+    filename,
+  });
+}
+
+// Intercept all /uploads/recordings/* requests so they NEVER fall through to HTML
+app.get('/uploads/recordings/:filename', (req, res) => {
+  streamRecordingResponse(req, res, req.params.filename);
+});
+
+// Dedicated streaming routes for direct access
+app.get(
+  [
+    '/api/recordings/stream/:filename',
+    '/api/sessions/:id/recording/stream',
+    '/api/college/slots/:id/recording/stream',
+  ],
+  (req, res) => {
+    const target = req.params.filename || req.params.id;
+    streamRecordingResponse(req, res, target);
+  }
 );
 
 // ==========================================
@@ -4587,7 +4725,7 @@ app.post(['/api/sessions/:id/recording', '/api/college/slots/:id/recording'], as
     }
     savePersistentState();
 
-    // 3. Persist to MongoDB
+    // 3. Persist to MongoDB (Metadata & GridFS Binary for Eternal Durability)
     if (isMongoConnected()) {
       try {
         const queryIds = altSlotId ? [slotId, altSlotId] : [slotId];
@@ -4602,8 +4740,33 @@ app.post(['/api/sessions/:id/recording', '/api/college/slots/:id/recording'], as
             },
           }
         );
+
+        // Store recording file stream in GridFS
+        const fileBuffer = Buffer.isBuffer(req.body) && req.body.length > 0
+          ? req.body
+          : await fs.promises.readFile(filePath);
+        
+        await saveRecordingToGridFS(filename, fileBuffer, {
+          slotId,
+          altSlotId,
+          durationSeconds,
+          recordedAt,
+          recordedBy,
+          contentType,
+        });
+
+        // Also persist under canonical slot filename for instant slotId-based streaming resolution
+        await saveRecordingToGridFS(`gd-recording-${safeSlotId}.${ext}`, fileBuffer, {
+          slotId,
+          altSlotId,
+          durationSeconds,
+          recordedAt,
+          recordedBy,
+          contentType,
+        });
+        console.log(`[MongoDB GridFS] Permanently saved ${fileSizeBytes} bytes for slot "${slotId}"`);
       } catch (mErr: any) {
-        console.warn('[MongoDB] Recording metadata save warning:', mErr.message);
+        console.warn('[MongoDB] Recording GridFS save warning:', mErr.message);
       }
     }
 
@@ -8646,38 +8809,38 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
 
         room.silenceTimerSeconds += 1;
 
-        // Broadcast current silence countdown tick to all peers (3s intervals up to 9s max)
+        // Broadcast current silence countdown tick to all peers (8s intervals up to 24s max)
         io.to(`room-${slotId}`).emit('silence-timer-tick', {
           silenceTimerSeconds: room.silenceTimerSeconds,
           silenceStage: room.silenceStage,
-          maxSilence: 9,
+          maxSilence: 24,
         });
 
-        // 3-Second Staged Turn Arbitration:
-        // Stage 0 -> 1: At 3s silence -> AI speaks telling the floor is open (Warning 1)
-        if (room.silenceStage === 0 && room.silenceTimerSeconds >= 3) {
+        // Generous Staged Turn Arbitration (eliminates premature interruptions & audio overlaps):
+        // Stage 0 -> 1: At 8s silence -> AI reminds floor is open (Warning 1)
+        if (room.silenceStage === 0 && room.silenceTimerSeconds >= 8) {
           room.silenceStage = 1;
           const openFloorText = 'The floor is open for discussion. Please feel free to share your thoughts.';
           broadcastFacilitatorSilencePrompt(room, openFloorText, 'silence_instruction_1');
         }
-        // Stage 1 -> 2: At 6s silence (3s after Stage 1) -> AI speaks telling floor is open again (Warning 2)
-        else if (room.silenceStage === 1 && room.silenceTimerSeconds >= 6) {
+        // Stage 1 -> 2: At 16s silence (8s after Stage 1) -> AI encourages quieter participants (Warning 2)
+        else if (room.silenceStage === 1 && room.silenceTimerSeconds >= 16) {
           room.silenceStage = 2;
           const momentumText = 'The floor is open. Let us keep the momentum going—anyone who has not spoken yet, please share your perspective on this topic.';
           broadcastFacilitatorSilencePrompt(room, momentumText, 'silence_instruction_2');
         }
-        // Stage 2 -> 3: At 9s silence (3s after Warning 2) -> AI specifically calls upon the candidate who has spoken least and asks a relevant question on the topic
-        else if (room.silenceStage === 2 && room.silenceTimerSeconds >= 9) {
+        // Stage 2 -> 3: At 24s silence (8s after Warning 2) -> AI specifically calls upon the candidate who has spoken least
+        else if (room.silenceStage === 2 && room.silenceTimerSeconds >= 24) {
           room.silenceStage = 3;
           room.lastDeadlockAt = Date.now();
           room.deadlockCount = (room.deadlockCount || 0) + 1;
           room.waitingForParticipantId = undefined;
           await triggerDeadlockIntervention(room);
         }
-        // Stage 3: Question was asked; give candidate 20 seconds to answer before cycling to next candidate
-        else if (room.silenceStage === 3 && room.silenceTimerSeconds >= 20) {
+        // Stage 3: Question was asked; give candidate 25 seconds to answer before cycling to next candidate
+        else if (room.silenceStage === 3 && room.silenceTimerSeconds >= 35) {
           room.silenceStage = 2;
-          room.silenceTimerSeconds = 8;
+          room.silenceTimerSeconds = 16;
         }
       } else {
         // Someone is actively speaking -> floor is active, reset silence and stage immediately!
@@ -8690,7 +8853,7 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
         io.to(`room-${slotId}`).emit('silence-timer-tick', {
           silenceTimerSeconds: 0,
           silenceStage: 0,
-          maxSilence: 9,
+          maxSilence: 24,
         });
       }
     }, 1000);
@@ -10500,6 +10663,7 @@ async function setupVite() {
   const isProd = process.env.NODE_ENV === 'production' || distIndexExists;
 
   if (!isProd) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true, allowedHosts: true },
       appType: 'spa',

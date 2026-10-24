@@ -327,6 +327,12 @@ class RoomVoiceEngine {
       if (onEnd) onEnd();
       return;
     }
+    // Deduplicate: never speak the exact same normalized text twice within 8 seconds
+    if (!force && normalized === this.lastSpokenNormalized && (now - this.lastSpokenAt < 8000)) {
+      console.log('[AI Facilitator Voice] Deduplication guard: suppressing recently spoken text.');
+      if (onEnd) onEnd();
+      return;
+    }
     this.lastSpokenNormalized = normalized;
     this.lastSpokenAt = now;
 
@@ -694,8 +700,8 @@ class RoomVoiceEngine {
     if (!this.isCurrentlySpeaking) {
       return false;
     }
-    // Safety check: if more than 20 seconds have elapsed since start of speech, it has naturally finished
-    if (this.speechStartedAt && Date.now() - this.speechStartedAt > 20000) {
+    // Safety check: if more than 60 seconds have elapsed since start of speech, it has naturally finished
+    if (this.speechStartedAt && Date.now() - this.speechStartedAt > 60000) {
       this.isCurrentlySpeaking = false;
       if (typeof window !== 'undefined') {
         (window as any).__erusIsAiSpeaking = false;

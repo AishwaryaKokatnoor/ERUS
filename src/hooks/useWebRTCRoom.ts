@@ -121,6 +121,7 @@ export function useWebRTCRoom({
   const [isAudioAutoplayBlocked, setIsAudioAutoplayBlocked] = useState(false);
   const [localAudioStream, setLocalAudioStream] = useState<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [connectionQuality, setConnectionQuality] = useState<'connected' | 'reconnecting' | 'offline'>('connected');
 
   const socketRef = useRef<Socket | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -493,8 +494,12 @@ export function useWebRTCRoom({
   // 3. Create or get RTCPeerConnection for a specific peer
   const getOrCreatePeerConnection = useCallback((peerSocketId: string): RTCPeerConnection => {
     let pc = peerConnectionsRef.current.get(peerSocketId);
-    if (pc && pc.signalingState !== 'closed') {
+    if (pc && pc.signalingState !== 'closed' && pc.connectionState !== 'failed' && pc.connectionState !== 'closed') {
       return pc;
+    }
+    if (pc) {
+      try { pc.close(); } catch {}
+      peerConnectionsRef.current.delete(peerSocketId);
     }
 
     pc = new RTCPeerConnection(ICE_SERVERS);
@@ -604,10 +609,17 @@ export function useWebRTCRoom({
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
+          echoCancellation: { ideal: true },
+          noiseSuppression: { ideal: true },
+          autoGainControl: { ideal: true },
+          // Native Chromium/Google DSP acoustic echo cancellation extensions
+          googEchoCancellation: { ideal: true },
+          googAutoGainControl: { ideal: true },
+          googNoiseSuppression: { ideal: true },
+          googHighpassFilter: { ideal: true },
+          sampleRate: 48000,
+          channelCount: 1,
+        } as any,
         video: false,
       });
 
@@ -679,10 +691,20 @@ export function useWebRTCRoom({
 
           // Suppress acoustic feedback when AI voice is playing over speakers
           const isAiSpeakingNow = Boolean(
-            typeof window !== 'undefined' && ((window as any).__erusIsAiSpeaking || (Date.now() - ((window as any).__erusLastAiSpeechTime || 0) < 2200))
+            typeof window !== 'undefined' && ((window as any).__erusIsAiSpeaking || (Date.now() - ((window as any).__erusLastAiSpeechTime || 0) < 600))
           );
           const effectiveIsSpeaking = isAiSpeakingNow ? false : isSpeakingLiveRef.current;
           const effectiveVol = isAiSpeakingNow ? 0 : normVol;
+
+          // Dynamically duck outgoing audio tracks during AI speech to eliminate speaker-to-mic echo feedback
+          if (localStreamRef.current) {
+            const shouldBeEnabled = !isMicMutedRef.current && !isAiSpeakingNow;
+            localStreamRef.current.getAudioTracks().forEach((track) => {
+              if (track.enabled !== shouldBeEnabled) {
+                track.enabled = shouldBeEnabled;
+              }
+            });
+          }
 
           // Broadcast volume level for UI visualizers without falsely declaring speaking turns from ambient noise
           const timeSinceEmit = now - lastSpeakingEmitTimestampRef.current;
@@ -710,6 +732,39 @@ export function useWebRTCRoom({
       return null;
     }
   }, [slotId]);
+
+  // Global listener for AI voice events: instantly mute outgoing WebRTC tracks on start,
+  // then restore 500ms after AI finishes speaking to let room reverb die out
+  useEffect(() => {
+    let unblockTimer: any = null;
+    const handleVoiceStart = () => {
+      if (unblockTimer) clearTimeout(unblockTimer);
+      if (localStreamRef.current) {
+        localStreamRef.current.getAudioTracks().forEach((t) => {
+          t.enabled = false;
+        });
+      }
+    };
+
+    const handleVoiceEnd = () => {
+      if (unblockTimer) clearTimeout(unblockTimer);
+      unblockTimer = setTimeout(() => {
+        if (localStreamRef.current && !isMicMutedRef.current) {
+          localStreamRef.current.getAudioTracks().forEach((t) => {
+            t.enabled = true;
+          });
+        }
+      }, 500);
+    };
+
+    window.addEventListener('erus-ai-voice-start', handleVoiceStart);
+    window.addEventListener('erus-ai-voice-end', handleVoiceEnd);
+    return () => {
+      if (unblockTimer) clearTimeout(unblockTimer);
+      window.removeEventListener('erus-ai-voice-start', handleVoiceStart);
+      window.removeEventListener('erus-ai-voice-end', handleVoiceEnd);
+    };
+  }, []);
 
   const initLocalMicrophoneRef = useRef(initLocalMicrophone);
   initLocalMicrophoneRef.current = initLocalMicrophone;
@@ -744,17 +799,26 @@ export function useWebRTCRoom({
   // 5. Connect to Socket.IO Server & Room Signaling
   useEffect(() => {
     let active = true;
+    let rejoinDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
     // Connect socket (relative origin works seamlessly on both localhost and Railway)
+    // Robust settings: unlimited reconnection, exponential backoff, long timeout for unstable mobile connections
     const socket = io(window.location.origin, {
       transports: ['polling', 'websocket'],
-      reconnectionAttempts: 15,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 8000,
+      timeout: 20000,
+      autoConnect: true,
+      forceNew: false,
     });
     socketRef.current = socket;
 
     socket.on('connect', async () => {
       if (!active) return;
       setConnected(true);
+      setConnectionQuality('connected');
 
       // Acquire microphone (only for student participants - faculty/observer is pure listener)
       const isFacultyUser = currentUserRef.current?.role === 'faculty' || currentUserRef.current?.role === 'college_admin' || currentUserRef.current?.role === 'super_admin';
@@ -778,6 +842,116 @@ export function useWebRTCRoom({
         },
       });
     });
+
+    socket.on('disconnect', (reason) => {
+      if (!active) return;
+      setConnected(false);
+      setConnectionQuality('reconnecting');
+      console.warn('[WebRTC Socket] Disconnected:', reason);
+      // On transport close, socket.io will auto-reconnect; no manual action needed.
+      // For server-side forced disconnects, manual reconnect is needed:
+      if (reason === 'io server disconnect' || reason === 'transport close') {
+        setTimeout(() => {
+          if (active && socketRef.current && !socketRef.current.connected) {
+            socketRef.current.connect();
+          }
+        }, 1500);
+      }
+    });
+
+    socket.on('reconnect', (attemptNumber) => {
+      if (!active) return;
+      setConnected(true);
+      setConnectionQuality('connected');
+      console.log('[WebRTC Socket] Reconnected after', attemptNumber, 'attempts — rejoining room...');
+      // Re-join the room after reconnect so the server recognizes us again
+      const isFacultyUser = currentUserRef.current?.role === 'faculty' || currentUserRef.current?.role === 'college_admin' || currentUserRef.current?.role === 'super_admin';
+      socket.emit('join-gd-room', {
+        slotId,
+        topic: topicRef.current,
+        user: {
+          id: currentUserRef.current?.id || `anon-${socket.id}`,
+          name: currentUserRef.current?.name || 'Student Participant',
+          avatar: currentUserRef.current?.avatar || '',
+          role: currentUserRef.current?.role || 'student',
+          college: currentUserRef.current?.college || 'Campus Participant',
+          seatNumber: currentUserRef.current && 'seatNumber' in currentUserRef.current ? (currentUserRef.current as any).seatNumber : undefined,
+          micActive: !isMicMutedRef.current,
+          cameraActive: Boolean(isCameraOnRef.current && videoStreamRef.current),
+        },
+      });
+    });
+
+    socket.on('reconnect_attempt', (attempt) => {
+      setConnectionQuality('reconnecting');
+      console.log('[WebRTC Socket] Reconnect attempt', attempt);
+    });
+
+    socket.on('connect_error', (err) => {
+      setConnectionQuality('reconnecting');
+      console.warn('[WebRTC Socket] Connect error (will auto-retry):', err.message);
+    });
+
+    // Handle network coming back online after disconnection
+    const handleOnline = () => {
+      if (!active) return;
+      setConnectionQuality('reconnecting');
+      console.log('[WebRTC] Network back online — ensuring socket is connected...');
+      if (socketRef.current && !socketRef.current.connected) {
+        socketRef.current.connect();
+      }
+    };
+
+    const handleOffline = () => {
+      if (!active) return;
+      setConnectionQuality('offline');
+      console.warn('[WebRTC] Network went offline.');
+    };
+
+    // Page visibility: when tab/screen comes back, ensure we are still connected
+    const handleVisibilityChange = () => {
+      if (!active) return;
+      if (document.visibilityState === 'visible') {
+        console.log('[WebRTC] Tab/screen visible again — checking connection...');
+        if (socketRef.current && !socketRef.current.connected) {
+          if (rejoinDebounceTimer) clearTimeout(rejoinDebounceTimer);
+          rejoinDebounceTimer = setTimeout(() => {
+            if (active && socketRef.current && !socketRef.current.connected) {
+              socketRef.current.connect();
+            }
+          }, 800);
+        } else if (socketRef.current && socketRef.current.connected) {
+          // Re-announce presence in case server dropped us from the room
+          if (rejoinDebounceTimer) clearTimeout(rejoinDebounceTimer);
+          rejoinDebounceTimer = setTimeout(() => {
+            if (active && socketRef.current?.connected) {
+              socket.emit('join-gd-room', {
+                slotId,
+                topic: topicRef.current,
+                user: {
+                  id: currentUserRef.current?.id || `anon-${socket.id}`,
+                  name: currentUserRef.current?.name || 'Student Participant',
+                  avatar: currentUserRef.current?.avatar || '',
+                  role: currentUserRef.current?.role || 'student',
+                  college: currentUserRef.current?.college || 'Campus Participant',
+                  seatNumber: currentUserRef.current && 'seatNumber' in currentUserRef.current ? (currentUserRef.current as any).seatNumber : undefined,
+                  micActive: !isMicMutedRef.current,
+                  cameraActive: Boolean(isCameraOnRef.current && videoStreamRef.current),
+                },
+              });
+            }
+          }, 800);
+        }
+        // Resume AudioContext if suspended (common after screen lock)
+        if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+          audioContextRef.current.resume().catch(() => {});
+        }
+      }
+    };
+
+    window.addEventListener('online', handleOnline, { passive: true });
+    window.addEventListener('offline', handleOffline, { passive: true });
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     // Received initial room state
     socket.on('gd-room-joined', async ({
@@ -1178,14 +1352,13 @@ export function useWebRTCRoom({
       }
     });
 
-    socket.on('disconnect', () => {
-      if (!active) return;
-      setConnected(false);
-    });
-
     // Cleanup on unmount
     return () => {
       active = false;
+      if (rejoinDebounceTimer) clearTimeout(rejoinDebounceTimer);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       if (speakingStateTimeoutRef.current) clearTimeout(speakingStateTimeoutRef.current);
 
@@ -1446,6 +1619,7 @@ export function useWebRTCRoom({
     floorSpeakerId,
     isAudioAutoplayBlocked,
     resumeAudioPlayback,
+    connectionQuality,
     error,
   };
 }

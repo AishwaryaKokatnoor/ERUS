@@ -317,6 +317,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     floorSpeakerId: rtcFloorSpeakerId,
     isAudioAutoplayBlocked: rtcIsAudioAutoplayBlocked,
     resumeAudioPlayback: rtcResumeAudioPlayback,
+    connectionQuality: rtcConnectionQuality,
   } = useWebRTCRoom({
     slotId: session.id || session.slotId || 'slot-1',
     topic: session.topic,
@@ -375,10 +376,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         }),
       }));
     },
-    onSessionEnded: () => {
+    onSessionEnded: async () => {
       // Synchronized GD termination: faculty has completed the GD, so student view automatically finishes & evaluates
       if (gdRecorderRef.current?.isRecording) {
-        gdRecorderRef.current.stopAndUploadRecording(session.id || session.slotId || 'slot-1').catch(() => {});
+        setIsFinalizingRecording(true);
+        try {
+          await gdRecorderRef.current.stopAndUploadRecording(session.id || session.slotId || 'slot-1');
+        } catch (err) {
+          console.warn('[GD Room] Recording finalize on session-ended error:', err);
+        } finally {
+          setIsFinalizingRecording(false);
+        }
       }
       onFinishSession();
     },
@@ -1262,13 +1270,14 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       setSession((prev) => ({ ...prev, isFacilitatorSpeaking: false }));
       notifyFacilitatorSpeechEndedRef.current();
 
-      // Delay 1000ms after AI finishes speaking to prevent acoustic room echo bleed
+      // Delay 2800ms after AI finishes speaking to prevent acoustic room echo bleed
+      // (was 1000ms - increased to cover longer room reverb and speaker latency)
       setTimeout(() => {
         aiVoicePausedMicRef.current = false;
         committedResultIndexRef.current = -1;
         liveTranscriptRef.current = '';
         setLiveSpeechTranscript('');
-      }, 1000);
+      }, 2800);
     };
 
     window.addEventListener('erus-ai-voice-start', handleAiVoiceStart);
@@ -1279,6 +1288,129 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       if (aiVoiceResumeTimerRef.current) clearTimeout(aiVoiceResumeTimerRef.current);
     };
   }, []);
+
+
+  // === ACTIVE ROOM GUARD: Prevent background route kickers while user is in GD Room ===
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).__erusInActiveRoom = true;
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        delete (window as any).__erusInActiveRoom;
+      }
+    };
+  }, []);
+
+  // === SCREEN WAKE LOCK: Prevent screen from turning off during active GD session ===
+  const wakeLockRef = useRef<any>(null);
+  useEffect(() => {
+    if (!isSessionActive) return;
+    let released = false;
+
+    // Silent keepalive audio loop ensures mobile browsers (Android/iOS battery-savers) don't sleep
+    let keepAliveAudio: HTMLAudioElement | null = null;
+    try {
+      keepAliveAudio = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
+      keepAliveAudio.loop = true;
+      keepAliveAudio.volume = 0.001;
+      keepAliveAudio.play().catch(() => {});
+    } catch {}
+
+    const acquireWakeLock = async () => {
+      if (released) return;
+      try {
+        if ('wakeLock' in navigator) {
+          const lock = await (navigator as any).wakeLock.request('screen');
+          wakeLockRef.current = lock;
+          lock.addEventListener('release', () => {
+            console.log('[Wake Lock] Screen wake lock released.');
+            wakeLockRef.current = null;
+            // Re-acquire if the session is still active (e.g., released after tab hide)
+            if (!released && document.visibilityState === 'visible') {
+              setTimeout(acquireWakeLock, 1000);
+            }
+          });
+          console.log('[Wake Lock] Screen wake lock acquired - screen will not turn off during GD.');
+        }
+      } catch (err: any) {
+        console.warn('[Wake Lock] Could not acquire wake lock:', err.message);
+      }
+    };
+
+    acquireWakeLock();
+
+    // Re-acquire wake lock on tab visibility change or user interaction
+    const handleWakeLockVisibility = () => {
+      if (document.visibilityState === 'visible' && !wakeLockRef.current && !released) {
+        acquireWakeLock();
+      }
+    };
+    const handleUserInteraction = () => {
+      if (!wakeLockRef.current && !released && document.visibilityState === 'visible') {
+        acquireWakeLock();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleWakeLockVisibility);
+    window.addEventListener('click', handleUserInteraction, { passive: true });
+    window.addEventListener('touchstart', handleUserInteraction, { passive: true });
+
+    return () => {
+      released = true;
+      document.removeEventListener('visibilitychange', handleWakeLockVisibility);
+      window.removeEventListener('click', handleUserInteraction);
+      window.removeEventListener('touchstart', handleUserInteraction);
+      if (keepAliveAudio) {
+        try {
+          keepAliveAudio.pause();
+          keepAliveAudio.src = '';
+        } catch {}
+        keepAliveAudio = null;
+      }
+      if (wakeLockRef.current) {
+        try {
+          wakeLockRef.current.release();
+        } catch {}
+        wakeLockRef.current = null;
+      }
+    };
+  }, [isSessionActive]);
+
+  // === SCREEN VISIBILITY RECOVERY: Resume mic & AudioContext when screen comes back ===
+  useEffect(() => {
+    if (isFaculty) return;
+    const handleRoomVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // Resume microphone and speech recognition after screen-off/tab-switch
+        setTimeout(() => {
+          if (isListeningMicRef.current && !isRecognitionRunningRef.current) {
+            if (typeof (window as any).__startErusSpeechRecognition === 'function') {
+              (window as any).__startErusSpeechRecognition();
+            }
+          }
+          // Clear any AI voice state that got stuck while screen was off
+          if (!(window as any).__erusIsAiSpeaking) {
+            aiVoicePausedMicRef.current = false;
+          }
+        }, 500);
+      }
+    };
+    document.addEventListener('visibilitychange', handleRoomVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleRoomVisibilityChange);
+  }, [isFaculty]);
+
+  // === BEFOREUNLOAD GUARD: Warn user before accidentally exiting GD room ===
+  useEffect(() => {
+    if (!isSessionActive) return;
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = 'Are you sure you want to leave the GD session? Your recording may be lost.';
+      return e.returnValue;
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isSessionActive]);
 
 
 
@@ -1629,10 +1761,19 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             return;
           }
 
+          if (event.error === 'network') {
+            // Unstable internet / network fluctuation: retry with backoff instead of rapid loop
+            console.warn('[Speech Recognition] Network latency detected; retrying in 1.8s...');
+            if (isListeningMicRef.current) {
+              if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
+              restartRecognitionTimerRef.current = setTimeout(startRecognitionInstance, 1800);
+            }
+            return;
+          }
+
           if (
             event.error === 'aborted' ||
-            event.error === 'audio-capture' ||
-            event.error === 'network'
+            event.error === 'audio-capture'
           ) {
             // Transient events: restart recognition cleanly
             if (isListeningMicRef.current) {
@@ -2487,7 +2628,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       }
     }
 
-    // 2. 3-Second Staged Turn Arbitration Watchdog (3s Warning 1, 6s Warning 2, 9s Targeted Candidate Callout)
+    // 2. Generous Staged Turn Arbitration Watchdog (8s Warning 1, 16s Warning 2, 24s Targeted Candidate Callout)
     const currentSilence = Math.max(localSilenceSeconds, rtcSilenceTimer, session.silenceTimerSeconds);
     if (
       !session.isFacilitatorSpeaking &&
@@ -2498,21 +2639,21 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       !liveSpeechTranscript
     ) {
       if (!isSocketConnected || !hasRealStudentPeers) {
-        if (clientSilenceStageRef.current === 0 && currentSilence >= 3) {
+        if (clientSilenceStageRef.current === 0 && currentSilence >= 8) {
           clientSilenceStageRef.current = 1;
           speakFacilitator(
             'The floor is open for discussion. Please feel free to share your thoughts.',
             'silence_instruction_1',
             'moderation'
           );
-        } else if (clientSilenceStageRef.current === 1 && currentSilence >= 6) {
+        } else if (clientSilenceStageRef.current === 1 && currentSilence >= 16) {
           clientSilenceStageRef.current = 2;
           speakFacilitator(
             'The floor is open. Let us keep the momentum going—anyone who has not spoken yet, please share your perspective on this topic.',
             'silence_instruction_2',
             'moderation'
           );
-        } else if (clientSilenceStageRef.current === 2 && currentSilence >= 9 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 3000) {
+        } else if (clientSilenceStageRef.current === 2 && currentSilence >= 24 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 4000) {
           clientSilenceStageRef.current = 3;
           lastFacilitatorInterventionTimeRef.current = Date.now();
           handleFacilitatorTargetedProbe();
@@ -2630,6 +2771,30 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                 </span>
               )}
 
+              {/* Connection Quality Status Pill */}
+              <span className={`px-3 py-1 rounded-full text-xs font-semibold border flex items-center gap-1.5 shadow-2xs ${
+                rtcConnectionQuality === 'connected'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800'
+                  : rtcConnectionQuality === 'reconnecting'
+                  ? 'bg-amber-50 dark:bg-amber-950/70 text-amber-800 dark:text-amber-200 border-amber-200 dark:border-amber-800 animate-pulse'
+                  : 'bg-rose-50 dark:bg-rose-950/70 text-rose-800 dark:text-rose-200 border-rose-200 dark:border-rose-800'
+              }`}>
+                <span className={`w-2 h-2 rounded-full inline-block ${
+                  rtcConnectionQuality === 'connected'
+                    ? 'bg-emerald-500 animate-pulse'
+                    : rtcConnectionQuality === 'reconnecting'
+                    ? 'bg-amber-500'
+                    : 'bg-rose-500'
+                }`} />
+                <span>
+                  {rtcConnectionQuality === 'connected'
+                    ? 'Online (Live Mesh)'
+                    : rtcConnectionQuality === 'reconnecting'
+                    ? 'Reconnecting...'
+                    : 'Connection Offline'}
+                </span>
+              </span>
+
               {/* Allotted Faculty Evaluator */}
               <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 dark:bg-amber-950/70 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800 flex items-center gap-1.5 shadow-2xs">
                 <GraduationCap className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
@@ -2638,15 +2803,15 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
 
               {/* Live Video Recording Status Indicator (Recorded for Faculty/Admin portal) */}
               {gdRecorder.isRecording ? (
-                <span className="px-3 py-1 rounded-full text-xs font-bold bg-rose-50 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 flex items-center gap-1.5 shadow-2xs animate-pulse" title="GD discussion video grid is actively being recorded and stored to ERUS server for Faculty Evaluation">
+                <span className="px-3 py-1 rounded-full text-xs font-bold bg-rose-50 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 flex items-center gap-1.5 shadow-2xs animate-pulse" title="GD discussion video grid is actively being recorded and stored permanently to MongoDB GridFS & ERUS server">
                   <span className="w-2 h-2 rounded-full bg-rose-600 animate-ping inline-block" />
                   <span className="font-mono">🔴 REC {gdRecorder.formattedDuration}</span>
-                  <span className="text-[10px] text-slate-500 dark:text-slate-400 font-sans hidden sm:inline">(Auto-recording for Faculty)</span>
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-sans hidden sm:inline font-bold">✓ Cloud Synced</span>
                 </span>
               ) : (gdRecorder.recordingUrl || session.recordingUrl) ? (
                 <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5 shadow-2xs">
                   <Video className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                  <span>Discussion Video Saved</span>
+                  <span>Discussion Video Saved Permanently</span>
                   <button
                     onClick={() => setShowVideoModal(true)}
                     className="underline text-[10px] ml-1 text-emerald-800 dark:text-emerald-200 hover:text-emerald-950 cursor-pointer font-bold"
@@ -2783,13 +2948,13 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
             ) : isSessionActive ? (() => {
               const displaySilenceSeconds = Math.max(localSilenceSeconds, rtcSilenceTimer, session.silenceTimerSeconds || 0);
               return (
-              /* 3-Second Turn Arbitration Watchdog (3s Instruction 1, 6s Instruction 2, 9s Targeted Candidate Callout) */
+              /* Generous Staged Turn Arbitration Watchdog (8s Prompt 1, 16s Prompt 2, 24s Targeted Candidate Callout) */
               <div className="mt-3 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 flex-wrap">
                 <div className="flex items-center gap-2">
                   <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                    displaySilenceSeconds >= 6
+                    displaySilenceSeconds >= 16
                       ? 'bg-rose-100 dark:bg-rose-950/80 text-rose-600 dark:text-rose-400 animate-bounce'
-                      : displaySilenceSeconds >= 3
+                      : displaySilenceSeconds >= 8
                       ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-600 dark:text-amber-400'
                       : 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-400'
                   }`}>
@@ -2797,23 +2962,23 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   </div>
                   <div>
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-bold text-slate-900 dark:text-white">Discussion Flow & Silence Monitor</span>
+                      <span className="text-xs font-bold text-slate-900 dark:text-white">AI Facilitator Floor Monitor</span>
                       <span className={`font-mono text-xs font-bold px-1.5 py-0.5 rounded ${
-                        displaySilenceSeconds >= 6
+                        displaySilenceSeconds >= 16
                           ? 'bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 animate-pulse'
-                          : displaySilenceSeconds >= 3
+                          : displaySilenceSeconds >= 8
                           ? 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300'
                           : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
                       }`}>
-                        {displaySilenceSeconds > 0 ? `${displaySilenceSeconds}s / 9s` : 'Active Floor'}
+                        {displaySilenceSeconds > 0 ? `${displaySilenceSeconds}s / 24s` : 'Active Floor'}
                       </span>
                     </div>
                     <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                      {displaySilenceSeconds >= 6
-                        ? `Silence detected — AI facilitating participant in ${Math.max(0, 9 - displaySilenceSeconds)}s`
-                        : displaySilenceSeconds >= 3
-                        ? 'Floor is open — share your perspective or AI facilitator will invite next speaker.'
-                        : 'Floor open — participants can contribute freely.'}
+                      {displaySilenceSeconds >= 16
+                        ? `Floor quiet — AI Facilitator inviting quiet participant in ${Math.max(0, 24 - displaySilenceSeconds)}s`
+                        : displaySilenceSeconds >= 8
+                        ? 'Natural pause — floor is open for candidates to present points.'
+                        : 'Floor open — candidates can contribute naturally without interruption.'}
                     </p>
                   </div>
                 </div>
@@ -2822,17 +2987,17 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   <div className="w-full bg-slate-200 dark:bg-slate-800 rounded-full h-2 overflow-hidden">
                     <div 
                       className={`h-full transition-all duration-1000 ${
-                        displaySilenceSeconds >= 6 
+                        displaySilenceSeconds >= 16 
                           ? 'bg-rose-500 animate-pulse' 
-                          : displaySilenceSeconds >= 3 
+                          : displaySilenceSeconds >= 8 
                           ? 'bg-amber-500' 
                           : 'bg-emerald-500'
                       }`}
-                      style={{ width: `${Math.min(100, (displaySilenceSeconds / 9) * 100)}%` }}
+                      style={{ width: `${Math.min(100, (displaySilenceSeconds / 24) * 100)}%` }}
                     />
                   </div>
                   <span className="text-[11px] font-mono text-slate-500 font-semibold w-8 text-right">
-                    {Math.max(0, 9 - displaySilenceSeconds)}s
+                    {Math.max(0, 24 - displaySilenceSeconds)}s
                   </span>
                 </div>
               </div>
