@@ -200,7 +200,7 @@ export function useWebRTCRoom({
       audioEl = document.createElement('audio');
       audioEl.id = `remote-audio-${peerSocketId}`;
       audioEl.autoplay = true;
-      audioEl.volume = 0.85;
+      audioEl.volume = 1.0;
       audioEl.muted = false;
       audioEl.style.position = 'fixed';
       audioEl.style.width = '1px';
@@ -626,21 +626,24 @@ export function useWebRTCRoom({
         throw new Error('Microphone access is not supported by your browser.');
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          // Native Chromium/Google DSP acoustic echo cancellation extensions
-          googEchoCancellation: true,
-          googAutoGainControl: true,
-          googNoiseSuppression: true,
-          googHighpassFilter: true,
-          sampleRate: 48000,
-          channelCount: 1,
-        } as any,
-        video: false,
-      });
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            googEchoCancellation: true,
+            googAutoGainControl: true,
+            googNoiseSuppression: true,
+            googHighpassFilter: true,
+          } as any,
+          video: false,
+        });
+      } catch (e) {
+        console.warn('[Microphone] Retrying with generic audio constraints for device compatibility:', e);
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      }
 
       localStreamRef.current = stream;
       setLocalAudioStream(stream);
@@ -1146,14 +1149,14 @@ export function useWebRTCRoom({
     socket.on('peer-speaking-updated', ({ socketId: peerSockId, isSpeaking, micActive, cameraActive, volumeLevel: peerVol }) => {
       if (!active) return;
       const audioEl = audioElementsRef.current.get(peerSockId);
+      const isMuted = micActive === false;
       if (audioEl) {
-        audioEl.muted = false;
-        // Smart Voice Gating: actively speaking peer gets clean 0.85 volume; silent peer background room noise is ducked to 0.05
-        audioEl.volume = isSpeaking ? 0.85 : 0.05;
-        if (isSpeaking) {
+        audioEl.muted = isMuted;
+        audioEl.volume = isMuted ? 0 : 1.0;
+        if (!isMuted) {
           audioEl.play().catch(() => {});
         }
-      } else if (isSpeaking || micActive) {
+      } else if (!isMuted) {
         const pc = peerConnectionsRef.current.get(peerSockId);
         if (pc) {
           updatePeerStreamFromReceiversRef.current(peerSockId, pc);
