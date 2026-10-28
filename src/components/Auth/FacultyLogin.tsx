@@ -12,7 +12,7 @@ import {
   GraduationCap
 } from 'lucide-react';
 import { FacultyUser } from '../../types/auth';
-import { loginUser } from '../../utils/authApi';
+import { loginUser, isValidPortalPassword, PASSWORD_REQUIREMENT_MSG } from '../../utils/authApi';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
 
 interface FacultyLoginProps {
@@ -45,6 +45,11 @@ export const FacultyLogin: React.FC<FacultyLoginProps> = ({
 
     if (!password) {
       setError('Please enter your faculty account password.');
+      return;
+    }
+
+    if (!isValidPortalPassword(password)) {
+      setError(PASSWORD_REQUIREMENT_MSG);
       return;
     }
 
@@ -164,6 +169,9 @@ export const FacultyLogin: React.FC<FacultyLoginProps> = ({
               {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
             </button>
           </div>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5">
+            Must be at least 8 characters with uppercase, lowercase, numbers, and special characters.
+          </p>
         </div>
 
         <button

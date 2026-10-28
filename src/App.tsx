@@ -109,6 +109,13 @@ function GDAppContent() {
     return collegeFiltered;
   }, [availableSlots, currentUser, userCollegeCode]);
 
+  const studentAvailableSlots = useMemo(() => {
+    if (currentUser?.role === 'student') {
+      return availableSlots.filter((s) => isSlotAssignedToFaculty(s) || isStudentAssignedToSlot(s, currentUser));
+    }
+    return availableSlots;
+  }, [availableSlots, currentUser]);
+
   const studentParticipatedSlots = useMemo(() => {
     const collegeFiltered = userCollegeCode
       ? availableSlots.filter((s) => {
@@ -125,8 +132,16 @@ function GDAppContent() {
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
   const [initialReportTab, setInitialReportTab] = useState<'single' | 'comparison' | 'journey'>('single');
-  const { theme } = useTheme();
   const isFinishingSessionRef = useRef(false);
+
+  const availableSlotsRef = useRef(availableSlots);
+  availableSlotsRef.current = availableSlots;
+  const studentBookedSlotsByTopicRef = useRef(studentBookedSlotsByTopic);
+  studentBookedSlotsByTopicRef.current = studentBookedSlotsByTopic;
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const currentTabRef = useRef(currentTab);
+  currentTabRef.current = currentTab;
 
   // Guard: Role-based navigation restrictions & Completed Slot Room Lock
   useEffect(() => {
@@ -284,9 +299,9 @@ function GDAppContent() {
                   ps.assignedFacultyName !== ns.assignedFacultyName ||
                   ps.assignedFacultyId !== ns.assignedFacultyId ||
                   ps.activityType !== ns.activityType ||
-                  ps.slotTiming !== ns.slotTiming ||
-                  ps.recordingUrl !== ns.recordingUrl ||
-                  ps.enrolledCount !== ns.enrolledCount ||
+                  (ps.slotTiming || '') !== (ns.slotTiming || '') ||
+                  (ps.recordingUrl || '') !== (ns.recordingUrl || '') ||
+                  (ps.enrolledCount || 0) !== (ns.enrolledCount || 0) ||
                   (ps.students?.length || 0) !== (ns.students?.length || 0) ||
                   (ps.facultyLiveNotes?.length || 0) !== (ns.facultyLiveNotes?.length || 0)
                 );
@@ -359,7 +374,7 @@ function GDAppContent() {
     // Poll periodically for live status updates
     const timer = setInterval(syncSlots, 4000);
     return () => clearInterval(timer);
-  }, [currentUser, currentTab]);
+  }, [currentUser]);
 
   // Synchronized session conclusion and slot updates across student client via WebSocket
   useEffect(() => {
@@ -371,13 +386,13 @@ function GDAppContent() {
       if (!slotId) return;
       if (isSlotCompletedLocally(slotId)) return;
 
-      const bookedSlotIds = Object.values(studentBookedSlotsByTopic);
-      const isMySession = session?.id === slotId || bookedSlotIds.includes(slotId) || currentTab === 'room';
+      const bookedSlotIds = Object.values(studentBookedSlotsByTopicRef.current);
+      const isMySession = sessionRef.current?.id === slotId || bookedSlotIds.includes(slotId) || currentTabRef.current === 'room';
       if (!isMySession && currentUser.role === 'student') return;
 
-      const targetSlot = availableSlots.find((slot) => slot.id === slotId);
+      const targetSlot = availableSlotsRef.current.find((slot) => slot.id === slotId);
       if (targetSlot?.status === 'completed') return;
-      const alreadyActive = session?.id === slotId && session.status === 'active';
+      const alreadyActive = sessionRef.current?.id === slotId && sessionRef.current.status === 'active';
 
       setAvailableSlots((prev) =>
         prev.map((slot) => slot.id === slotId ? { ...slot, status: 'active' } : slot)
@@ -396,7 +411,7 @@ function GDAppContent() {
         setElapsedSeconds(0);
         setTranscripts([]);
       }
-      if (currentUser.role === 'student' || currentTab === 'room') {
+      if (currentUser.role === 'student' || currentTabRef.current === 'room') {
         setCurrentTab('room');
       }
     };
@@ -406,7 +421,7 @@ function GDAppContent() {
         setAvailableSlots((prev) =>
           prev.map((s) => (s.id === data.slotId ? { ...s, status: 'completed' } : s))
         );
-        if (session?.id === data.slotId) {
+        if (sessionRef.current?.id === data.slotId) {
           setSession((prev) => ({ ...prev, status: 'completed' }));
           if (Array.isArray(data?.reports)) {
             const myReport = data.reports.find(
@@ -420,7 +435,7 @@ function GDAppContent() {
               addReportToStudentHistory(myReport);
             }
           }
-          if (currentTab === 'room') {
+          if (currentTabRef.current === 'room') {
             if (typeof (window as any).__erusStopAndUploadRecording === 'function') {
               (window as any).__erusStopAndUploadRecording()
                 .catch(() => {})
@@ -458,9 +473,9 @@ function GDAppContent() {
         setAvailableSlots((prev) =>
           prev.map((s) => (s.id === data.slot.id ? { ...s, ...resolvedSlot } : s))
         );
-        if (session?.id === data.slot.id) {
+        if (sessionRef.current?.id === data.slot.id) {
           setSession((prev) => ({ ...prev, ...resolvedSlot }));
-          if (resolvedSlot.status === 'completed' && currentTab === 'room') {
+          if (resolvedSlot.status === 'completed' && currentTabRef.current === 'room') {
             setCurrentTab('report');
           }
         }
@@ -484,7 +499,7 @@ function GDAppContent() {
       socket.off('slot-updated', handleSlotUpdated);
       socket.off('session-recording-saved', handleRecordingSaved);
     };
-  }, [currentUser, session?.id, session?.status, currentTab, userCollegeCode, studentBookedSlotsByTopic, availableSlots]);
+  }, [currentUser, userCollegeCode]);
 
 
   // Reset slots back to clean demo defaults
@@ -1978,11 +1993,7 @@ function GDAppContent() {
       <main className="flex-1 pb-10 px-2 sm:px-4 max-w-7xl mx-auto w-full">
         {currentTab === 'topics' && (
           <StudentTopicPortal
-            availableSlots={
-              currentUser?.role === 'student'
-                ? availableSlots.filter((s) => isSlotAssignedToFaculty(s) || isStudentAssignedToSlot(s, currentUser))
-                : availableSlots
-            }
+            availableSlots={studentAvailableSlots}
             bookedSlotId={studentBookedSlotId}
             bookedSlotsByTopic={studentBookedSlotsByTopic}
             currentUser={currentUser}

@@ -10,7 +10,7 @@ import {
   CheckCircle2
 } from 'lucide-react';
 import { CollegeAdminUser } from '../../types/auth';
-import { loginUser } from '../../utils/authApi';
+import { loginUser, isValidPortalPassword, PASSWORD_REQUIREMENT_MSG } from '../../utils/authApi';
 
 interface CollegeAdminLoginProps {
   onLogin: (user: CollegeAdminUser) => void;
@@ -33,6 +33,16 @@ export const CollegeAdminLogin: React.FC<CollegeAdminLoginProps> = ({
 
     if (!identifier.trim()) {
       setError('Please enter your College Administrator Email or Admin ID.');
+      return;
+    }
+
+    if (!password) {
+      setError('Please enter your administrator account password.');
+      return;
+    }
+
+    if (!isValidPortalPassword(password)) {
+      setError(PASSWORD_REQUIREMENT_MSG);
       return;
     }
 
@@ -120,6 +130,9 @@ export const CollegeAdminLogin: React.FC<CollegeAdminLoginProps> = ({
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5">
+              Must be at least 8 characters with uppercase, lowercase, numbers, and special characters.
+            </p>
           </div>
 
           <button

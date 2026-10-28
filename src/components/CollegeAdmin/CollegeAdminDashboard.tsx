@@ -66,7 +66,11 @@ import {
   isSlotCompletedLocally,
   markSlotCompletedLocally,
   normalizeClientCollegeCode,
-  areCollegeCodesEquivalent
+  areCollegeCodesEquivalent,
+  isValidPortalPassword,
+  PASSWORD_REQUIREMENT_MSG,
+  generateDefaultStudentPassword,
+  generateDefaultFacultyPassword
 } from '../../utils/authApi';
 import { formatSlotDate } from '../../utils/studentBooking';
 import { SlotStudentReportsView } from '../AssessmentReport/SlotStudentReportsView';
@@ -699,6 +703,11 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     e.preventDefault();
     if (!newStudent.name || !newStudent.email) return;
 
+    if (newStudent.password && !isValidPortalPassword(newStudent.password)) {
+      setBannerMsg(`Student ${PASSWORD_REQUIREMENT_MSG}`);
+      return;
+    }
+
     const usedSeats = new Set(students.map((s) => Number(s.seatNumber)).filter(Boolean));
     let assignedSeat = Number(newStudent.seatNumber);
     if (!assignedSeat || assignedSeat < 1) {
@@ -714,9 +723,9 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
       course: newStudent.course,
       batch: newStudent.batch,
       seatNumber: assignedSeat,
-      college: currentUser.college || 'BMS Institute of Technology',
+      college: currentUser.college || collegeCode,
       collegeCode,
-      password: newStudent.password || 'password123',
+      password: newStudent.password || generateDefaultStudentPassword(),
       sendEmail: newStudent.sendEmail,
     };
 
@@ -742,7 +751,7 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
         course: 'B.Tech Computer Science & Engineering',
         batch: '2024-2028',
         seatNumber: nextSeat > 15 ? 1 : nextSeat,
-        password: `Stud@${Math.floor(1000 + Math.random() * 9000)}!`,
+        password: generateDefaultStudentPassword(),
         sendEmail: true,
       });
       loadAllData();
@@ -767,6 +776,11 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     e.preventDefault();
     if (!editingStudent) return;
     if (!editingStudent.name || !editingStudent.email) return;
+
+    if (editingStudent.password && !isValidPortalPassword(editingStudent.password)) {
+      setBannerMsg(`Student ${PASSWORD_REQUIREMENT_MSG}`);
+      return;
+    }
 
     setIsSavingStudent(true);
     try {
@@ -839,8 +853,9 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
     const enrichedStudents = csvPreview.map((s, idx) => ({
       ...s,
       id: s.id || `s-${Date.now()}-${idx}`,
-      college: currentUser.college || 'Delhi Institute of Technology',
+      college: currentUser.college || collegeCode,
       collegeCode,
+      password: (s.password && isValidPortalPassword(s.password)) ? s.password : generateDefaultStudentPassword(),
     }));
 
     // Immediately update state so all CSV imported students appear in the roster
@@ -865,11 +880,11 @@ export const CollegeAdminDashboard: React.FC<CollegeAdminDashboardProps> = ({
   const downloadSampleCsv = () => {
     const csvContent = 
 `Name,Email,StudentID,Course,Batch,SeatNumber
-Aarav Sharma,aarav.sharma@dit.edu.in,STU-2022-201,B.Tech CSE,2022-2026,1
-Ishita Patel,ishita.patel@dit.edu.in,STU-2022-202,B.Tech CSE,2022-2026,2
-Rohan Gupta,rohan.gupta@dit.edu.in,STU-2022-203,B.Tech IT,2022-2026,3
-Ananya Deshmukh,ananya.d@dit.edu.in,STU-2022-204,B.Tech ECE,2022-2026,4
-Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
+Aarav Sharma,aarav.sharma@college.edu.in,STU-2022-201,B.Tech CSE,2022-2026,1
+Ishita Patel,ishita.patel@college.edu.in,STU-2022-202,B.Tech CSE,2022-2026,2
+Rohan Gupta,rohan.gupta@college.edu.in,STU-2022-203,B.Tech IT,2022-2026,3
+Ananya Deshmukh,ananya.d@college.edu.in,STU-2022-204,B.Tech ECE,2022-2026,4
+Karan Verma,karan.verma@college.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -918,12 +933,17 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
     e.preventDefault();
     if (!newFaculty.name || !newFaculty.email) return;
 
+    if (newFaculty.password && !isValidPortalPassword(newFaculty.password)) {
+      setBannerMsg(`Faculty ${PASSWORD_REQUIREMENT_MSG}`);
+      return;
+    }
+
     const facultyToAdd = {
       ...newFaculty,
       id: `fac-${Date.now()}`,
-      college: currentUser.college || 'Delhi Institute of Technology',
+      college: currentUser.college || collegeCode,
       collegeCode,
-      password: newFaculty.password || 'faculty123',
+      password: newFaculty.password || generateDefaultFacultyPassword(),
       sendEmail: newFaculty.sendEmail,
     };
 
@@ -941,7 +961,7 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
         facultyId: '',
         department: 'Department of Computer Science & Engineering',
         designation: 'Assistant Professor',
-        password: `Fac@${Math.floor(1000 + Math.random() * 9000)}!`,
+        password: generateDefaultFacultyPassword(),
         sendEmail: true,
       });
       loadAllData();
@@ -965,6 +985,11 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
     e.preventDefault();
     if (!editingFaculty) return;
     if (!editingFaculty.name || !editingFaculty.email) return;
+
+    if (editingFaculty.password && !isValidPortalPassword(editingFaculty.password)) {
+      setBannerMsg(`Faculty ${PASSWORD_REQUIREMENT_MSG}`);
+      return;
+    }
 
     setIsSavingFaculty(true);
     try {
@@ -1427,7 +1452,7 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                         <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-950 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 w-fit">
                           <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 select-all">
                             {revealedPasswords[st.id || st.studentId || st.email] || showAllPasswords
-                              ? (st.password || 'password123')
+                              ? (st.password || 'Stud@2026!')
                               : '••••••••'}
                           </span>
                           <button
@@ -1580,7 +1605,7 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                         <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-950 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 w-fit">
                           <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 select-all">
                             {revealedPasswords[fac.id || fac.facultyId || fac.email] || showAllPasswords
-                              ? (fac.password || 'faculty123')
+                              ? (fac.password || 'Fac@2026!')
                               : '••••••••'}
                           </span>
                           <button
@@ -2567,6 +2592,9 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                     className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 font-mono"
                   />
                 </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                  Must be at least 8 characters with uppercase, lowercase, numbers, and special characters.
+                </p>
               </div>
 
               <div className="flex items-center gap-2 pt-1">
@@ -2719,6 +2747,9 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                     className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 font-mono text-slate-900 dark:text-white"
                   />
                 </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                  Must be at least 8 characters with uppercase, lowercase, numbers, and special characters.
+                </p>
               </div>
 
               <div className="pt-3 flex items-center justify-end gap-2">
@@ -2935,6 +2966,9 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                     className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 font-mono"
                   />
                 </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                  Must be at least 8 characters with uppercase, lowercase, numbers, and special characters.
+                </p>
               </div>
 
               <div className="flex items-center gap-2 pt-1">
@@ -3076,6 +3110,9 @@ Karan Verma,karan.verma@dit.edu.in,STU-2022-205,B.Tech AI,2022-2026,5`;
                     className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 font-mono text-slate-900 dark:text-white"
                   />
                 </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                  Must be at least 8 characters with uppercase, lowercase, numbers, and special characters.
+                </p>
               </div>
 
               <div className="pt-3 flex items-center justify-end gap-2">

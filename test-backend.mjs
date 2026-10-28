@@ -61,7 +61,7 @@ async function runTests() {
 
   try {
     // 1. Health check
-    const health = await request({ hostname: 'localhost', port: PORT, path: '/api/health', method: 'GET' });
+    const health = await request({ hostname: '127.0.0.1', port: PORT, path: '/api/health', method: 'GET' });
     const healthJson = JSON.parse(health.data);
     results.push({
       endpoint: 'GET /api/health',
@@ -70,7 +70,7 @@ async function runTests() {
     });
 
     // 2. Topics list
-    const topics = await request({ hostname: 'localhost', port: PORT, path: '/api/topics', method: 'GET' });
+    const topics = await request({ hostname: '127.0.0.1', port: PORT, path: '/api/topics', method: 'GET' });
     const topicsJson = JSON.parse(topics.data);
     results.push({
       endpoint: 'GET /api/topics',
@@ -79,7 +79,7 @@ async function runTests() {
     });
 
     // 3. Current session
-    const session = await request({ hostname: 'localhost', port: PORT, path: '/api/session/current', method: 'GET' });
+    const session = await request({ hostname: '127.0.0.1', port: PORT, path: '/api/session/current', method: 'GET' });
     const sessionJson = JSON.parse(session.data);
     results.push({
       endpoint: 'GET /api/session/current',
@@ -95,7 +95,7 @@ async function runTests() {
     });
     const moderate = await request(
       {
-        hostname: 'localhost',
+        hostname: '127.0.0.1',
         port: PORT,
         path: '/api/facilitator/moderate',
         method: 'POST',
@@ -113,21 +113,21 @@ async function runTests() {
     // 5. Facilitator 7-parameter evaluation engine
     const evalPayload = JSON.stringify({
       student: {
-        id: 'stu-demo',
-        name: 'Aishwarya Kokatnoor',
-        college: 'Engineering Institute',
+        id: 's-17923',
+        name: 'alana',
+        college: 'VTU',
         speakingDurationSeconds: 160,
         speakingTurns: 4,
         interruptionCount: 0,
         questionsAnswered: 3,
         questionsInitiated: 2
       },
-      topic: 'AI in Higher Education',
+      topic: 'ai in military',
       durationMinutes: 20
     });
     const evaluate = await request(
       {
-        hostname: 'localhost',
+        hostname: '127.0.0.1',
         port: PORT,
         path: '/api/facilitator/evaluate',
         method: 'POST',
@@ -143,7 +143,7 @@ async function runTests() {
     });
 
     // 6. Faculty analytics
-    const analytics = await request({ hostname: 'localhost', port: PORT, path: '/api/faculty/analytics', method: 'GET' });
+    const analytics = await request({ hostname: '127.0.0.1', port: PORT, path: '/api/faculty/analytics', method: 'GET' });
     const analyticsJson = JSON.parse(analytics.data);
     results.push({
       endpoint: 'GET /api/faculty/analytics',
@@ -152,11 +152,67 @@ async function runTests() {
     });
 
     // 7. Socket.IO connection handshake
-    const socketIo = await request({ hostname: 'localhost', port: PORT, path: '/socket.io/?EIO=4&transport=polling', method: 'GET' });
+    const socketIo = await request({ hostname: '127.0.0.1', port: PORT, path: '/socket.io/?EIO=4&transport=polling', method: 'GET' });
     results.push({
       endpoint: 'GET /socket.io (Real-Time)',
       status: socketIo.statusCode === 200 && socketIo.data.includes('sid') ? 'PASS' : 'FAIL',
       details: `Handshake HTTP 200, Session SID received`
+    });
+
+    // 8. Super Admin login (exempt from 8-char complexity, admin123 works)
+    const saPayload = JSON.stringify({ email: 'superadmin@erus.ai', password: 'admin123', role: 'super_admin' });
+    const saLogin = await request(
+      {
+        hostname: '127.0.0.1',
+        port: PORT,
+        path: '/api/auth/login',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(saPayload) }
+      },
+      saPayload
+    );
+    const saJson = JSON.parse(saLogin.data);
+    results.push({
+      endpoint: 'POST /api/auth/login (Super Admin Exempt)',
+      status: saLogin.statusCode === 200 && saJson.success && saJson.user?.role === 'super_admin' ? 'PASS' : 'FAIL',
+      details: `Super Admin login succeeded with exempt password (HTTP ${saLogin.statusCode})`
+    });
+
+    // 9. Student/Faculty/College portal password complexity rejection (non-compliant password rejected)
+    const invalidPwdPayload = JSON.stringify({ email: 'alana@vtu.in', password: 'password123', role: 'student' });
+    const invalidPwdLogin = await request(
+      {
+        hostname: '127.0.0.1',
+        port: PORT,
+        path: '/api/auth/login',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(invalidPwdPayload) }
+      },
+      invalidPwdPayload
+    );
+    results.push({
+      endpoint: 'POST /api/auth/login (Enforce 8+ Char Complex)',
+      status: invalidPwdLogin.statusCode === 400 ? 'PASS' : 'FAIL',
+      details: `Rejected non-compliant password with HTTP 400 ("${JSON.parse(invalidPwdLogin.data).error?.slice(0, 45)}...")`
+    });
+
+    // 10. Student portal login with compliant 8+ char complex password
+    const validStudentPayload = JSON.stringify({ email: 'alana@vtu.in', password: 'Stud@VTU2026!', role: 'student' });
+    const validStudentLogin = await request(
+      {
+        hostname: '127.0.0.1',
+        port: PORT,
+        path: '/api/auth/login',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(validStudentPayload) }
+      },
+      validStudentPayload
+    );
+    const validStudentJson = JSON.parse(validStudentLogin.data);
+    results.push({
+      endpoint: 'POST /api/auth/login (Compliant Password)',
+      status: validStudentLogin.statusCode === 200 && validStudentJson.success ? 'PASS' : 'FAIL',
+      details: `Student login succeeded with compliant password (HTTP ${validStudentLogin.statusCode})`
     });
 
   } catch (err) {
@@ -169,13 +225,13 @@ async function runTests() {
   console.log('\n================ BACKEND INTEGRATION TEST RESULTS ================');
   for (const r of results) {
     const icon = r.status === 'PASS' ? '✅' : '❌';
-    console.log(`${icon} [${r.status}] ${r.endpoint.padEnd(35)} : ${r.details}`);
+    console.log(`${icon} [${r.status}] ${r.endpoint.padEnd(45)} : ${r.details}`);
   }
   console.log('==================================================================\n');
 
-  const allPassed = results.length === 7 && results.every((r) => r.status === 'PASS');
+  const allPassed = results.length === 10 && results.every((r) => r.status === 'PASS');
   if (allPassed) {
-    console.log('🎉 ALL 7 BACKEND INTEGRATION ENDPOINTS ARE WORKING PERFECTLY!');
+    console.log('🎉 ALL 10 BACKEND INTEGRATION ENDPOINTS ARE WORKING PERFECTLY!');
     process.exit(0);
   } else {
     console.log('⚠️ Some backend checks failed.');

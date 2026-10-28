@@ -52,7 +52,9 @@ import {
   fetchCollegeSlots,
   isSlotCompletedLocally,
   markSlotCompletedLocally,
-  ServerCapacityData
+  ServerCapacityData,
+  isValidPortalPassword,
+  PASSWORD_REQUIREMENT_MSG
 } from '../../utils/authApi';
 import { getSocket } from '../../utils/socket';
 import { SlotStudentReportsView } from '../AssessmentReport/SlotStudentReportsView';
@@ -371,6 +373,11 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
   const handleOnboardSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCollege.name || !newCollege.code || !newCollege.contactEmail) return;
+
+    if (newCollege.adminPassword && !isValidPortalPassword(newCollege.adminPassword)) {
+      alert(`College Admin ${PASSWORD_REQUIREMENT_MSG}`);
+      return;
+    }
 
     setLoading(true);
     const res = await registerNewCollege(newCollege);
@@ -1568,9 +1575,12 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({
                     type="text"
                     value={newCollege.adminPassword}
                     onChange={(e) => setNewCollege({ ...newCollege, adminPassword: e.target.value })}
-                    placeholder="Defaults to Erus@CODE2026"
+                    placeholder="Defaults to Erus@CODE2026 (Min 8 chars, A-Z, a-z, 0-9, special)"
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 focus:ring-2 focus:ring-purple-500"
                   />
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-1">
+                    Must be at least 8 characters with uppercase, lowercase, numbers, and special characters.
+                  </span>
                 </div>
               </div>
 

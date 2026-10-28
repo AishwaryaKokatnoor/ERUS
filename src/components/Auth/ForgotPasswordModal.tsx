@@ -11,7 +11,7 @@ import {
   EyeOff, 
   RefreshCw 
 } from 'lucide-react';
-import { requestPasswordReset, confirmPasswordReset } from '../../utils/authApi';
+import { requestPasswordReset, confirmPasswordReset, isValidPortalPassword, PASSWORD_REQUIREMENT_MSG } from '../../utils/authApi';
 
 interface ForgotPasswordModalProps {
   isOpen: boolean;
@@ -78,8 +78,8 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
       return;
     }
 
-    if (newPassword.length < 6) {
-      setError('New password must be at least 6 characters.');
+    if (!isValidPortalPassword(newPassword)) {
+      setError(PASSWORD_REQUIREMENT_MSG);
       return;
     }
 
@@ -235,7 +235,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                   type={showPassword ? 'text' : 'password'}
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="At least 6 characters"
+                  placeholder="Min 8 chars, uppercase, lowercase, number, special"
                   className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500 transition-all"
                   required
                 />
@@ -247,6 +247,9 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                Must be at least 8 characters with uppercase, lowercase, numbers, and special characters.
+              </p>
             </div>
 
             <div>

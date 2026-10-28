@@ -6,6 +6,22 @@ import { getStudentReportHistory } from './studentReportHistory';
 const TOKEN_KEY = 'erus_jwt_token';
 const USER_KEY = 'erus_auth_user';
 
+export const PORTAL_PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
+export const PASSWORD_REQUIREMENT_MSG = 'Password must be at least 8 characters long and include uppercase, lowercase, numbers, and special characters.';
+
+export function isValidPortalPassword(password: string): boolean {
+  if (!password || typeof password !== 'string') return false;
+  return PORTAL_PASSWORD_REGEX.test(password);
+}
+
+export function generateDefaultStudentPassword(): string {
+  return `Stud@${Math.floor(1000 + Math.random() * 9000)}!`;
+}
+
+export function generateDefaultFacultyPassword(): string {
+  return `Fac@${Math.floor(1000 + Math.random() * 9000)}!`;
+}
+
 export interface AuthResponse {
   success: boolean;
   user: AuthUser;
@@ -58,6 +74,12 @@ export async function loginUser(
   identifier: string,
   password: string
 ): Promise<{ success: boolean; user?: AuthUser; error?: string }> {
+  if (role !== 'super_admin' && !isValidPortalPassword(password)) {
+    return {
+      success: false,
+      error: PASSWORD_REQUIREMENT_MSG,
+    };
+  }
   try {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
@@ -472,6 +494,7 @@ export async function addCollegeStudents(payload: { students?: any[]; student?: 
     }
     usedSeats.add(assignedSeat);
 
+    const defaultStudentPass = s.password || generateDefaultStudentPassword();
     const studentObj = {
       id: s.id || `s-${Date.now()}-${idx}`,
       name: s.name,
@@ -480,9 +503,9 @@ export async function addCollegeStudents(payload: { students?: any[]; student?: 
       course: s.course || 'B.Tech Computer Science & Engineering',
       batch: s.batch || '2024-2028',
       seatNumber: assignedSeat,
-      college: s.college || (code === 'DIT' ? 'Delhi Institute of Technology' : code),
+      college: s.college || code,
       collegeCode: code,
-      password: s.password || 'password123',
+      password: defaultStudentPass,
     };
     map.set(studentObj.studentId || studentObj.email, studentObj);
 
@@ -497,7 +520,7 @@ export async function addCollegeStudents(payload: { students?: any[]; student?: 
       course: studentObj.course,
       batch: studentObj.batch,
       seatNumber: studentObj.seatNumber,
-    } as any, s.password || 'password123');
+    } as any, defaultStudentPass);
   });
 
   const updated = Array.from(map.values());
@@ -585,6 +608,7 @@ export async function fetchCollegeFaculty(collegeCode: string = ''): Promise<any
 export async function addCollegeFaculty(payload: any) {
   const code = (payload.collegeCode || 'DIT').toUpperCase();
   const existing = getLocalFaculty(code);
+  const defaultFacultyPass = payload.password || generateDefaultFacultyPassword();
   const facObj = {
     id: payload.id || `fac-${Date.now()}`,
     name: payload.name,
@@ -592,10 +616,10 @@ export async function addCollegeFaculty(payload: any) {
     facultyId: payload.facultyId || `FAC-${Date.now().toString().slice(-4)}`,
     department: payload.department || 'Computer Science & Engineering',
     designation: payload.designation || 'Assistant Professor',
-    college: payload.college || (code === 'DIT' ? 'Delhi Institute of Technology' : code),
+    college: payload.college || code,
     collegeCode: code,
     assignedSlotsCount: payload.assignedSlotsCount || 0,
-    password: payload.password || 'faculty123',
+    password: defaultFacultyPass,
   };
 
   const updated = [facObj, ...existing.filter((f) => f.facultyId !== facObj.facultyId && f.email !== facObj.email)];
@@ -610,7 +634,7 @@ export async function addCollegeFaculty(payload: any) {
     facultyId: facObj.facultyId,
     department: facObj.department,
     designation: facObj.designation,
-  } as any, payload.password || 'faculty123');
+  } as any, defaultFacultyPass);
 
   try {
     const res = await fetch('/api/college/faculty', {

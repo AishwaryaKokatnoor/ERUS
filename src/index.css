@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@source "../index.html";
+@source "../src";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -6,11 +8,9 @@
   html {
     overflow-y: scroll;
     scrollbar-gutter: stable;
-    overflow-anchor: none;
   }
   body {
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-    overflow-anchor: none;
   }
 }
 

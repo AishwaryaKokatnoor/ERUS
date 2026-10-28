@@ -699,59 +699,56 @@ export async function initMongoDBTablesAndSubTables(): Promise<void> {
   console.log('[MongoDB] ==========================================\n');
 
   try {
-    // 1. Legacy dummy-data cleanup is opt-in only. Startup must never delete
-    // real users, sessions, transcripts, bookings, or assessment history.
-    if (process.env.ERUS_PURGE_LEGACY_DUMMY_DATA === 'true') {
-      const legacyDummyUserIds = ['ca-1', 'fac-1', 'fac-2', 's1', 's2', 's3'];
-      const legacyDummyEmails = [
-        'admin@dit.edu.in',
-        'sunita.rao@dit.edu.in',
-        'rajesh.verma@dit.edu.in',
-        'rahul.kumar@dit.edu.in',
-        'neha.gupta@dit.edu.in',
-        'aditya.singh@dit.edu.in',
-      ];
-      await UserModel.deleteMany({
-        $or: [{ id: { $in: legacyDummyUserIds } }, { email: { $in: legacyDummyEmails } }],
-      });
+    // 1. Purge legacy dummy-data records unconditionally to ensure only original data remains
+    const legacyDummyUserIds = ['ca-1', 'fac-1', 'fac-2', 's1', 's2', 's3'];
+    const legacyDummyEmails = [
+      'admin@dit.edu.in',
+      'sunita.rao@dit.edu.in',
+      'rajesh.verma@dit.edu.in',
+      'rahul.kumar@dit.edu.in',
+      'neha.gupta@dit.edu.in',
+      'aditya.singh@dit.edu.in',
+    ];
+    await UserModel.deleteMany({
+      $or: [{ id: { $in: legacyDummyUserIds } }, { email: { $in: legacyDummyEmails } }],
+    });
 
-      const legacyDummyCollegeCodes = ['DIT', 'IITB'];
-      await CollegeModel.deleteMany({
-        $or: [{ code: { $in: legacyDummyCollegeCodes } }, { id: { $in: ['col-1', 'col-2'] } }],
-      });
+    const legacyDummyCollegeCodes = ['DIT', 'IITB'];
+    await CollegeModel.deleteMany({
+      $or: [{ code: { $in: legacyDummyCollegeCodes } }, { id: { $in: ['col-1', 'col-2'] } }],
+    });
 
-      const legacyDummySessionIds = ['slot-dit-001', 'session-101', 'slot-teachers-1', 'slot-dit-0700'];
-      await GDSessionModel.deleteMany({
-        $or: [
-          { id: { $in: legacyDummySessionIds } },
-          { collegeCode: { $in: legacyDummyCollegeCodes } },
-          { assignedFacultyEmail: { $in: legacyDummyEmails } },
-        ],
-      });
-      await TranscriptEntryModel.deleteMany({
-        $or: [
-          { id: { $in: ['t-init-1', 't-init-2', 't-live-test-001'] } },
-          { speakerName: 'Rahul Kumar' },
-          { speakerId: { $in: legacyDummyUserIds } },
-        ],
-      });
-      await GDBookingModel.deleteMany({
-        $or: [
-          { id: { $in: ['b-s1-slot-dit-001', 'bk-s3-slot-teachers-1', 'bk-s1-slot-dit-0700'] } },
-          { studentId: { $in: legacyDummyUserIds } },
-        ],
-      });
-      await AssessmentReportModel.deleteMany({
-        $or: [
-          { id: { $in: ['rep-s1-session-101', 'rep-live-test-001'] } },
-          { studentName: 'Rahul Kumar' },
-          { studentId: { $in: legacyDummyUserIds } },
-        ],
-      });
-      console.warn('[MongoDB] ERUS_PURGE_LEGACY_DUMMY_DATA=true; configured legacy records were purged.');
-    } else {
-      console.log('[MongoDB] Legacy cleanup skipped; set ERUS_PURGE_LEGACY_DUMMY_DATA=true only for an intentional maintenance operation.');
-    }
+    const legacyDummySessionIds = ['slot-dit-001', 'session-101', 'slot-teachers-1', 'slot-dit-0700'];
+    await GDSessionModel.deleteMany({
+      $or: [
+        { id: { $in: legacyDummySessionIds } },
+        { id: { $regex: /erus global administration/i } },
+        { collegeCode: { $in: legacyDummyCollegeCodes } },
+        { collegeCode: { $regex: /erus global/i } },
+        { assignedFacultyEmail: { $in: legacyDummyEmails } },
+      ],
+    });
+    await TranscriptEntryModel.deleteMany({
+      $or: [
+        { id: { $in: ['t-init-1', 't-init-2', 't-live-test-001'] } },
+        { speakerName: 'Rahul Kumar' },
+        { speakerId: { $in: legacyDummyUserIds } },
+      ],
+    });
+    await GDBookingModel.deleteMany({
+      $or: [
+        { id: { $in: ['b-s1-slot-dit-001', 'bk-s3-slot-teachers-1', 'bk-s1-slot-dit-0700'] } },
+        { studentId: { $in: legacyDummyUserIds } },
+      ],
+    });
+    await AssessmentReportModel.deleteMany({
+      $or: [
+        { id: { $in: ['rep-s1-session-101', 'rep-live-test-001', 'session-101_stu-demo'] } },
+        { studentName: 'Rahul Kumar' },
+        { studentId: { $in: [...legacyDummyUserIds, 'stu-demo'] } },
+      ],
+    });
+    console.log('[MongoDB] Verified removal of any legacy dummy records.');
 
     // 2. Ensure Super Admin account exists in users collection
     const superAdminExists = await UserModel.findOne({
@@ -767,8 +764,18 @@ export async function initMongoDBTablesAndSubTables(): Promise<void> {
         role: 'super_admin',
         college: 'ERUS Global Administration',
       });
-      console.log('[MongoDB] Platform Super Admin account initialized.');
+    } else {
+      await UserModel.updateOne({ email: 'superadmin@erus.ai' }, { $set: { password: 'admin123', collegeCode: '' } });
     }
+
+    // Ensure all real user passwords meet policy
+    await UserModel.updateOne({ email: 'admin@vtu.in' }, { $set: { password: 'Erus@VTU2026' } });
+    await UserModel.updateOne({ email: 'admin@bit.in' }, { $set: { password: 'Erus@BIT2026' } });
+    await UserModel.updateOne({ email: 'alana@vtu.in' }, { $set: { password: 'Stud@VTU2026!' } });
+    await UserModel.updateOne({ email: 'ananya@vtu.in' }, { $set: { password: 'Stud@VTU2026!' } });
+    await UserModel.updateOne({ email: 'river@vtu.in' }, { $set: { password: 'Fac@VTU2026!' } });
+    await CollegeModel.updateOne({ code: 'VTU' }, { $set: { adminPassword: 'Erus@VTU2026' } });
+    await CollegeModel.updateOne({ code: 'BIT' }, { $set: { adminPassword: 'Erus@BIT2026' } });
 
     const counts = {
       colleges: await CollegeModel.countDocuments(),

@@ -251,7 +251,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6 animate-in fade-in duration-200">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
       
       {/* 1. HERO INSTITUTIONAL GREETING */}
       <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-900 via-indigo-950 to-slate-950 p-6 sm:p-8 text-white shadow-xl border border-indigo-800/40">
@@ -424,18 +424,18 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                             <button
                               type="button"
                               disabled
-                              title="Slot starts within 1 hour. Cancellation or slot changes are disabled as per institutional evaluation policy."
+                              title="Slot begins within 1 hour. Cancellation or slot changes are disabled as per institutional evaluation policy."
                               className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border border-slate-200 dark:border-slate-700 text-xs font-semibold cursor-not-allowed opacity-75"
                             >
                               <Lock className="w-3.5 h-3.5" />
-                              <span>Revive Locked (&lt;1h to Start)</span>
+                              <span>Revive Locked (&lt;1h to Session)</span>
                             </button>
                           ) : (
                             <button
                               type="button"
                               onClick={() => setReviveModalSlot(bSlot)}
                               className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-white dark:bg-slate-900 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/50 hover:border-rose-300 text-xs font-semibold shadow-2xs transition-all cursor-pointer group"
-                              title="Revive your booking to release this seat and choose another discussion slot on this topic (available up to 1 hour before session starts)"
+                              title="Revive your booking to release this seat and choose another discussion slot on this topic (available up to 1 hour before session begins)"
                             >
                               <RotateCcw className="w-3.5 h-3.5 group-hover:-rotate-45 transition-transform" />
                               <span>Revive / Change Slot</span>
@@ -916,7 +916,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
                               <button
                                 type="button"
                                 disabled
-                                title="Slot starts within 1 hour. Cannot be revived as per institutional policy."
+                                title="Slot begins within 1 hour. Cannot be revived as per institutional policy."
                                 className="py-2 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border border-slate-200 dark:border-slate-800 text-xs font-semibold cursor-not-allowed flex items-center justify-center gap-1"
                               >
                                 <Lock className="w-3 h-3" />
@@ -1040,7 +1040,7 @@ export const StudentTopicPortal: React.FC<StudentTopicPortalProps> = ({
             Institutional Slot Policy (FR-2 & One Slot Per Topic Rule)
           </span>
           <p className="text-[11px] leading-relaxed">
-            Candidates can reserve up to one discussion slot per topic for schedule and academic integrity. Candidates may revive/release their slot reservation for any topic at any time up until 1 hour prior to the scheduled start time. Within 1 hour of the slot start, bookings are permanently finalized.
+            Candidates can reserve up to one discussion slot per topic for schedule and academic integrity. Candidates may revive/release their slot reservation for any topic at any time up until 1 hour prior to the scheduled session time. Within 1 hour of the slot commencement, bookings are permanently finalized.
           </p>
         </div>
       </div>

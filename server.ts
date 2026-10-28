@@ -304,6 +304,22 @@ function areCollegeCodesEquivalent(codeA?: string, codeB?: string): boolean {
   return Boolean(baseA && baseB && baseA === baseB);
 }
 
+const PORTAL_PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
+const PASSWORD_REQUIREMENT_MSG = 'Password must be at least 8 characters long and include uppercase, lowercase, numbers, and special characters.';
+
+function isValidPortalPassword(password?: string): boolean {
+  if (!password || typeof password !== 'string') return false;
+  return PORTAL_PASSWORD_REGEX.test(password);
+}
+
+function generateDefaultStudentPassword(): string {
+  return `Stud@${Math.floor(1000 + Math.random() * 9000)}!`;
+}
+
+function generateDefaultFacultyPassword(): string {
+  return `Fac@${Math.floor(1000 + Math.random() * 9000)}!`;
+}
+
 interface StoredAuthUser {
   id: string;
   name: string;
@@ -542,14 +558,17 @@ function healEvaluatedSlots() {
         const slotReports = allReports.filter((r) => r.sessionId === sessionId);
         const firstRep = slotReports[0];
         const sLower = sessionId.toLowerCase();
-        let colCode = 'DIT';
-        if (sLower.includes('bmsit')) colCode = 'BMSIT-2002';
-        else if (sLower.includes('vut')) colCode = 'VUT';
+        let colCode = 'VTU';
+        if (sLower.includes('bit')) colCode = 'BIT';
+        else if (sLower.includes('vtu')) colCode = 'VTU';
+        else {
+          continue;
+        }
 
         if (!persistentState.slots[colCode]) persistentState.slots[colCode] = [];
         const rec = persistentState.recordings?.[sessionId];
-        const facName = colCode.startsWith('BMSIT') ? 'Harish' : colCode === 'VUT' ? 'River' : 'Assigned Faculty';
-        const facId = colCode.startsWith('BMSIT') ? 'fac-bmsit-1' : colCode === 'VUT' ? 'fac-vut-1' : 'fac-dit-1';
+        const facName = 'River';
+        const facId = 'fac-1792416478070';
 
         const synthSlot: BackendCollegeSlotItem = {
           id: sessionId,
@@ -1756,6 +1775,9 @@ app.post('/api/admin/colleges', async (req, res) => {
   if (!payload || !payload.name || !payload.code) {
     return res.status(400).json({ success: false, error: 'Name and code are required' });
   }
+  if (payload.adminPassword && !isValidPortalPassword(payload.adminPassword)) {
+    return res.status(400).json({ success: false, error: PASSWORD_REQUIREMENT_MSG });
+  }
   const cleanCode = normalizeCollegeCode(payload.code.trim().toUpperCase());
   const collegeName = payload.name.trim();
   const adminPass = payload.adminPassword || `Erus@${cleanCode}2026`;
@@ -2859,7 +2881,11 @@ app.put(['/api/college/students/:id', '/api/college/students/:id/edit'], async (
     if (sNum >= 1 && sNum <= 15) student.seatNumber = sNum;
   }
   if (password && String(password).trim()) {
-    student.password = String(password).trim();
+    const trimmedPass = String(password).trim();
+    if (!isValidPortalPassword(trimmedPass)) {
+      return res.status(400).json({ success: false, error: PASSWORD_REQUIREMENT_MSG });
+    }
+    student.password = trimmedPass;
   }
 
   // Update corresponding user in persistentState.users
@@ -2971,8 +2997,14 @@ app.post('/api/college/students', async (req, res) => {
   const currentStudents = persistentState.students[code] || [];
   const usedSeats = new Set(currentStudents.map((s) => Number(s.seatNumber)).filter(Boolean));
 
+  for (const st of incoming) {
+    if (st.password && !isValidPortalPassword(st.password)) {
+      return res.status(400).json({ success: false, error: `Student password for ${st.name || st.email}: ${PASSWORD_REQUIREMENT_MSG}` });
+    }
+  }
+
   incoming.forEach((st, idx) => {
-    const studentPass = st.password || `Stud@${Date.now().toString().slice(-4)}!`;
+    const studentPass = st.password || generateDefaultStudentPassword();
     let assignedSeat = Number(st.seatNumber);
     if (!assignedSeat || assignedSeat < 1 || usedSeats.has(assignedSeat)) {
       assignedSeat = 1;
@@ -2988,7 +3020,7 @@ app.post('/api/college/students', async (req, res) => {
       course: st.course || 'B.Tech Computer Science & Engineering',
       batch: st.batch || '2024-2028',
       seatNumber: assignedSeat,
-      college: st.college || (persistentState.colleges.find((c) => c.code === code)?.name || 'Engineering Institute'),
+      college: st.college || (persistentState.colleges.find((c) => c.code === code)?.name || `${code} Campus`),
       collegeCode: code,
       password: studentPass,
     };
@@ -3025,7 +3057,7 @@ app.post('/api/college/students', async (req, res) => {
   savePersistentState();
   for (const st of addedStudents) {
     const userMatch = persistentState.users.find((u) => u.email.toLowerCase() === st.email.toLowerCase());
-    const pass = userMatch?.password || 'password123';
+    const pass = userMatch?.password || st.password || generateDefaultStudentPassword();
     persistUserToMongoDB({ ...st, role: 'student', password: pass });
   }
 
@@ -3034,7 +3066,7 @@ app.post('/api/college/students', async (req, res) => {
       const col = await prisma.college.findUnique({ where: { code } });
       for (const st of addedStudents) {
         const userMatch = persistentState.users.find((u) => u.email.toLowerCase() === st.email.toLowerCase());
-        const pass = userMatch?.password || 'password123';
+        const pass = userMatch?.password || st.password || generateDefaultStudentPassword();
         const defaultPassHash = await bcrypt.hash(pass, 10);
         await prisma.user.upsert({
           where: { email: st.email.toLowerCase() },
@@ -3134,7 +3166,7 @@ app.get('/api/college/faculty', async (req, res) => {
     );
     return {
       ...f,
-      password: userMatch?.password || f.password || 'faculty123',
+      password: userMatch?.password || f.password || 'Fac@2026!',
     };
   });
   persistentState.faculty[code] = faculty;
@@ -3144,13 +3176,17 @@ app.get('/api/college/faculty', async (req, res) => {
 
 app.post('/api/college/faculty', async (req, res) => {
   const payload = req.body;
-  const code = normalizeCollegeCode(payload.collegeCode || 'DIT');
+  const code = normalizeCollegeCode(payload.collegeCode || 'VTU');
+
+  if (payload.password && !isValidPortalPassword(payload.password)) {
+    return res.status(400).json({ success: false, error: PASSWORD_REQUIREMENT_MSG });
+  }
 
   if (!persistentState.faculty[code]) {
     persistentState.faculty[code] = [];
   }
 
-  const facultyPass = payload.password || `Fac@${Date.now().toString().slice(-4)}!`;
+  const facultyPass = payload.password || generateDefaultFacultyPassword();
   const newFac: BackendCollegeFacultyItem = {
     id: payload.id || `fac-${Date.now()}`,
     name: payload.name || 'Faculty Member',
@@ -3158,7 +3194,7 @@ app.post('/api/college/faculty', async (req, res) => {
     facultyId: payload.facultyId || `FAC-${Date.now().toString().slice(-4)}`,
     department: payload.department || 'Computer Science & Engineering',
     designation: payload.designation || 'Assistant Professor',
-    college: payload.college || (persistentState.colleges.find((c) => c.code === code)?.name || 'Engineering Institute'),
+    college: payload.college || (persistentState.colleges.find((c) => c.code === code)?.name || `${code} Campus`),
     collegeCode: code,
     assignedSlotsCount: payload.assignedSlotsCount || 0,
     password: facultyPass,
@@ -3184,7 +3220,7 @@ app.post('/api/college/faculty', async (req, res) => {
   if (isDbConnected && prisma) {
     try {
       const col = await prisma.college.findUnique({ where: { code } });
-      const passHash = await bcrypt.hash(payload.password || 'faculty123', 10);
+      const passHash = await bcrypt.hash(facultyPass, 10);
       await prisma.user.upsert({
         where: { email: newFac.email.toLowerCase() },
         update: {
@@ -3234,7 +3270,7 @@ app.post('/api/college/faculty', async (req, res) => {
       name: newFac.name,
       role: 'faculty',
       username: newFac.facultyId || newFac.email,
-      password: payload.password || 'faculty123',
+      password: facultyPass,
       collegeName: newFac.college,
       collegeCode: code,
     }).catch((e) => console.warn('[Mailer] Faculty credential dispatch error:', e.message));
@@ -3266,7 +3302,11 @@ app.put(['/api/college/faculty/:id', '/api/college/faculty/:id/edit'], async (re
   if (department !== undefined) faculty.department = String(department).trim();
   if (designation !== undefined) faculty.designation = String(designation).trim();
   if (password && String(password).trim()) {
-    faculty.password = String(password).trim();
+    const trimmedPass = String(password).trim();
+    if (!isValidPortalPassword(trimmedPass)) {
+      return res.status(400).json({ success: false, error: PASSWORD_REQUIREMENT_MSG });
+    }
+    faculty.password = trimmedPass;
   }
 
   // Update corresponding user in persistentState.users
@@ -3361,7 +3401,11 @@ app.delete('/api/college/faculty/:id', async (req, res) => {
 
 app.post('/api/college/dispatch-credentials', async (req, res) => {
   const { collegeCode, targetType, recipientId, email, customPassword } = req.body;
-  const code = String(collegeCode || 'DIT').toUpperCase();
+  const code = String(collegeCode || 'VTU').toUpperCase();
+
+  if (customPassword && !isValidPortalPassword(customPassword)) {
+    return res.status(400).json({ success: false, error: PASSWORD_REQUIREMENT_MSG });
+  }
 
   const collegeObj = persistentState.colleges.find((c) => c.code === code);
   const collegeName = collegeObj?.name || `${code} Campus`;
@@ -3372,12 +3416,12 @@ app.post('/api/college/dispatch-credentials', async (req, res) => {
     const user = persistentState.users.find(
       (u) =>
         (u.email.toLowerCase() === String(email || '').toLowerCase() || u.id === recipientId) &&
-        (u.collegeCode || 'DIT').toUpperCase() === code
+        (u.collegeCode || 'VTU').toUpperCase() === code
     );
     if (!user) {
       return res.status(404).json({ success: false, error: 'User not found in this institution roster.' });
     }
-    const pwd = customPassword || user.password || (user.role === 'faculty' ? 'faculty123' : 'password123');
+    const pwd = customPassword || user.password || (user.role === 'faculty' ? 'Fac@2026!' : 'Stud@2026!');
     const mailRes = await sendCredentialsEmail({
       to: user.email,
       name: user.name,
@@ -3399,7 +3443,7 @@ app.post('/api/college/dispatch-credentials', async (req, res) => {
     const stuList = persistentState.students[code] || [];
     for (const st of stuList) {
       const u = persistentState.users.find((usr) => usr.email.toLowerCase() === st.email.toLowerCase());
-      const pwd = customPassword || u?.password || 'password123';
+      const pwd = customPassword || u?.password || st.password || 'Stud@2026!';
       sendCredentialsEmail({
         to: st.email,
         name: st.name,
@@ -3422,7 +3466,7 @@ app.post('/api/college/dispatch-credentials', async (req, res) => {
     const facList = persistentState.faculty[code] || [];
     for (const fac of facList) {
       const u = persistentState.users.find((usr) => usr.email.toLowerCase() === fac.email.toLowerCase());
-      const pwd = customPassword || u?.password || 'faculty123';
+      const pwd = customPassword || u?.password || fac.password || 'Fac@2026!';
       sendCredentialsEmail({
         to: fac.email,
         name: fac.name,
@@ -5369,12 +5413,23 @@ app.post('/api/student/cancel-slot', async (req, res) => {
 
 // --- AUTH ENDPOINTS ---
 app.post('/api/auth/login', async (req, res) => {
-  const { role, identifier, password } = req.body;
-  if (!identifier) {
+  const role = req.body.role;
+  const rawId = req.body.identifier || req.body.email || '';
+  const password = req.body.password;
+  if (!rawId) {
     return res.status(400).json({ success: false, error: 'Identifier is required' });
   }
 
-  const cleanId = identifier.trim().toLowerCase();
+  if (role !== 'super_admin') {
+    if (!password) {
+      return res.status(400).json({ success: false, error: 'Password is required' });
+    }
+    if (!isValidPortalPassword(password)) {
+      return res.status(400).json({ success: false, error: PASSWORD_REQUIREMENT_MSG });
+    }
+  }
+
+  const cleanId = rawId.trim().toLowerCase();
   const escapedId = cleanId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const activeCollegeCodes = new Set(
     persistentState.colleges.map((c) => normalizeCollegeCode(c.code)).filter(Boolean)
@@ -5423,7 +5478,7 @@ app.post('/api/auth/login', async (req, res) => {
           name: st.name,
           email: st.email,
           role: 'student',
-          password: st.password || st.defaultPassword || 'password123',
+          password: st.password || st.defaultPassword || 'Stud@2026!',
           college: col?.name || st.college || colCode,
           collegeCode: normalizeCollegeCode(colCode),
           course: st.course,
@@ -5449,7 +5504,7 @@ app.post('/api/auth/login', async (req, res) => {
           name: fc.name,
           email: fc.email,
           role: 'faculty',
-          password: fc.password || fc.defaultPassword || 'password123',
+          password: fc.password || fc.defaultPassword || 'Fac@2026!',
           college: col?.name || fc.college || colCode,
           collegeCode: normalizeCollegeCode(colCode),
           department: fc.department,
@@ -5738,8 +5793,8 @@ app.post('/api/auth/reset-password', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Email, verification code, and new password are required.' });
   }
 
-  if (newPassword.length < 6) {
-    return res.status(400).json({ success: false, error: 'New password must be at least 6 characters.' });
+  if (!isValidPortalPassword(newPassword)) {
+    return res.status(400).json({ success: false, error: PASSWORD_REQUIREMENT_MSG });
   }
 
   const tokenData = passwordResetStore.get(email);
@@ -5810,8 +5865,8 @@ app.post('/api/auth/register', async (req, res) => {
     });
   }
 
-  if (!password || password.length < 6) {
-    return res.status(400).json({ success: false, error: 'Password must be at least 6 characters.' });
+  if (role !== 'super_admin' && !isValidPortalPassword(password)) {
+    return res.status(400).json({ success: false, error: PASSWORD_REQUIREMENT_MSG });
   }
 
   const existing = persistentState.users.find((u) => u.email.toLowerCase() === cleanEmail);
