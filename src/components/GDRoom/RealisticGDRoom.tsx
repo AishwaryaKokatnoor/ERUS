@@ -846,7 +846,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       ? (rtcAssignedSeat || (currentUser && 'seatNumber' in currentUser ? (currentUser as any).seatNumber : 1) || 1)
       : null;
 
-    const capacity = Math.max(2, Math.min(50, session.maxCapacity || 8));
+    const capacity = Math.max(2, Math.min(50, session.maxCapacity || 15));
     const seatMap = new Map<number, Student>();
     const usedSeats = new Set<number>();
 
@@ -3432,6 +3432,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                             seatAngle={angle}
                             leftPct={leftPct}
                             topPct={topPct}
+                            isCompactGrid={count > 8}
                           />
                         </div>
                       );
@@ -4984,6 +4985,7 @@ export const StudentVideoFrame: React.FC<{
   seatAngle?: number;
   leftPct?: number;
   topPct?: number;
+  isCompactGrid?: boolean;
 }> = ({
   student,
   isCurrentSpeaker = false,
@@ -4997,6 +4999,7 @@ export const StudentVideoFrame: React.FC<{
   seatAngle,
   leftPct,
   topPct,
+  isCompactGrid = false,
 }) => {
   const isUser = !isFaculty && !!student.isUser;
   const effectiveStream = isUser ? videoStream : student.videoStream;
@@ -5249,7 +5252,7 @@ export const StudentPodCard: React.FC<{
           </>
         )}
 
-        <div className={`w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-2xl sm:rounded-3xl overflow-hidden border-2 transition-all duration-300 shadow-md relative bg-slate-900 ${
+        <div className={`${isCompactGrid ? "w-14 h-14 sm:w-16 sm:h-16 md:w-20 md:h-20 rounded-xl sm:rounded-2xl" : "w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-2xl sm:rounded-3xl"} overflow-hidden border-2 transition-all duration-300 shadow-md relative bg-slate-900 ${
           isZoomedSpeaker
             ? 'border-emerald-400 dark:border-emerald-300 ring-4 ring-emerald-500/80 shadow-2xl shadow-emerald-500/50'
             : student.isEmptySeat

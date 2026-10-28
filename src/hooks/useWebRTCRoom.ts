@@ -224,7 +224,7 @@ export function useWebRTCRoom({
       audioEl.srcObject = new MediaStream([incomingTrack]);
     }
     audioEl.muted = false;
-    audioEl.volume = 1.0;
+    audioEl.volume = 0.85;
 
     const playAudio = () => {
       if (audioEl) {
