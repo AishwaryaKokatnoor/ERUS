@@ -925,7 +925,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       }
       const hasActiveRemoteVideo = Boolean(
         remoteStream &&
-        remoteStream.getVideoTracks().some((t) => t.readyState === 'live' || t.enabled)
+        remoteStream.getVideoTracks().some((t) => t.readyState === 'live' && t.enabled && !t.muted)
       );
       const matchingSessionStudent = session.students.find(
         (s) =>
@@ -952,7 +952,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
         isEmptySeat: false,
         isSpeaking: !!peer.isSpeaking,
         micActive: !!peer.micActive,
-        cameraActive: Boolean(peer.cameraActive || hasActiveRemoteVideo),
+        cameraActive: Boolean(peer.cameraActive !== undefined ? peer.cameraActive : hasActiveRemoteVideo),
         speakingTurns: effectiveTurns,
         speakingDurationSeconds: effectiveDuration,
         volumeLevel: peer.volumeLevel || 0,
@@ -3420,7 +3420,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                           style={{
                             left: `${leftPct}%`,
                             top: `${topPct}%`,
-                            transform: `translate(-50%, -50%) ${isSpk ? 'scale(1.32)' : 'scale(1)'}`,
+                            transform: 'translate(-50%, -50%)',
                             transformOrigin: 'center center',
                             zIndex: isSpk ? 50 : 10,
                           }}
@@ -3715,17 +3715,19 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   </button>
 
                   {/* 5. Trigger Next Student / Peer Turn */}
-                  <button
-                    id="next-peer-turn-btn"
-                    onClick={() => executeNextTurn()}
-                    className="p-3 rounded-full font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 shadow-lg flex items-center justify-center cursor-pointer"
-                    title={isFaculty ? 'Advance Discussion to Next Student Turn' : 'Advance to Next Peer Turn'}
-                  >
-                    <FastForward className="w-5 h-5 text-indigo-300" />
-                  </button>
+                  {isFacultyOrAdmin && (
+                    <button
+                      id="next-peer-turn-btn"
+                      onClick={() => executeNextTurn()}
+                      className="p-3 rounded-full font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 shadow-lg flex items-center justify-center cursor-pointer"
+                      title="Advance Discussion to Next Student Turn"
+                    >
+                      <FastForward className="w-5 h-5 text-indigo-300" />
+                    </button>
+                  )}
 
                   {/* 5.5 Start / Restart GD Call (Green Pill Button - Faculty & Admin only) */}
-                  {session.status !== 'completed' && (isFacultyOrAdmin || !isSessionActive) && (
+                  {session.status !== 'completed' && isFacultyOrAdmin && (
                     <button
                       id="dock-start-gd-btn"
                       onClick={() => {
@@ -5009,11 +5011,11 @@ export const StudentVideoFrame: React.FC<{
   const hasRemoteVideoTrack =
     !isUser &&
     !!effectiveStream &&
-    effectiveStream.getVideoTracks().some((t) => t.readyState !== 'ended');
+    effectiveStream.getVideoTracks().some((t) => t.readyState === 'live' && t.enabled && !t.muted);
   const isCameraEnabled = isUser ? isUserCameraOn : Boolean(student.cameraActive || hasRemoteVideoTrack);
   const isLiveWebcam =
     (isUser && isUserCameraOn && !!videoStream) ||
-    (!isUser && !!effectiveStream && (student.cameraActive || hasRemoteVideoTrack));
+    (!isUser && !!effectiveStream && Boolean(student.cameraActive) && hasRemoteVideoTrack);
   const isMicLive = isUser ? isListeningMic : (isCurrentSpeaker || student.isSpeaking);
 
   // Clear human face portrait avatar fallback (using SVG Avataaars portraits seeded by name)
@@ -5050,7 +5052,7 @@ export const StudentVideoFrame: React.FC<{
         </div>
       ) : isLiveWebcam && effectiveStream ? (
         <VideoStreamPlayer 
-          key={student.id || `seat-${student.seatNumber}`}
+          key={student.socketId || student.id || `seat-${student.seatNumber}`}
           stream={effectiveStream} 
           muted={true}
           participantId={student.id}
@@ -5257,7 +5259,7 @@ export const StudentPodCard: React.FC<{
 
         <div className={`w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-2xl sm:rounded-3xl overflow-hidden border-2 transition-all duration-300 shadow-md relative bg-slate-900 ${
           isZoomedSpeaker
-            ? 'border-emerald-400 dark:border-emerald-300 ring-4 ring-emerald-500/80 shadow-2xl shadow-emerald-500/50 scale-105'
+            ? 'border-emerald-400 dark:border-emerald-300 ring-4 ring-emerald-500/80 shadow-2xl shadow-emerald-500/50'
             : student.isEmptySeat
             ? 'border-dashed border-slate-300 dark:border-slate-700 bg-slate-100/60 dark:bg-slate-900/60 shadow-none'
             : isUser 
