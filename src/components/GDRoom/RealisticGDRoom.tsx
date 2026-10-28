@@ -2010,27 +2010,19 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
     onSpeechEnd?: () => void
   ) => {
     roomVoice.unlock();
-    const isDirective = actionType === 'initiate_opening_speaker' || 
-                        actionType === 'explain_rules' || 
-                        actionType === 'welcome' ||
-                        actionType === 'silence_instruction_1' ||
-                        actionType === 'silence_instruction_2' ||
-                        actionType === 'deadlock_intervention' ||
-                        actionType === 'targeted_question_student' ||
-                        actionType === 'interruption_arbitration' ||
-                        actionType === 'test_voice' ||
-                        actionType === 'topic_announcement' ||
-                        actionType === 'moderation' ||
-                        actionType === 'conclusion' ||
-                        phase === 'intro' ||
-                        phase === 'conclusion';
+    const isEssentialDirective = phase === 'intro' || phase === 'conclusion' || actionType === 'welcome' || actionType === 'conclusion';
 
-    // Only defer non-directive speech if a remote peer is actively speaking on the floor
-    const isParticipantSpeaking = !isDirective && !!(
-      rtcPeers.some((p) => p.isSpeaking && p.role === 'student')
+    // Do NOT interrupt or speak over any student actively talking
+    const isSomeoneSpeaking = Boolean(
+      rtcPeers.some((p) => p.isSpeaking && p.role !== 'faculty') ||
+      rtcIsSpeakingLive ||
+      isUserSpeakingLive ||
+      Boolean(liveSpeechTranscript) ||
+      (session.currentSpeakerId && session.currentSpeakerId !== 'ai-facilitator')
     );
-    if (isParticipantSpeaking) {
-      console.log('[Facilitator] Remote participant is speaking, skipping non-directive prompt.');
+
+    if (!isEssentialDirective && isSomeoneSpeaking) {
+      console.log('[Facilitator] Participant is actively speaking, yielding floor and deferring AI speech.');
       setIsAiProcessing(false);
       if (onSpeechEnd) onSpeechEnd();
       return;
@@ -2639,21 +2631,21 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
       !liveSpeechTranscript
     ) {
       if (!isSocketConnected || !hasRealStudentPeers) {
-        if (clientSilenceStageRef.current === 0 && currentSilence >= 8) {
+        if (clientSilenceStageRef.current === 0 && currentSilence >= 25) {
           clientSilenceStageRef.current = 1;
           speakFacilitator(
             'The floor is open for discussion. Please feel free to share your thoughts.',
             'silence_instruction_1',
             'moderation'
           );
-        } else if (clientSilenceStageRef.current === 1 && currentSilence >= 16) {
+        } else if (clientSilenceStageRef.current === 1 && currentSilence >= 45) {
           clientSilenceStageRef.current = 2;
           speakFacilitator(
             'The floor is open. Let us keep the momentum going—anyone who has not spoken yet, please share your perspective on this topic.',
             'silence_instruction_2',
             'moderation'
           );
-        } else if (clientSilenceStageRef.current === 2 && currentSilence >= 24 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 4000) {
+        } else if (clientSilenceStageRef.current === 2 && currentSilence >= 60 && Date.now() - lastFacilitatorInterventionTimeRef.current >= 4000) {
           clientSilenceStageRef.current = 3;
           lastFacilitatorInterventionTimeRef.current = Date.now();
           handleFacilitatorTargetedProbe();

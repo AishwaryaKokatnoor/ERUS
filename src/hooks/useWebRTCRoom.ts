@@ -185,7 +185,7 @@ export function useWebRTCRoom({
       audioEl = document.createElement('audio');
       audioEl.id = `remote-audio-${peerSocketId}`;
       audioEl.autoplay = true;
-      audioEl.volume = 1.0;
+      audioEl.volume = 0.85;
       audioEl.muted = false;
       audioEl.style.position = 'fixed';
       audioEl.style.width = '1px';
@@ -609,14 +609,14 @@ export function useWebRTCRoom({
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: { ideal: true },
-          noiseSuppression: { ideal: true },
-          autoGainControl: { ideal: true },
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
           // Native Chromium/Google DSP acoustic echo cancellation extensions
-          googEchoCancellation: { ideal: true },
-          googAutoGainControl: { ideal: true },
-          googNoiseSuppression: { ideal: true },
-          googHighpassFilter: { ideal: true },
+          googEchoCancellation: true,
+          googAutoGainControl: true,
+          googNoiseSuppression: true,
+          googHighpassFilter: true,
           sampleRate: 48000,
           channelCount: 1,
         } as any,

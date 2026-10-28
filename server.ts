@@ -8818,19 +8818,19 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
 
         // Generous Staged Turn Arbitration (eliminates premature interruptions & audio overlaps):
         // Stage 0 -> 1: At 8s silence -> AI reminds floor is open (Warning 1)
-        if (room.silenceStage === 0 && room.silenceTimerSeconds >= 8) {
+        if (room.silenceStage === 0 && room.silenceTimerSeconds >= 25) {
           room.silenceStage = 1;
           const openFloorText = 'The floor is open for discussion. Please feel free to share your thoughts.';
           broadcastFacilitatorSilencePrompt(room, openFloorText, 'silence_instruction_1');
         }
         // Stage 1 -> 2: At 16s silence (8s after Stage 1) -> AI encourages quieter participants (Warning 2)
-        else if (room.silenceStage === 1 && room.silenceTimerSeconds >= 16) {
+        else if (room.silenceStage === 1 && room.silenceTimerSeconds >= 45) {
           room.silenceStage = 2;
           const momentumText = 'The floor is open. Let us keep the momentum going—anyone who has not spoken yet, please share your perspective on this topic.';
           broadcastFacilitatorSilencePrompt(room, momentumText, 'silence_instruction_2');
         }
         // Stage 2 -> 3: At 24s silence (8s after Warning 2) -> AI specifically calls upon the candidate who has spoken least
-        else if (room.silenceStage === 2 && room.silenceTimerSeconds >= 24) {
+        else if (room.silenceStage === 2 && room.silenceTimerSeconds >= 65) {
           room.silenceStage = 3;
           room.lastDeadlockAt = Date.now();
           room.deadlockCount = (room.deadlockCount || 0) + 1;
@@ -8838,7 +8838,7 @@ function getOrCreateLiveRoom(slotId: string, topic?: string): LiveGDRoomState {
           await triggerDeadlockIntervention(room);
         }
         // Stage 3: Question was asked; give candidate 25 seconds to answer before cycling to next candidate
-        else if (room.silenceStage === 3 && room.silenceTimerSeconds >= 35) {
+        else if (room.silenceStage === 3 && room.silenceTimerSeconds >= 80) {
           room.silenceStage = 2;
           room.silenceTimerSeconds = 16;
         }
