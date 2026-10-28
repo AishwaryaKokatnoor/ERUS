@@ -1,3 +1,18 @@
+// Apply optimal video bitrate & framerate for multi-peer mesh (up to 15 peers)
+function applyOptimalVideoBitrate(sender: RTCRtpSender) {
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings || params.encodings.length === 0) {
+      params.encodings = [{}];
+    }
+    // 160 kbps per stream ensures even a 15-person room only uploads ~2 Mbps total
+    params.encodings[0].maxBitrate = 160000;
+    params.encodings[0].maxFramerate = 18;
+    params.encodings[0].scaleResolutionDownBy = 1.4;
+    sender.setParameters(params).catch(() => {});
+  } catch {}
+}
+
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { AuthUser } from '../types/auth';
@@ -322,7 +337,8 @@ export function useWebRTCRoom({
     if (videoTransceivers.length === 0) {
       try {
         if (videoTrack) {
-          pc.addTransceiver(videoTrack, { direction: 'sendrecv', streams: videoStreamRef.current ? [videoStreamRef.current] : [] });
+          const vt = pc.addTransceiver(videoTrack, { direction: 'sendrecv', streams: videoStreamRef.current ? [videoStreamRef.current] : [] });
+          applyOptimalVideoBitrate(vt.sender);
         } else {
           pc.addTransceiver('video', { direction: 'sendrecv' });
         }
@@ -330,7 +346,10 @@ export function useWebRTCRoom({
     } else {
       for (const vt of videoTransceivers) {
         try { vt.direction = 'sendrecv'; } catch {}
-        try { await vt.sender.replaceTrack(videoTrack); } catch {}
+        try { 
+          await vt.sender.replaceTrack(videoTrack); 
+          applyOptimalVideoBitrate(vt.sender);
+        } catch {}
       }
     }
   }, []);
@@ -708,7 +727,9 @@ export function useWebRTCRoom({
 
           // Broadcast volume level for UI visualizers without falsely declaring speaking turns from ambient noise
           const timeSinceEmit = now - lastSpeakingEmitTimestampRef.current;
-          if (socketRef.current && (timeSinceEmit > 350 || Math.abs(normVol - lastVolumeStateEmittedRef.current) >= 12)) {
+          const speakingStateChanged = effectiveIsSpeaking !== lastSpeakingStateEmittedRef.current;
+          if (socketRef.current && (speakingStateChanged || (timeSinceEmit >= 450 && Math.abs(normVol - lastVolumeStateEmittedRef.current) >= 14))) {
+            lastSpeakingStateEmittedRef.current = effectiveIsSpeaking;
             lastSpeakingEmitTimestampRef.current = now;
             socketRef.current.emit('peer-speaking-state', {
               slotId,
@@ -1124,17 +1145,18 @@ export function useWebRTCRoom({
     // A peer updated speaking/mic/camera state
     socket.on('peer-speaking-updated', ({ socketId: peerSockId, isSpeaking, micActive, cameraActive, volumeLevel: peerVol }) => {
       if (!active) return;
-      if (isSpeaking || micActive) {
-        const audioEl = audioElementsRef.current.get(peerSockId);
-        if (audioEl) {
-          audioEl.muted = false;
-          audioEl.volume = 1.0;
+      const audioEl = audioElementsRef.current.get(peerSockId);
+      if (audioEl) {
+        audioEl.muted = false;
+        // Smart Voice Gating: actively speaking peer gets clean 0.85 volume; silent peer background room noise is ducked to 0.05
+        audioEl.volume = isSpeaking ? 0.85 : 0.05;
+        if (isSpeaking) {
           audioEl.play().catch(() => {});
-        } else {
-          const pc = peerConnectionsRef.current.get(peerSockId);
-          if (pc) {
-            updatePeerStreamFromReceiversRef.current(peerSockId, pc);
-          }
+        }
+      } else if (isSpeaking || micActive) {
+        const pc = peerConnectionsRef.current.get(peerSockId);
+        if (pc) {
+          updatePeerStreamFromReceiversRef.current(peerSockId, pc);
         }
       }
       if (cameraActive !== undefined) {
