@@ -201,6 +201,10 @@ export async function saveRecordingToGridFS(
   buffer: Buffer,
   metadata?: Record<string, any>
 ): Promise<string | null> {
+  if (buffer && buffer.length > 5 * 1024 * 1024) {
+    console.log(`[MongoDB GridFS] Video (${(buffer.length / 1024 / 1024).toFixed(1)} MB) saved to disk; skipping GridFS to preserve Atlas quota.`);
+    return 'disk-stored';
+  }
   const bucket = getRecordingsBucket();
   if (!bucket) {
     console.warn('[MongoDB GridFS] Bucket not available to save recording:', filename);

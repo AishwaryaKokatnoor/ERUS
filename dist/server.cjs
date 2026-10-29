@@ -204,6 +204,10 @@ function getRecordingsBucket() {
   return null;
 }
 async function saveRecordingToGridFS(filename, buffer, metadata) {
+  if (buffer && buffer.length > 5 * 1024 * 1024) {
+    console.log(`[MongoDB GridFS] Video (${(buffer.length / 1024 / 1024).toFixed(1)} MB) saved to disk; skipping GridFS to preserve Atlas quota.`);
+    return "disk-stored";
+  }
   const bucket = getRecordingsBucket();
   if (!bucket) {
     console.warn("[MongoDB GridFS] Bucket not available to save recording:", filename);
@@ -5845,6 +5849,33 @@ if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_
     ai = null;
   }
 }
+async function generateWithGeminiFallback(params) {
+  if (!ai) throw new Error("Gemini AI client not initialized");
+  const models = [
+    process.env.GEMINI_MODEL,
+    "gemini-3.8-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash"
+  ].filter(Boolean);
+  let lastError = null;
+  for (const m of models) {
+    try {
+      return await ai.models.generateContent({
+        ...params,
+        model: m
+      });
+    } catch (err) {
+      lastError = err;
+      const msg = String(err?.message || "");
+      if (msg.includes("404") || msg.includes("not found") || msg.includes("no longer available") || msg.includes("NOT_FOUND")) {
+        console.warn("[Gemini] Model " + m + " returned 404 / unavailable, trying next model...");
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
+}
 var DEFAULT_SERVER_SLOTS = [];
 var serverSlots = [...DEFAULT_SERVER_SLOTS];
 var currentLiveSession = {
@@ -6047,8 +6078,7 @@ app.post("/api/session/transcribe-audio", async (req, res) => {
       return res.status(503).json({ success: false, error: "Gemini AI speech recognition service unavailable" });
     }
     const cleanBase64 = audioBase64.includes("base64,") ? audioBase64.split("base64,")[1] : audioBase64;
-    const response = await ai.models.generateContent({
-      model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+    const response = await generateWithGeminiFallback({
       contents: [
         {
           role: "user",
@@ -8692,8 +8722,7 @@ CRITICAL RULES:
 - Address both ${speakerFirstName} from ${speakerSeat} and ${targetReal.name} from ${seatStr}.
 - Maximum 40 words total. Plain text only. Natural spoken moderator cadence.`;
           const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 4500));
-          const aiPromise = ai.models.generateContent({
-            model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+          const aiPromise = generateWithGeminiFallback({
             contents: promptInstruction
           });
           const response = await Promise.race([aiPromise, timeoutPromise]);
@@ -8765,8 +8794,7 @@ CRITICAL RULES:
           try {
             const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 4500));
             const response = await Promise.race([
-              ai.models.generateContent({
-                model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+              generateWithGeminiFallback({
                 contents: `You are ${aiParticipant.name}, a student in a live college group discussion about "${room.topic}". Respond naturally in 2-3 sentences (35-65 words). Add one specific, useful argument or example and, where relevant, respond to the previous speaker. Do not repeat any earlier point, phrasing, or conclusion. Do not praise the speaker generically. Do not mention being an AI. Use only this discussion context.
 Recent discussion:
 ${recentHistory}
@@ -8985,8 +9013,7 @@ async function triggerDeadlockIntervention(room) {
     try {
       const priorQuestionsList = Array.from(room.askedQuestions || []).slice(-8).map((q) => `- ${q}`).join("\n");
       const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 4500));
-      const aiPromise = ai.models.generateContent({
-        model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+      const aiPromise = generateWithGeminiFallback({
         contents: `You are the live moderator of an Indian collegiate Group Discussion.
 Topic: "${room.topic}"
 Candidate to call: "${candidateName} ${seatStr}"
