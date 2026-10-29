@@ -6174,6 +6174,37 @@ Language, Accent & Tone Guidelines:
     res.status(500).json({ error: "Failed to simulate peer" });
   }
 });
+app.get("/api/livekit/status", (req, res) => {
+  const isConfigured = Boolean(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
+  res.json({ enabled: isConfigured, url: process.env.LIVEKIT_URL || null });
+});
+app.post("/api/livekit/token", async (req, res) => {
+  try {
+    const { roomName, participantName, identity } = req.body;
+    const apiKey = process.env.LIVEKIT_API_KEY;
+    const apiSecret = process.env.LIVEKIT_API_SECRET;
+    const wsUrl = process.env.LIVEKIT_URL;
+    if (!apiKey || !apiSecret || !wsUrl) {
+      return res.json({ enabled: false, message: "LiveKit credentials not configured; defaulting to optimized P2P Mesh." });
+    }
+    const { AccessToken } = await import("livekit-server-sdk");
+    const at = new AccessToken(apiKey, apiSecret, {
+      identity: identity || participantName || "user-" + Date.now(),
+      name: participantName || "Candidate"
+    });
+    at.addGrant({
+      room: roomName || "gd-room",
+      roomJoin: true,
+      canPublish: true,
+      canSubscribe: true
+    });
+    const token = await at.toJwt();
+    return res.json({ enabled: true, token, url: wsUrl });
+  } catch (err) {
+    console.warn("[LiveKit Token] Error:", err.message);
+    return res.json({ enabled: false, error: err.message });
+  }
+});
 app.post("/api/session/hand-raise", (req, res) => {
   const { studentId } = req.body;
   const student = currentLiveSession.students.find((s) => s.id === studentId);

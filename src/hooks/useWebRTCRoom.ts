@@ -6,9 +6,9 @@ function applyOptimalVideoBitrate(sender: RTCRtpSender) {
       params.encodings = [{}];
     }
     // 160 kbps per stream ensures even a 15-person room only uploads ~2 Mbps total
-    params.encodings[0].maxBitrate = 160000;
-    params.encodings[0].maxFramerate = 18;
-    params.encodings[0].scaleResolutionDownBy = 1.4;
+    params.encodings[0].maxBitrate = 90000;
+    params.encodings[0].maxFramerate = 15;
+    params.encodings[0].scaleResolutionDownBy = 1.6;
     sender.setParameters(params).catch(() => {});
   } catch {}
 }

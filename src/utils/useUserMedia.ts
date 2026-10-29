@@ -46,9 +46,9 @@ export function useUserMedia(): UserMediaControls {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
             video: {
-              width: { ideal: 480, max: 640 },
-              height: { ideal: 360, max: 480 },
-              frameRate: { ideal: 20, max: 24 },
+              width: { ideal: 320, max: 480 },
+              height: { ideal: 240, max: 360 },
+              frameRate: { ideal: 15, max: 18 },
               facingMode: 'user',
             },
             audio: false,
