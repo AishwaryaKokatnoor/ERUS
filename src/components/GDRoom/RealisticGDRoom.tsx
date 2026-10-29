@@ -3707,8 +3707,8 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                     )}
                   </button>
 
-                  {/* 5. Trigger Next Student / Peer Turn */}
-                  {isFacultyOrAdmin && (
+                  {/* 5. Trigger Next Student / Peer Turn (Faculty & Admin only) */}
+                  {isFacultyOrAdmin && !isStudent && (
                     <button
                       id="next-peer-turn-btn"
                       onClick={() => executeNextTurn()}
@@ -3720,7 +3720,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   )}
 
                   {/* 5.5 Start / Restart GD Call (Green Pill Button - Faculty & Admin only) */}
-                  {session.status !== 'completed' && isFacultyOrAdmin && (
+                  {session.status !== 'completed' && isFacultyOrAdmin && !isStudent && (
                     <button
                       id="dock-start-gd-btn"
                       onClick={() => {
@@ -3762,7 +3762,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   )}
 
                   {/* Waiting badge for students when session not active */}
-                  {session.status !== 'completed' && !isSessionActive && !isFacultyOrAdmin && (
+                  {session.status !== 'completed' && !isSessionActive && (isStudent || !isFacultyOrAdmin) && (
                     <div className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-slate-800/90 border border-slate-700 text-[11px] text-amber-300 font-semibold shadow-sm ml-1 sm:ml-2">
                       <Clock className="w-3.5 h-3.5 animate-spin text-amber-400" />
                       <span className="hidden sm:inline">Waiting for Faculty to start GD</span>
@@ -3771,7 +3771,7 @@ export const RealisticGDRoom: React.FC<RealisticGDRoomProps> = ({
                   )}
 
                   {/* 6. Conclude / Finish GD Call (Red Pill Button - Faculty & Admin only) */}
-                  {isFacultyOrAdmin && (
+                  {isFacultyOrAdmin && !isStudent && (
                     <button
                       id="leave-call-btn"
                       onClick={() => {

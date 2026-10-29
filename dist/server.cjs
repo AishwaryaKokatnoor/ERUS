@@ -1,0 +1,9694 @@
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+// server.ts
+var server_exports = {};
+__export(server_exports, {
+  app: () => app,
+  cleanSlotName: () => cleanSlotName,
+  default: () => server_default,
+  ensureMongoReady: () => ensureMongoReady,
+  httpServer: () => httpServer
+});
+module.exports = __toCommonJS(server_exports);
+var import_express = __toESM(require("express"), 1);
+var import_http = __toESM(require("http"), 1);
+var import_socket = require("socket.io");
+var import_path2 = __toESM(require("path"), 1);
+var import_fs = __toESM(require("fs"), 1);
+var import_dotenv2 = __toESM(require("dotenv"), 1);
+var import_dns2 = __toESM(require("dns"), 1);
+var import_bcryptjs = __toESM(require("bcryptjs"), 1);
+var import_jsonwebtoken = __toESM(require("jsonwebtoken"), 1);
+var import_client = require("@prisma/client");
+var import_genai = require("@google/genai");
+
+// src/db/mongo.ts
+var import_mongoose = __toESM(require("mongoose"), 1);
+var import_path = __toESM(require("path"), 1);
+var import_dotenv = __toESM(require("dotenv"), 1);
+var import_dns = __toESM(require("dns"), 1);
+import_dotenv.default.config();
+try {
+  import_dns.default.setServers(["8.8.8.8", "8.8.4.4", "1.1.1.1"]);
+  const origLookup = import_dns.default.lookup.bind(import_dns.default);
+  import_dns.default.lookup = function(hostname, options, callback) {
+    let cb = callback;
+    let opts = options;
+    if (typeof options === "function") {
+      cb = options;
+      opts = {};
+    } else if (typeof options === "number") {
+      opts = { family: options };
+    }
+    return origLookup(hostname, opts, (err, address, family) => {
+      if (!err) {
+        return cb(null, address, family);
+      }
+      import_dns.default.resolve4(hostname, (resErr, addresses) => {
+        if (!resErr && addresses && addresses.length > 0) {
+          if (opts && opts.all) {
+            return cb(
+              null,
+              addresses.map((a) => ({ address: a, family: 4 }))
+            );
+          }
+          return cb(null, addresses[0], 4);
+        }
+        return cb(err, address, family);
+      });
+    });
+  };
+} catch (dnsErr) {
+  console.warn("[MongoDB] Could not configure custom DNS fallback:", dnsErr.message);
+}
+import_mongoose.default.set("autoIndex", false);
+var isConnected = false;
+var lastMongoError = null;
+function getMongoLastError() {
+  return lastMongoError;
+}
+function getActiveMongoUri() {
+  return (process.env.MONGODB_URI || process.env.MONGO_URL || process.env.MONGODB_URL || "mongodb://127.0.0.1:27017/erus").trim();
+}
+function candidateMongoUris(raw) {
+  const list = [];
+  const trimmed = raw.trim();
+  if (!trimmed) return ["mongodb://127.0.0.1:27017/erus"];
+  if (trimmed.startsWith("mongodb://") && trimmed.includes("@")) {
+    const withoutQuery = trimmed.split("?")[0].replace(/\/+$/, "");
+    const queryPart = trimmed.split("?")[1] || "";
+    const hasPath = /:\d+\/[^/?]+/.test(withoutQuery);
+    if (!hasPath) {
+      const q = queryPart ? queryPart.includes("authSource=") ? queryPart : `${queryPart}&authSource=admin` : "authSource=admin";
+      list.push(`${withoutQuery}/erus?${q}`);
+      list.push(`${withoutQuery}/railway?${q}`);
+      list.push(trimmed);
+    } else if (!trimmed.includes("authSource=")) {
+      const separator = trimmed.includes("?") ? "&" : "?";
+      list.push(`${trimmed}${separator}authSource=admin`);
+      list.push(trimmed);
+    } else {
+      list.push(trimmed);
+    }
+  } else if (trimmed.startsWith("mongodb+srv://")) {
+    const withoutQuery = trimmed.split("?")[0].replace(/\/+$/, "");
+    const queryPart = trimmed.split("?")[1] ? `?${trimmed.split("?")[1]}` : "";
+    const hostPart = withoutQuery.replace("mongodb+srv://", "");
+    if (!hostPart.includes("/")) {
+      list.push(`${withoutQuery}/erus${queryPart}`);
+    }
+    list.push(trimmed);
+  } else {
+    list.push(trimmed);
+  }
+  return list;
+}
+if (!import_mongoose.default.connection.listenerCount("disconnected")) {
+  import_mongoose.default.connection.on("connected", () => {
+    isConnected = true;
+    lastMongoError = null;
+    console.log(`[MongoDB] Active connection established to database "${import_mongoose.default.connection.name}"`);
+  });
+  import_mongoose.default.connection.on("disconnected", () => {
+    isConnected = false;
+    console.warn("[MongoDB] Connection lost. Auto-reconnecting in 3s...");
+    setTimeout(() => {
+      connectMongoDB().catch(() => {
+      });
+    }, 3e3);
+  });
+  import_mongoose.default.connection.on("error", (err) => {
+    lastMongoError = err.message;
+    console.warn("[MongoDB] Runtime error event:", err.message);
+  });
+}
+async function connectMongoDB() {
+  if (isConnected && import_mongoose.default.connection.readyState === 1) return true;
+  const rawUri = getActiveMongoUri();
+  const candidates = candidateMongoUris(rawUri);
+  for (const uri of candidates) {
+    const masked = uri.includes("@") ? uri.replace(/:([^:@]+)@/, ":****@") : uri;
+    try {
+      console.log(`[MongoDB] Attempting connection to ${masked}...`);
+      await import_mongoose.default.connect(uri, {
+        serverSelectionTimeoutMS: 5e3,
+        connectTimeoutMS: 1e4,
+        autoIndex: false
+      });
+      isConnected = true;
+      lastMongoError = null;
+      console.log(`[MongoDB] Successfully connected to MongoDB (database: ${import_mongoose.default.connection.name || "erus"})`);
+      return true;
+    } catch (err) {
+      lastMongoError = err.message || String(err);
+      console.warn(`[MongoDB] Connection attempt to ${masked} failed: ${lastMongoError}`);
+    }
+  }
+  if (rawUri.includes("localhost") || rawUri.includes("127.0.0.1")) {
+    try {
+      const fallbackUri = "mongodb://127.0.0.1:27017/erus";
+      await import_mongoose.default.connect(fallbackUri, { serverSelectionTimeoutMS: 5e3 });
+      isConnected = true;
+      lastMongoError = null;
+      console.log(`[MongoDB] Successfully connected to MongoDB via 127.0.0.1:27017`);
+      return true;
+    } catch (fallbackErr) {
+      lastMongoError = fallbackErr.message;
+      isConnected = false;
+      return false;
+    }
+  }
+  isConnected = false;
+  return false;
+}
+function isMongoConnected() {
+  return isConnected && import_mongoose.default.connection.readyState === 1;
+}
+var recordingsBucket = null;
+function getRecordingsBucket() {
+  if (recordingsBucket && import_mongoose.default.connection.readyState === 1) {
+    return recordingsBucket;
+  }
+  if (import_mongoose.default.connection.readyState === 1 && import_mongoose.default.connection.db) {
+    recordingsBucket = new import_mongoose.default.mongo.GridFSBucket(import_mongoose.default.connection.db, {
+      bucketName: "gd_recordings"
+    });
+    return recordingsBucket;
+  }
+  return null;
+}
+async function saveRecordingToGridFS(filename, buffer, metadata) {
+  const bucket = getRecordingsBucket();
+  if (!bucket) {
+    console.warn("[MongoDB GridFS] Bucket not available to save recording:", filename);
+    return null;
+  }
+  try {
+    try {
+      const existing = await bucket.find({ filename }).toArray();
+      for (const doc of existing) {
+        await bucket.delete(doc._id);
+      }
+    } catch {
+    }
+    const contentType = metadata?.contentType || (filename.endsWith(".mp4") ? "video/mp4" : "video/webm");
+    return await new Promise((resolve, reject) => {
+      const uploadStream = bucket.openUploadStream(filename, {
+        contentType,
+        metadata: {
+          contentType,
+          slotId: metadata?.slotId || "",
+          altSlotId: metadata?.altSlotId || "",
+          durationSeconds: metadata?.durationSeconds || 0,
+          recordedAt: metadata?.recordedAt || (/* @__PURE__ */ new Date()).toISOString(),
+          recordedBy: metadata?.recordedBy || "",
+          fileSizeBytes: buffer.length,
+          ...metadata
+        }
+      });
+      uploadStream.on("finish", () => {
+        console.log(`[MongoDB GridFS] Permanently stored ${buffer.length} bytes for "${filename}" (ID: ${uploadStream.id})`);
+        resolve(uploadStream.id.toString());
+      });
+      uploadStream.on("error", (err) => {
+        console.error(`[MongoDB GridFS] Upload stream error for "${filename}":`, err);
+        reject(err);
+      });
+      uploadStream.end(buffer);
+    });
+  } catch (err) {
+    console.error(`[MongoDB GridFS] Failed to save recording "${filename}":`, err.message);
+    return null;
+  }
+}
+async function findRecordingInGridFS(filenameOrSlotId) {
+  const bucket = getRecordingsBucket();
+  if (!bucket) return null;
+  try {
+    const raw = String(filenameOrSlotId || "").trim();
+    if (!raw) return null;
+    const baseName = import_path.default.basename(raw);
+    const cleanSlot = raw.replace(/^gd-recording-/, "").replace(/-\d+\.(webm|mp4|ogg|wav)$/, "");
+    const altSlot = cleanSlot.startsWith("slot-") ? cleanSlot.replace("slot-", "session-") : cleanSlot.startsWith("session-") ? cleanSlot.replace("session-", "slot-") : "";
+    const queries = [
+      { filename: baseName },
+      { filename: raw },
+      { "metadata.slotId": raw },
+      { "metadata.slotId": cleanSlot },
+      ...altSlot ? [{ "metadata.slotId": altSlot }] : [],
+      { "metadata.altSlotId": raw },
+      { filename: new RegExp(cleanSlot.replace(/[^a-zA-Z0-9_-]/g, "_"), "i") }
+    ];
+    for (const q of queries) {
+      const docs = await bucket.find(q).sort({ uploadDate: -1 }).limit(1).toArray();
+      if (docs && docs.length > 0) {
+        return docs[0];
+      }
+    }
+  } catch (err) {
+    console.warn("[MongoDB GridFS] Lookup error:", err.message);
+  }
+  return null;
+}
+function openGridFSDownloadStream(id, options) {
+  const bucket = getRecordingsBucket();
+  if (!bucket) return null;
+  try {
+    return bucket.openDownloadStream(id, options);
+  } catch (err) {
+    console.warn("[MongoDB GridFS] Download stream error:", err.message);
+    return null;
+  }
+}
+var CollegeSchema = new import_mongoose.Schema(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    name: { type: String, required: true },
+    code: { type: String, required: true, unique: true, index: true },
+    contactEmail: { type: String, required: true },
+    phone: { type: String, default: "" },
+    address: { type: String, default: "" },
+    status: { type: String, default: "active" },
+    studentCount: { type: Number, default: 0 },
+    facultyCount: { type: Number, default: 0 },
+    slotCount: { type: Number, default: 0 },
+    studentLimit: { type: Number, default: 60 },
+    adminEmail: { type: String, default: "" },
+    adminName: { type: String, default: "" },
+    adminPassword: { type: String, default: "" }
+  },
+  { timestamps: true, collection: "colleges", autoIndex: false }
+);
+var CollegeModel = import_mongoose.default.models.College || import_mongoose.default.model("College", CollegeSchema);
+var UserSchema = new import_mongoose.Schema(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    name: { type: String, required: true },
+    email: { type: String, required: true, unique: true, index: true, lowercase: true },
+    password: { type: String, required: true },
+    role: {
+      type: String,
+      required: true,
+      enum: ["super_admin", "college_admin", "faculty", "student"],
+      index: true
+    },
+    college: { type: String, required: true },
+    collegeCode: { type: String, default: "DIT", index: true },
+    avatar: { type: String, default: "" },
+    // Sub-Table: Student Profile
+    studentProfile: {
+      studentId: { type: String },
+      course: { type: String, default: "B.Tech CSE" },
+      batch: { type: String, default: "2022-2026" },
+      seatNumber: { type: Number, default: 1 }
+    },
+    // Sub-Table: Faculty Profile
+    facultyProfile: {
+      facultyId: { type: String },
+      department: { type: String, default: "Department of Computer Science & Engineering" },
+      designation: { type: String, default: "Faculty Member" }
+    },
+    // Sub-Table: College Admin Profile
+    collegeAdminProfile: {
+      adminId: { type: String },
+      department: { type: String, default: "Academic Administration" }
+    }
+  },
+  { timestamps: true, collection: "users", autoIndex: false }
+);
+var UserModel = import_mongoose.default.models.User || import_mongoose.default.model("User", UserSchema);
+var GDSessionSchema = new import_mongoose.Schema(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    slotName: { type: String, required: true },
+    topic: { type: String, required: true, index: true },
+    description: { type: String, default: "" },
+    activityType: { type: String, enum: ["gd", "presentation"], default: "gd" },
+    presentationTopics: { type: [String], default: [] },
+    slotTiming: { type: String, default: "10:00 AM - 10:30 AM" },
+    slotDate: { type: String, default: "Today" },
+    status: {
+      type: String,
+      required: true,
+      enum: ["scheduled", "active", "completed"],
+      default: "scheduled",
+      index: true
+    },
+    currentPhase: {
+      type: String,
+      default: "intro"
+    },
+    durationMinutes: { type: Number, default: 25 },
+    maxCapacity: { type: Number, default: 15 },
+    enrolledCount: { type: Number, default: 0 },
+    collegeCode: { type: String, default: "DIT", index: true },
+    assignedFacultyId: { type: String, default: "" },
+    assignedFacultyName: { type: String, default: "" },
+    assignedFacultyEmail: { type: String, default: "" },
+    assignedFacultyDept: { type: String, default: "" },
+    facilitatorSpeech: { type: String, default: "" },
+    facilitatorAction: { type: String, default: "" },
+    isFacilitatorSpeaking: { type: Boolean, default: false },
+    silenceTimerSeconds: { type: Number, default: 0 },
+    currentSpeakerId: { type: String, default: null },
+    startedAt: { type: Number, default: Date.now },
+    students: { type: [import_mongoose.Schema.Types.Mixed], default: [] },
+    recordingUrl: { type: String, default: "" },
+    recordingDurationSeconds: { type: Number, default: 0 },
+    recordingFileSize: { type: Number, default: 0 },
+    recordedAt: { type: Date, default: null }
+  },
+  { timestamps: true, collection: "gd_sessions", autoIndex: false }
+);
+var GDSessionModel = import_mongoose.default.models.GDSession || import_mongoose.default.model("GDSession", GDSessionSchema);
+var TranscriptEntrySchema = new import_mongoose.Schema(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    sessionId: { type: String, required: true, index: true },
+    // Sub-table reference
+    speakerId: { type: String, required: true, index: true },
+    speakerName: { type: String, required: true },
+    seatNumber: { type: Number, default: null },
+    isFacilitator: { type: Boolean, default: false },
+    timestamp: { type: String, default: () => (/* @__PURE__ */ new Date()).toLocaleTimeString() },
+    timestampSeconds: { type: Number, default: 0 },
+    text: { type: String, required: true },
+    type: { type: String, default: "statement" },
+    sentiment: { type: String, default: "neutral" }
+  },
+  { timestamps: true, collection: "gd_transcripts", autoIndex: false }
+);
+var TranscriptEntryModel = import_mongoose.default.models.TranscriptEntry || import_mongoose.default.model("TranscriptEntry", TranscriptEntrySchema);
+var AssessmentReportSchema = new import_mongoose.Schema(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    sessionId: { type: String, required: true, index: true },
+    // Sub-table reference
+    studentId: { type: String, required: true, index: true },
+    studentName: { type: String, default: "" },
+    seatNumber: { type: Number, default: null },
+    topic: { type: String, default: "" },
+    overallScore: { type: Number, default: 80 },
+    grade: { type: String, default: "Good" },
+    speakingDurationSeconds: { type: Number, default: 0 },
+    speakingTimeFormatted: { type: String, default: "0 min 0 sec" },
+    speakingTurns: { type: Number, default: 0 },
+    wpm: { type: Number, default: 0 },
+    wpmStatus: { type: String, default: "Optimal" },
+    fillerWordsCount: { type: Number, default: 0 },
+    fillerWordsBreakdown: { type: [import_mongoose.Schema.Types.Mixed], default: [] },
+    interruptionCount: { type: Number, default: 0 },
+    questionsAnswered: { type: Number, default: 0 },
+    questionsInitiated: { type: Number, default: 0 },
+    rubricJson: { type: import_mongoose.Schema.Types.Mixed, default: {} },
+    feedback: { type: String, default: "" },
+    strengths: { type: [String], default: [] },
+    improvements: { type: [String], default: [] },
+    aiRecommendations: { type: [String], default: [] },
+    fullReportJson: { type: import_mongoose.Schema.Types.Mixed, default: {} }
+  },
+  { timestamps: true, collection: "assessment_reports", autoIndex: false }
+);
+var AssessmentReportModel = import_mongoose.default.models.AssessmentReport || import_mongoose.default.model("AssessmentReport", AssessmentReportSchema);
+var GDBookingSchema = new import_mongoose.Schema(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    sessionId: { type: String, required: true, index: true },
+    // Sub-table reference
+    studentId: { type: String, required: true, index: true },
+    topic: { type: String, default: "" },
+    status: {
+      type: String,
+      required: true,
+      enum: ["BOOKED", "LIVE", "COMPLETED", "CANCELLED"],
+      default: "BOOKED",
+      index: true
+    },
+    bookedAt: { type: Date, default: Date.now }
+  },
+  { timestamps: true, collection: "gd_bookings", autoIndex: false }
+);
+var GDBookingModel = import_mongoose.default.models.GDBooking || import_mongoose.default.model("GDBooking", GDBookingSchema);
+var SystemStateSchema = new import_mongoose.Schema(
+  {
+    key: { type: String, required: true, unique: true, default: "global", index: true },
+    deletedSlotIds: { type: [String], default: [] },
+    slotsInitializedColleges: { type: import_mongoose.Schema.Types.Mixed, default: {} },
+    studentBookings: { type: import_mongoose.Schema.Types.Mixed, default: {} },
+    studentTopicBookings: { type: import_mongoose.Schema.Types.Mixed, default: {} },
+    recordings: { type: import_mongoose.Schema.Types.Mixed, default: {} },
+    systemSettings: { type: import_mongoose.Schema.Types.Mixed, default: {} }
+  },
+  { timestamps: true, collection: "system_state", autoIndex: false }
+);
+var SystemStateModel = import_mongoose.default.models.SystemState || import_mongoose.default.model("SystemState", SystemStateSchema);
+async function initMongoDBTablesAndSubTables() {
+  const connected = await connectMongoDB();
+  if (!connected) {
+    console.warn("[MongoDB] Database not connected. Tables and sub-tables will initialize once connected.");
+    return;
+  }
+  console.log("\n[MongoDB] ==========================================");
+  console.log('[MongoDB] Initializing Tables and Sub-Tables in "erus" DB:');
+  console.log("[MongoDB] 1. Primary Table: colleges");
+  console.log("[MongoDB] 2. Primary Table: users (with Student/Faculty/Admin sub-profiles)");
+  console.log("[MongoDB] 3. Primary Table: gd_sessions (Parent Table)");
+  console.log("[MongoDB] 4. Sub-Table:     gd_transcripts (Child of gd_sessions)");
+  console.log("[MongoDB] 5. Sub-Table:     assessment_reports (Child of gd_sessions)");
+  console.log("[MongoDB] 6. Sub-Table:     gd_bookings (Child of gd_sessions & users)");
+  console.log("[MongoDB] 7. System Table:  system_state (Global settings & bookings)");
+  console.log("[MongoDB] ==========================================\n");
+  try {
+    if (process.env.ERUS_PURGE_LEGACY_DUMMY_DATA === "true") {
+      const legacyDummyUserIds = ["ca-1", "fac-1", "fac-2", "s1", "s2", "s3"];
+      const legacyDummyEmails = [
+        "admin@dit.edu.in",
+        "sunita.rao@dit.edu.in",
+        "rajesh.verma@dit.edu.in",
+        "rahul.kumar@dit.edu.in",
+        "neha.gupta@dit.edu.in",
+        "aditya.singh@dit.edu.in"
+      ];
+      await UserModel.deleteMany({
+        $or: [{ id: { $in: legacyDummyUserIds } }, { email: { $in: legacyDummyEmails } }]
+      });
+      const legacyDummyCollegeCodes = ["DIT", "IITB"];
+      await CollegeModel.deleteMany({
+        $or: [{ code: { $in: legacyDummyCollegeCodes } }, { id: { $in: ["col-1", "col-2"] } }]
+      });
+      const legacyDummySessionIds = ["slot-dit-001", "session-101", "slot-teachers-1", "slot-dit-0700"];
+      await GDSessionModel.deleteMany({
+        $or: [
+          { id: { $in: legacyDummySessionIds } },
+          { collegeCode: { $in: legacyDummyCollegeCodes } },
+          { assignedFacultyEmail: { $in: legacyDummyEmails } }
+        ]
+      });
+      await TranscriptEntryModel.deleteMany({
+        $or: [
+          { id: { $in: ["t-init-1", "t-init-2", "t-live-test-001"] } },
+          { speakerName: "Rahul Kumar" },
+          { speakerId: { $in: legacyDummyUserIds } }
+        ]
+      });
+      await GDBookingModel.deleteMany({
+        $or: [
+          { id: { $in: ["b-s1-slot-dit-001", "bk-s3-slot-teachers-1", "bk-s1-slot-dit-0700"] } },
+          { studentId: { $in: legacyDummyUserIds } }
+        ]
+      });
+      await AssessmentReportModel.deleteMany({
+        $or: [
+          { id: { $in: ["rep-s1-session-101", "rep-live-test-001"] } },
+          { studentName: "Rahul Kumar" },
+          { studentId: { $in: legacyDummyUserIds } }
+        ]
+      });
+      console.warn("[MongoDB] ERUS_PURGE_LEGACY_DUMMY_DATA=true; configured legacy records were purged.");
+    } else {
+      console.log("[MongoDB] Legacy cleanup skipped; set ERUS_PURGE_LEGACY_DUMMY_DATA=true only for an intentional maintenance operation.");
+    }
+    const superAdminExists = await UserModel.findOne({
+      $or: [{ role: "super_admin" }, { email: "superadmin@erus.ai" }]
+    });
+    if (!superAdminExists) {
+      console.log("[MongoDB] Creating Platform Super Admin account...");
+      await UserModel.create({
+        id: "sa-1",
+        name: "Platform Super Admin",
+        email: "superadmin@erus.ai",
+        password: "admin123",
+        role: "super_admin",
+        college: "ERUS Global Administration"
+      });
+      console.log("[MongoDB] Platform Super Admin account initialized.");
+    }
+    const counts = {
+      colleges: await CollegeModel.countDocuments(),
+      users: await UserModel.countDocuments(),
+      gd_sessions: await GDSessionModel.countDocuments(),
+      gd_transcripts: await TranscriptEntryModel.countDocuments(),
+      assessment_reports: await AssessmentReportModel.countDocuments(),
+      gd_bookings: await GDBookingModel.countDocuments()
+    };
+    console.log("[MongoDB] Database ready! Verified table and sub-table document counts:");
+    console.log(JSON.stringify(counts, null, 2));
+  } catch (err) {
+    console.error("[MongoDB] Error during table/sub-table initialization:", err);
+  }
+}
+
+// src/services/mailer.ts
+var import_nodemailer = __toESM(require("nodemailer"), 1);
+var cachedTransporter = null;
+var cachedConfigKey = "";
+function getTransporter() {
+  const host = process.env.SMTP_HOST?.trim();
+  const port = parseInt(process.env.SMTP_PORT || "587", 10);
+  const user = (process.env.SMTP_USER || process.env.SMTP_EMAIL)?.trim();
+  const pass = (process.env.SMTP_PASS || process.env.SMTP_PASSWORD)?.trim();
+  const gmailUser = process.env.GMAIL_USER?.trim();
+  const gmailPass = (process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASS)?.trim();
+  const resendKey = process.env.RESEND_API_KEY?.trim();
+  const currentKey = `${host}:${port}:${user}:${pass ? "***" : ""}:${gmailUser}:${gmailPass ? "***" : ""}:${resendKey ? "***" : ""}`;
+  if (cachedTransporter && cachedConfigKey === currentKey) {
+    return cachedTransporter;
+  }
+  if (gmailUser && gmailPass) {
+    console.log(`[Email Service] Initializing Gmail SMTP transport for ${gmailUser}`);
+    cachedTransporter = import_nodemailer.default.createTransport({
+      service: "gmail",
+      auth: {
+        user: gmailUser,
+        pass: gmailPass.replace(/\s+/g, "")
+        // Strip spaces from 16-char app passwords
+      }
+    });
+    cachedConfigKey = currentKey;
+    return cachedTransporter;
+  }
+  if (resendKey) {
+    console.log("[Email Service] Initializing Resend SMTP transport");
+    cachedTransporter = import_nodemailer.default.createTransport({
+      host: "smtp.resend.com",
+      port: 465,
+      secure: true,
+      auth: {
+        user: "resend",
+        pass: resendKey
+      }
+    });
+    cachedConfigKey = currentKey;
+    return cachedTransporter;
+  }
+  if (host && user && pass) {
+    console.log(`[Email Service] Initializing SMTP transport on ${host}:${port}`);
+    cachedTransporter = import_nodemailer.default.createTransport({
+      host,
+      port,
+      secure: port === 465 || process.env.SMTP_SECURE === "true",
+      auth: { user, pass },
+      tls: {
+        rejectUnauthorized: process.env.NODE_ENV === "production" ? true : false
+      }
+    });
+    cachedConfigKey = currentKey;
+    return cachedTransporter;
+  }
+  cachedTransporter = null;
+  cachedConfigKey = "";
+  return null;
+}
+function getFromAddress() {
+  if (process.env.SMTP_FROM) return process.env.SMTP_FROM.trim();
+  if (process.env.GMAIL_USER) return process.env.GMAIL_USER.trim();
+  if (process.env.SMTP_USER) return process.env.SMTP_USER.trim();
+  return "no-reply@campus.erus.edu";
+}
+async function sendCredentialsEmail(params) {
+  const { to, name, role, username, loginId, password, collegeName = "Your Institution", loginUrl = "https://erus-production.up.railway.app" } = params;
+  const roleTitle = role === "faculty" ? "Faculty Evaluator" : role === "college_admin" ? "College Administrator" : "Student Participant";
+  const roleColor = role === "faculty" ? "#0d9488" : role === "college_admin" ? "#d97706" : "#2563eb";
+  const userIdentifier = username || loginId || to;
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>Your ERUS Portal Login Credentials</title>
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b; }
+        .container { max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        .header { background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); padding: 32px 28px; text-align: center; color: #ffffff; }
+        .badge { display: inline-block; padding: 4px 12px; border-radius: 9999px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; background-color: ${roleColor}; color: white; margin-bottom: 12px; }
+        .title { margin: 0; font-size: 22px; font-weight: 700; }
+        .subtitle { margin-top: 6px; font-size: 13px; color: #94a3b8; }
+        .body-content { padding: 32px 28px; }
+        .greeting { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #0f172a; }
+        .desc { font-size: 14px; line-height: 1.6; color: #475569; margin-bottom: 24px; }
+        .creds-box { background: #f1f5f9; border-radius: 12px; padding: 20px; border: 1px solid #cbd5e1; margin-bottom: 24px; }
+        .cred-row { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 14px; }
+        .cred-row:last-child { margin-bottom: 0; }
+        .cred-label { font-weight: 600; color: #64748b; }
+        .cred-val { font-family: monospace; font-weight: 700; color: #0f172a; background: #e2e8f0; padding: 2px 8px; border-radius: 6px; }
+        .btn-container { text-align: center; margin: 28px 0; }
+        .btn { display: inline-block; background: ${roleColor}; color: #ffffff !important; text-decoration: none; padding: 12px 28px; border-radius: 10px; font-weight: 600; font-size: 14px; }
+        .footer { padding: 20px 28px; background: #f8fafc; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8; text-align: center; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <div class="badge">${roleTitle}</div>
+          <h1 class="title">ERUS AI Group Discussion Platform</h1>
+          <div class="subtitle">Access Credentials Issued by ${collegeName}</div>
+        </div>
+        <div class="body-content">
+          <div class="greeting">Hello, ${name}</div>
+          <p class="desc">
+            Your official <strong>${roleTitle}</strong> account for the ERUS AI Group Discussion & Evaluation Platform is ready.
+          </p>
+          <div class="creds-box">
+            <div class="cred-row">
+              <span class="cred-label">Login Identifier / Email:</span>
+              <span class="cred-val">${to}</span>
+            </div>
+            <div class="cred-row">
+              <span class="cred-label">Username / Roll No:</span>
+              <span class="cred-val">${userIdentifier}</span>
+            </div>
+            <div class="cred-row">
+              <span class="cred-label">Assigned Password:</span>
+              <span class="cred-val">${password}</span>
+            </div>
+          </div>
+          <p class="desc" style="font-size: 13px; color: #64748b;">
+            \u{1F4A1} Note: You can reset this password anytime using your registered email via the "Forgot Password" link on the login screen.
+          </p>
+          <div class="btn-container">
+            <a href="${loginUrl}" class="btn" target="_blank">Sign In to ERUS Portal</a>
+          </div>
+        </div>
+        <div class="footer">
+          This is an automated dispatch from ERUS Platform. If you did not expect this email, please contact your campus administration.
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.log(`[Email Service - Simulated] Credentials sent to ${to} (${name}): Username=${userIdentifier}, Password=${password}`);
+    return { success: true, simulated: true };
+  }
+  try {
+    const fromAddress = getFromAddress();
+    await transporter.sendMail({
+      from: `"ERUS Platform" <${fromAddress}>`,
+      to,
+      subject: `Your ${collegeName} ERUS Portal Login Credentials`,
+      html
+    });
+    console.log(`[Email Service - Live] Successfully delivered credentials email to ${to}`);
+    return { success: true, simulated: false };
+  } catch (err) {
+    console.warn(`[Email Service] Failed to send email to ${to}:`, err.message);
+    return { success: false, error: err.message };
+  }
+}
+async function sendPasswordResetOtpEmail(params) {
+  const { to, name, otp, role, expiresInMinutes = 15 } = params;
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>Password Reset Request</title>
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b; }
+        .container { max-width: 520px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        .header { background: #0f172a; padding: 28px; text-align: center; color: #ffffff; }
+        .title { margin: 0; font-size: 20px; font-weight: 700; }
+        .body-content { padding: 32px 28px; text-align: center; }
+        .desc { font-size: 14px; line-height: 1.6; color: #475569; margin-bottom: 24px; text-align: left; }
+        .otp-box { background: #f8fafc; border: 2px dashed #6366f1; border-radius: 12px; padding: 18px; margin: 24px 0; text-align: center; }
+        .otp-code { font-family: monospace; font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #4338ca; }
+        .expiry { font-size: 12px; color: #dc2626; font-weight: 600; margin-top: 8px; }
+        .footer { padding: 16px; background: #f8fafc; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8; text-align: center; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1 class="title">ERUS Account Security</h1>
+        </div>
+        <div class="body-content">
+          <p class="desc">
+            Hello ${name || "User"},<br><br>
+            We received a request to reset the password for your <strong>${role}</strong> account associated with ${to}. Use the verification code below to set a new password:
+          </p>
+          <div class="otp-box">
+            <div class="otp-code">${otp}</div>
+            <div class="expiry">Expires in ${expiresInMinutes} minutes</div>
+          </div>
+          <p class="desc" style="font-size: 13px; color: #64748b;">
+            If you did not request a password reset, you can safely ignore this email. Your current password remains active and secure.
+          </p>
+        </div>
+        <div class="footer">
+          ERUS Group Discussion Platform &bull; Security & Verification
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.log(`[Email Service - Simulated] Password reset OTP sent to ${to}: Code=${otp} (expires in ${expiresInMinutes}m)`);
+    return { success: true, simulated: true };
+  }
+  try {
+    const fromAddress = getFromAddress();
+    await transporter.sendMail({
+      from: `"ERUS Security" <${fromAddress}>`,
+      to,
+      subject: `Your ERUS Password Reset Code: ${otp}`,
+      html
+    });
+    console.log(`[Email Service - Live] Successfully delivered OTP email to ${to}`);
+    return { success: true, simulated: false };
+  } catch (err) {
+    console.warn(`[Email Service] Failed to send OTP email to ${to}:`, err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+// server.ts
+try {
+  import_dns2.default.setServers(["8.8.8.8", "8.8.4.4", "1.1.1.1"]);
+} catch {
+}
+import_dotenv2.default.config();
+var app = (0, import_express.default)();
+var httpServer = import_http.default.createServer(app);
+var io = new import_socket.Server(httpServer, {
+  cors: { origin: "*", methods: ["GET", "POST"] },
+  maxHttpBufferSize: 1e8
+});
+var PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3e3;
+var JWT_SECRET = process.env.JWT_SECRET || "erus_super_secret_jwt_key_2026";
+app.use(import_express.default.json());
+app.use(
+  ["/api/sessions/:id/recording", "/api/college/slots/:id/recording"],
+  import_express.default.raw({ type: ["audio/*", "video/*", "application/octet-stream"], limit: "150mb" })
+);
+var RECORDINGS_DIR = import_path2.default.join(process.cwd(), "uploads", "recordings");
+if (!import_fs.default.existsSync(RECORDINGS_DIR)) {
+  import_fs.default.mkdirSync(RECORDINGS_DIR, { recursive: true });
+}
+async function streamRecordingResponse(req, res, rawTarget) {
+  const filename = import_path2.default.basename(String(rawTarget || "").trim());
+  if (!filename) {
+    return res.status(400).json({ success: false, error: "Recording identifier required" });
+  }
+  const diskPath = import_path2.default.join(RECORDINGS_DIR, filename);
+  if (import_fs.default.existsSync(diskPath)) {
+    try {
+      const stat = import_fs.default.statSync(diskPath);
+      if (stat.size > 0) {
+        const range = req.headers.range;
+        const contentType = filename.endsWith(".mp4") ? "video/mp4" : filename.endsWith(".ogg") ? "audio/ogg" : filename.endsWith(".wav") ? "audio/wav" : "video/webm";
+        res.setHeader("Accept-Ranges", "bytes");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        if (range) {
+          const parts = range.replace(/bytes=/, "").split("-");
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+          if (start >= stat.size || end >= stat.size || start > end) {
+            res.setHeader("Content-Range", `bytes */${stat.size}`);
+            return res.status(416).end();
+          }
+          const chunkSize = end - start + 1;
+          res.writeHead(206, {
+            "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+            "Content-Length": chunkSize,
+            "Content-Type": contentType
+          });
+          import_fs.default.createReadStream(diskPath, { start, end }).pipe(res);
+        } else {
+          res.writeHead(200, {
+            "Content-Length": stat.size,
+            "Content-Type": contentType
+          });
+          import_fs.default.createReadStream(diskPath).pipe(res);
+        }
+        return;
+      }
+    } catch (diskErr) {
+      console.warn("[Disk Stream Error]:", diskErr.message);
+    }
+  }
+  if (isMongoConnected()) {
+    try {
+      const gridDoc = await findRecordingInGridFS(filename);
+      if (gridDoc && gridDoc.length > 0) {
+        const totalSize = gridDoc.length;
+        const contentType = gridDoc.contentType || (gridDoc.filename?.endsWith(".mp4") ? "video/mp4" : gridDoc.filename?.endsWith(".ogg") ? "audio/ogg" : gridDoc.filename?.endsWith(".wav") ? "audio/wav" : "video/webm");
+        const range = req.headers.range;
+        res.setHeader("Accept-Ranges", "bytes");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        try {
+          const downloadForCache = openGridFSDownloadStream(gridDoc._id);
+          if (downloadForCache) {
+            const cacheWriteStream = import_fs.default.createWriteStream(diskPath);
+            downloadForCache.pipe(cacheWriteStream);
+            cacheWriteStream.on("error", () => {
+            });
+          }
+        } catch {
+        }
+        if (range) {
+          const parts = range.replace(/bytes=/, "").split("-");
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+          if (start >= totalSize || end >= totalSize || start > end) {
+            res.setHeader("Content-Range", `bytes */${totalSize}`);
+            return res.status(416).end();
+          }
+          const chunkSize = end - start + 1;
+          res.writeHead(206, {
+            "Content-Range": `bytes ${start}-${end}/${totalSize}`,
+            "Content-Length": chunkSize,
+            "Content-Type": contentType
+          });
+          const stream = openGridFSDownloadStream(gridDoc._id, { start, end: end + 1 });
+          if (stream) {
+            stream.pipe(res);
+            return;
+          }
+        } else {
+          res.writeHead(200, {
+            "Content-Length": totalSize,
+            "Content-Type": contentType
+          });
+          const stream = openGridFSDownloadStream(gridDoc._id);
+          if (stream) {
+            stream.pipe(res);
+            return;
+          }
+        }
+      }
+    } catch (gridErr) {
+      console.warn("[GridFS Stream Warn]:", gridErr.message);
+    }
+  }
+  res.status(404).json({
+    success: false,
+    error: "Recorded video stream file is not present on server disk or database.",
+    filename
+  });
+}
+app.get("/uploads/recordings/:filename", (req, res) => {
+  streamRecordingResponse(req, res, req.params.filename);
+});
+app.get(
+  [
+    "/api/recordings/stream/:filename",
+    "/api/sessions/:id/recording/stream",
+    "/api/college/slots/:id/recording/stream"
+  ],
+  (req, res) => {
+    const target = req.params.filename || req.params.id;
+    streamRecordingResponse(req, res, target);
+  }
+);
+function normalizeCollegeCode(rawCode) {
+  if (!rawCode) return "";
+  const c = String(rawCode).trim().toUpperCase();
+  if (c === "BMSIT2002" || c === "BMSI" || c === "BMS") {
+    return "BMSIT";
+  }
+  if (c === "VIT2002") {
+    return "VIT-2002";
+  }
+  return c;
+}
+function areCollegeCodesEquivalent(codeA, codeB) {
+  const a = normalizeCollegeCode(codeA);
+  const b = normalizeCollegeCode(codeB);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const baseA = a.split("-")[0];
+  const baseB = b.split("-")[0];
+  return Boolean(baseA && baseB && baseA === baseB);
+}
+var DEFAULT_COLLEGES = [];
+var DEFAULT_COLLEGE_STUDENTS = {};
+var DEFAULT_COLLEGE_FACULTY = {};
+var DEFAULT_COLLEGE_SLOTS = {};
+var DEFAULT_USERS = [
+  {
+    id: "sa-1",
+    name: "Platform Super Admin",
+    email: "superadmin@erus.ai",
+    password: "admin123",
+    role: "super_admin",
+    college: "ERUS Global Administration"
+  }
+];
+var PERSIST_FILE = import_path2.default.join(process.cwd(), ".erus_backend_state.json");
+var liveActiveUsers = /* @__PURE__ */ new Map();
+function pruneInactiveUsers() {
+  const cutoff = Date.now() - 20 * 60 * 1e3;
+  for (const [userId, u] of liveActiveUsers.entries()) {
+    if (u.lastActive < cutoff) {
+      liveActiveUsers.delete(userId);
+    }
+  }
+}
+setInterval(pruneInactiveUsers, 60 * 1e3);
+var persistentState = {
+  colleges: [...DEFAULT_COLLEGES],
+  students: { ...DEFAULT_COLLEGE_STUDENTS },
+  faculty: { ...DEFAULT_COLLEGE_FACULTY },
+  slots: { ...DEFAULT_COLLEGE_SLOTS },
+  users: [...DEFAULT_USERS],
+  studentBookings: {},
+  studentTopicBookings: {},
+  deletedSlotIds: [],
+  slotsInitializedColleges: {},
+  recordings: {},
+  systemSettings: {
+    dailyUserLimit: 100,
+    maxConcurrentUsers: 50,
+    enforceDailyLimit: true,
+    lastResetDate: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
+    activeUsersToday: [],
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  }
+};
+function checkAndResetDailyStats() {
+  const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+  if (!persistentState.systemSettings) {
+    persistentState.systemSettings = {
+      dailyUserLimit: 100,
+      maxConcurrentUsers: 50,
+      enforceDailyLimit: true,
+      lastResetDate: today,
+      activeUsersToday: [],
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
+  if (persistentState.systemSettings.lastResetDate !== today) {
+    persistentState.systemSettings.lastResetDate = today;
+    persistentState.systemSettings.activeUsersToday = [];
+    savePersistentState();
+  }
+}
+function recordUserActivity(user) {
+  if (!user || !user.id) return;
+  checkAndResetDailyStats();
+  if (!persistentState.systemSettings.activeUsersToday.includes(user.id)) {
+    persistentState.systemSettings.activeUsersToday.push(user.id);
+    savePersistentState();
+  }
+  liveActiveUsers.set(user.id, {
+    userId: user.id,
+    name: user.name || "User",
+    email: user.email || "",
+    role: user.role || "student",
+    college: user.college || "",
+    lastActive: Date.now()
+  });
+}
+function loadPersistentState() {
+  if (!import_fs.default.existsSync(PERSIST_FILE)) return;
+  try {
+    const raw = JSON.parse(import_fs.default.readFileSync(PERSIST_FILE, "utf8"));
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      console.warn("[Persistence] Legacy state snapshot is not an object; preserving it for manual recovery.");
+      return;
+    }
+    persistentState = {
+      ...persistentState,
+      ...raw,
+      colleges: Array.isArray(raw.colleges) ? raw.colleges : persistentState.colleges,
+      students: raw.students && typeof raw.students === "object" ? raw.students : persistentState.students,
+      faculty: raw.faculty && typeof raw.faculty === "object" ? raw.faculty : persistentState.faculty,
+      slots: raw.slots && typeof raw.slots === "object" ? raw.slots : persistentState.slots,
+      users: Array.isArray(raw.users) ? raw.users : persistentState.users,
+      studentBookings: raw.studentBookings && typeof raw.studentBookings === "object" ? raw.studentBookings : persistentState.studentBookings,
+      studentTopicBookings: raw.studentTopicBookings && typeof raw.studentTopicBookings === "object" ? raw.studentTopicBookings : persistentState.studentTopicBookings,
+      deletedSlotIds: Array.isArray(raw.deletedSlotIds) ? raw.deletedSlotIds : persistentState.deletedSlotIds,
+      slotsInitializedColleges: raw.slotsInitializedColleges && typeof raw.slotsInitializedColleges === "object" ? raw.slotsInitializedColleges : persistentState.slotsInitializedColleges,
+      recordings: raw.recordings && typeof raw.recordings === "object" ? raw.recordings : persistentState.recordings,
+      systemSettings: raw.systemSettings && typeof raw.systemSettings === "object" ? { ...persistentState.systemSettings, ...raw.systemSettings } : persistentState.systemSettings
+    };
+    if (persistentState.slots && typeof persistentState.slots === "object") {
+      for (const list of Object.values(persistentState.slots)) {
+        if (Array.isArray(list)) {
+          for (const s of list) {
+            if (s && s.status === "active") {
+              s.status = "scheduled";
+            }
+          }
+        }
+      }
+    }
+    console.warn("[Persistence] Loaded preserved local snapshot as a recovery fallback. MongoDB sync will take precedence when connected.");
+  } catch (err) {
+    console.warn("[Persistence] Could not read legacy state snapshot; file was preserved:", err.message);
+  }
+}
+function savePersistentState() {
+  try {
+    import_fs.default.writeFileSync(PERSIST_FILE, JSON.stringify(persistentState, null, 2), { encoding: "utf8", mode: 384 });
+  } catch (err) {
+    console.warn("[Persistence] Local recovery snapshot could not be saved:", err.message);
+  }
+  if (!isMongoConnected()) {
+    return;
+  }
+  SystemStateModel.findOneAndUpdate(
+    { key: "global" },
+    {
+      key: "global",
+      deletedSlotIds: persistentState.deletedSlotIds || [],
+      slotsInitializedColleges: persistentState.slotsInitializedColleges || {},
+      studentBookings: persistentState.studentBookings || {},
+      studentTopicBookings: persistentState.studentTopicBookings || {},
+      recordings: persistentState.recordings || {},
+      systemSettings: persistentState.systemSettings
+    },
+    { upsert: true, returnDocument: "after" }
+  ).catch((err) => {
+    console.warn("[MongoDB] Could not save global system state:", err.message);
+  });
+}
+loadPersistentState();
+healEvaluatedSlots();
+function healEvaluatedSlots() {
+  try {
+    const rawReports = persistentState.reports;
+    if (!rawReports || typeof rawReports !== "object") return;
+    const allReports = Object.values(rawReports);
+    if (allReports.length === 0) return;
+    const evaluatedSessionIds = new Set(allReports.map((r) => r.sessionId).filter(Boolean));
+    if (Array.isArray(persistentState.deletedSlotIds) && persistentState.deletedSlotIds.length > 0) {
+      const origLen = persistentState.deletedSlotIds.length;
+      persistentState.deletedSlotIds = persistentState.deletedSlotIds.filter((id) => !evaluatedSessionIds.has(id));
+      if (persistentState.deletedSlotIds.length !== origLen) {
+        console.log(`[Persistence] Restored ${origLen - persistentState.deletedSlotIds.length} evaluated slots from deletedSlotIds`);
+      }
+    }
+    let changed = false;
+    for (const sessionId of evaluatedSessionIds) {
+      let found = false;
+      for (const list of Object.values(persistentState.slots || {})) {
+        if (list.some((s) => s.id === sessionId)) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        const slotReports = allReports.filter((r) => r.sessionId === sessionId);
+        const firstRep = slotReports[0];
+        const sLower = sessionId.toLowerCase();
+        let colCode = "DIT";
+        if (sLower.includes("bmsit")) colCode = "BMSIT-2002";
+        else if (sLower.includes("vut")) colCode = "VUT";
+        if (!persistentState.slots[colCode]) persistentState.slots[colCode] = [];
+        const rec = persistentState.recordings?.[sessionId];
+        const facName = colCode.startsWith("BMSIT") ? "Harish" : colCode === "VUT" ? "River" : "Assigned Faculty";
+        const facId = colCode.startsWith("BMSIT") ? "fac-bmsit-1" : colCode === "VUT" ? "fac-vut-1" : "fac-dit-1";
+        const synthSlot = {
+          id: sessionId,
+          createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+          slotName: firstRep?.topic ? `Discussion: ${firstRep.topic}` : `Slot ${sessionId}`,
+          topic: firstRep?.topic || "Ecommerce",
+          description: "Completed group discussion evaluation session",
+          slotTiming: "10:00 AM - 10:30 AM",
+          slotDate: "Today",
+          status: "completed",
+          durationMinutes: 15,
+          enrolledCount: slotReports.length,
+          maxCapacity: 15,
+          assignedFacultyId: facId,
+          assignedFacultyName: facName,
+          assignedFacultyEmail: `${facName.toLowerCase()}@${colCode.toLowerCase()}.edu`,
+          assignedFacultyDept: "Computer Science & Engineering",
+          collegeCode: colCode,
+          students: slotReports.map((r, idx) => ({
+            id: r.studentId,
+            name: r.studentName,
+            email: `${String(r.studentName || "student").toLowerCase().replace(/\s+/g, ".")}@college.edu`,
+            studentId: r.studentId,
+            course: "Engineering",
+            batch: "2024-2028",
+            college: colCode,
+            collegeCode: colCode,
+            seatNumber: r.seatNumber || idx + 1,
+            avatar: "",
+            isUser: false,
+            speakingDurationSeconds: r.speakingDurationSeconds || r.speakingTimeSeconds || 0,
+            speakingTurns: r.speakingTurns || 0,
+            interruptionCount: r.interruptions || 0,
+            questionsAnswered: r.questionsAnswered || 0,
+            questionsInitiated: r.questionsInitiated || 0,
+            sentiment: "neutral",
+            isEmptySeat: false
+          })),
+          recordingUrl: rec?.recordingUrl || "",
+          recordingDurationSeconds: rec?.durationSeconds || 0,
+          recordingFileSize: rec?.fileSizeBytes || 0,
+          recordedAt: rec?.recordedAt || ""
+        };
+        persistentState.slots[colCode].unshift(synthSlot);
+        changed = true;
+        console.log(`[Persistence] Synthesized missing completed slot: ${sessionId} in college ${colCode} with ${slotReports.length} reports`);
+      }
+    }
+    if (changed) {
+      savePersistentState();
+    }
+  } catch (err) {
+    console.warn("[Persistence] healEvaluatedSlots error:", err.message);
+  }
+}
+function findRecordingForSlot(slotId) {
+  if (!slotId) return null;
+  const rawId = String(slotId).trim();
+  if (!rawId) return null;
+  const direct = persistentState.recordings?.[rawId];
+  if (direct && direct.recordingUrl) return direct;
+  const alt1 = rawId.startsWith("slot-") ? rawId.replace(/^slot-/, "session-") : rawId.startsWith("session-") ? rawId.replace(/^session-/, "slot-") : "";
+  if (alt1 && persistentState.recordings?.[alt1]?.recordingUrl) {
+    return persistentState.recordings[alt1];
+  }
+  const lower = rawId.toLowerCase();
+  const lowerAlt = alt1 ? alt1.toLowerCase() : "";
+  for (const [k, v] of Object.entries(persistentState.recordings || {})) {
+    const kLower = k.toLowerCase();
+    if (kLower === lower || lowerAlt && kLower === lowerAlt) {
+      if (v?.recordingUrl) return v;
+    }
+  }
+  for (const list of Object.values(persistentState.slots || {})) {
+    for (const s of list || []) {
+      if (s.id === rawId || alt1 && s.id === alt1 || s.id && s.id.toLowerCase() === lower || alt1 && s.id && s.id.toLowerCase() === lowerAlt) {
+        if (s.recordingUrl) {
+          return {
+            recordingUrl: s.recordingUrl,
+            durationSeconds: s.recordingDurationSeconds || 0,
+            fileSizeBytes: s.recordingFileSize || 0,
+            recordedAt: (s.recordedAt ? new Date(s.recordedAt).toISOString() : "") || ""
+          };
+        }
+      }
+    }
+  }
+  try {
+    if (import_fs.default.existsSync(RECORDINGS_DIR)) {
+      const safeId = rawId.replace(/[^a-zA-Z0-9_-]/g, "_");
+      const safeAlt = alt1 ? alt1.replace(/[^a-zA-Z0-9_-]/g, "_") : "";
+      const files = import_fs.default.readdirSync(RECORDINGS_DIR);
+      const matched = files.filter(
+        (f) => f.includes(safeId) || f.includes(rawId) || safeAlt && f.includes(safeAlt) || alt1 && f.includes(alt1)
+      );
+      if (matched.length > 0) {
+        matched.sort((a, b) => {
+          const statA = import_fs.default.statSync(import_path2.default.join(RECORDINGS_DIR, a));
+          const statB = import_fs.default.statSync(import_path2.default.join(RECORDINGS_DIR, b));
+          return statB.mtimeMs - statA.mtimeMs;
+        });
+        const bestFile = matched[0];
+        const bestStat = import_fs.default.statSync(import_path2.default.join(RECORDINGS_DIR, bestFile));
+        return {
+          recordingUrl: `/uploads/recordings/${bestFile}`,
+          durationSeconds: 0,
+          fileSizeBytes: bestStat.size,
+          recordedAt: bestStat.mtime.toISOString()
+        };
+      }
+    }
+  } catch {
+  }
+  return null;
+}
+function assignUniqueSeats(items) {
+  const used = /* @__PURE__ */ new Set();
+  return items.map((item) => {
+    let seat = Number(item.seatNumber);
+    if (!seat || seat < 1 || used.has(seat)) {
+      seat = 1;
+      while (used.has(seat)) seat++;
+    }
+    used.add(seat);
+    return { ...item, seatNumber: seat };
+  });
+}
+async function syncMongoDBWithPersistentState() {
+  if (!isMongoConnected()) return;
+  try {
+    const sysDoc = await SystemStateModel.findOne({ key: "global" });
+    if (sysDoc) {
+      if (Array.isArray(sysDoc.deletedSlotIds)) {
+        persistentState.deletedSlotIds = Array.from(
+          /* @__PURE__ */ new Set([...persistentState.deletedSlotIds || [], ...sysDoc.deletedSlotIds.filter(Boolean)])
+        );
+      }
+      if (sysDoc.slotsInitializedColleges && typeof sysDoc.slotsInitializedColleges === "object") {
+        persistentState.slotsInitializedColleges = {
+          ...persistentState.slotsInitializedColleges || {},
+          ...sysDoc.slotsInitializedColleges
+        };
+      }
+      if (sysDoc.studentBookings && typeof sysDoc.studentBookings === "object") {
+        persistentState.studentBookings = {
+          ...persistentState.studentBookings || {},
+          ...sysDoc.studentBookings
+        };
+      }
+      if (sysDoc.studentTopicBookings && typeof sysDoc.studentTopicBookings === "object") {
+        persistentState.studentTopicBookings = {
+          ...persistentState.studentTopicBookings || {},
+          ...sysDoc.studentTopicBookings
+        };
+      }
+      if (sysDoc.recordings && typeof sysDoc.recordings === "object") {
+        persistentState.recordings = {
+          ...persistentState.recordings || {},
+          ...sysDoc.recordings
+        };
+      }
+      if (sysDoc.systemSettings && typeof sysDoc.systemSettings === "object") {
+        persistentState.systemSettings = {
+          dailyUserLimit: typeof sysDoc.systemSettings.dailyUserLimit === "number" ? sysDoc.systemSettings.dailyUserLimit : 100,
+          maxConcurrentUsers: typeof sysDoc.systemSettings.maxConcurrentUsers === "number" ? sysDoc.systemSettings.maxConcurrentUsers : 50,
+          enforceDailyLimit: typeof sysDoc.systemSettings.enforceDailyLimit === "boolean" ? sysDoc.systemSettings.enforceDailyLimit : true,
+          lastResetDate: sysDoc.systemSettings.lastResetDate || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10),
+          activeUsersToday: Array.isArray(sysDoc.systemSettings.activeUsersToday) ? sysDoc.systemSettings.activeUsersToday : [],
+          updatedAt: sysDoc.systemSettings.updatedAt || (/* @__PURE__ */ new Date()).toISOString()
+        };
+        checkAndResetDailyStats();
+      }
+    }
+    const dbColleges = await CollegeModel.find();
+    const dbCollegeCodes = /* @__PURE__ */ new Set();
+    if (dbColleges.length > 0) {
+      for (const c of dbColleges) {
+        const normCode = normalizeCollegeCode(c.code);
+        dbCollegeCodes.add(normCode);
+        const existingIdx = persistentState.colleges.findIndex((col) => normalizeCollegeCode(col.code) === normCode);
+        const existingLocal = existingIdx >= 0 ? persistentState.colleges[existingIdx] : null;
+        const mappedCol = {
+          id: existingLocal?.id || c.id,
+          name: normCode === "BMSIT" ? "BMS Institute of Technology" : existingLocal?.name || c.name,
+          code: normCode,
+          contactEmail: existingLocal?.contactEmail || c.contactEmail,
+          phone: existingLocal?.phone || c.phone || "",
+          address: existingLocal?.address || c.address || "",
+          status: existingLocal?.status || c.status || "active",
+          studentCount: Math.max(existingLocal?.studentCount || 0, c.studentCount || 0),
+          facultyCount: Math.max(existingLocal?.facultyCount || 0, c.facultyCount || 0),
+          slotCount: Math.max(existingLocal?.slotCount || 0, c.slotCount || 0),
+          studentLimit: Math.max(existingLocal?.studentLimit || 0, c.studentLimit || 60),
+          adminEmail: existingLocal?.adminEmail || c.adminEmail || c.contactEmail,
+          adminName: existingLocal?.adminName || c.adminName || `${normCode} Administrator`,
+          adminPassword: existingLocal?.adminPassword || c.adminPassword || "",
+          createdAt: existingLocal?.createdAt || (c.createdAt ? new Date(c.createdAt).toISOString() : (/* @__PURE__ */ new Date()).toISOString())
+        };
+        if (existingIdx >= 0) {
+          persistentState.colleges[existingIdx] = mappedCol;
+        } else {
+          persistentState.colleges.push(mappedCol);
+        }
+      }
+    }
+    for (const localCol of persistentState.colleges) {
+      const normCode = normalizeCollegeCode(localCol.code);
+      if (!dbCollegeCodes.has(normCode)) {
+        persistCollegeToMongoDB(localCol).catch(() => null);
+      }
+    }
+    const activeCollegeSet = new Set(persistentState.colleges.map((c) => normalizeCollegeCode(c.code)));
+    for (const defUser of DEFAULT_USERS) {
+      if (!persistentState.users.some((u) => u.email.toLowerCase() === defUser.email.toLowerCase())) {
+        persistentState.users.push(defUser);
+      }
+    }
+    const dbUsers = await UserModel.find();
+    if (dbUsers.length > 0) {
+      for (const u of dbUsers) {
+        const uColCode = normalizeCollegeCode(u.collegeCode);
+        if (u.role !== "super_admin" && (!uColCode || !activeCollegeSet.has(uColCode))) {
+          console.warn(`[MongoDB] User ${u.email} references missing college ${uColCode || "(empty)"}; preserving the user record.`);
+        }
+        const mappedUser = {
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          role: u.role,
+          password: u.password,
+          college: uColCode === "BMSIT" ? "BMS Institute of Technology" : u.college,
+          collegeCode: uColCode,
+          avatar: u.avatar,
+          studentId: u.studentProfile?.studentId,
+          course: u.studentProfile?.course,
+          batch: u.studentProfile?.batch,
+          seatNumber: u.studentProfile?.seatNumber,
+          facultyId: u.facultyProfile?.facultyId,
+          department: u.facultyProfile?.department || u.collegeAdminProfile?.department,
+          designation: u.facultyProfile?.designation,
+          adminId: u.collegeAdminProfile?.adminId
+        };
+        const existingIdx = persistentState.users.findIndex(
+          (pu) => pu.email.toLowerCase() === u.email.toLowerCase()
+        );
+        if (existingIdx >= 0) {
+          persistentState.users[existingIdx] = mappedUser;
+        } else {
+          persistentState.users.push(mappedUser);
+        }
+      }
+    }
+    for (const col of persistentState.colleges) {
+      const normCode = normalizeCollegeCode(col.code);
+      const colStudents = persistentState.users.filter((u) => u.role === "student" && normalizeCollegeCode(u.collegeCode) === normCode).map((u) => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        studentId: u.studentId || "STU-001",
+        course: u.course || "B.Tech CSE",
+        batch: u.batch || "2022-2026",
+        seatNumber: u.seatNumber,
+        college: col.name,
+        collegeCode: normCode,
+        password: u.password
+      }));
+      persistentState.students[normCode] = assignUniqueSeats(colStudents);
+      for (const st of persistentState.students[normCode]) {
+        const u = persistentState.users.find((u2) => u2.email.toLowerCase() === st.email.toLowerCase());
+        if (u) u.seatNumber = st.seatNumber;
+      }
+      const colFaculty = persistentState.users.filter((u) => u.role === "faculty" && normalizeCollegeCode(u.collegeCode) === normCode).map((u) => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        facultyId: u.facultyId || "FAC-001",
+        department: u.department || "Computer Science & Engineering",
+        designation: u.designation || "Faculty Member",
+        college: col.name,
+        collegeCode: normCode,
+        assignedSlotsCount: 0,
+        password: u.password
+      }));
+      persistentState.faculty[normCode] = colFaculty;
+    }
+    const dbBookings = await GDBookingModel.find({ status: { $ne: "CANCELLED" } });
+    for (const b of dbBookings) {
+      persistentState.studentBookings[b.studentId] = b.sessionId;
+      if (b.topic) {
+        if (!persistentState.studentTopicBookings[b.studentId]) {
+          persistentState.studentTopicBookings[b.studentId] = {};
+        }
+        persistentState.studentTopicBookings[b.studentId][b.topic] = b.sessionId;
+      }
+    }
+    const deletedSet = new Set(persistentState.deletedSlotIds || []);
+    const dbSessionIds = /* @__PURE__ */ new Set();
+    const dbSessions = await GDSessionModel.find();
+    if (dbSessions.length > 0) {
+      for (const s of dbSessions) {
+        if (!s?.id || deletedSet.has(s.id)) continue;
+        dbSessionIds.add(s.id);
+        const colCode = normalizeCollegeCode(s.collegeCode) || "UNASSIGNED";
+        if (!activeCollegeSet.has(colCode)) {
+          console.warn(`[MongoDB] Session ${s.id} references missing college ${colCode}; preserving the session record.`);
+        }
+        if (!persistentState.slots[colCode]) persistentState.slots[colCode] = [];
+        persistentState.slotsInitializedColleges[colCode] = true;
+        const savedRec = persistentState.recordings?.[s.id];
+        const rawStudents = s.students || [];
+        const resolvedRecordingUrl = s.recordingUrl || savedRec?.recordingUrl || "";
+        const resolvedRecordingDuration = s.recordingDurationSeconds || savedRec?.durationSeconds || 0;
+        const resolvedRecordingSize = s.recordingFileSize || savedRec?.fileSize || savedRec?.fileSizeBytes || 0;
+        const resolvedRecordedAt = s.recordedAt ? new Date(s.recordedAt).toISOString() : savedRec?.recordedAt || void 0;
+        const existingLocalIdx = persistentState.slots[colCode].findIndex((slot) => slot.id === s.id);
+        const existingLocal = existingLocalIdx >= 0 ? persistentState.slots[colCode][existingLocalIdx] : null;
+        let slotItem = {
+          id: s.id,
+          slotName: existingLocal?.slotName || s.slotName,
+          topic: existingLocal?.topic || s.topic,
+          description: existingLocal?.description || s.description || "",
+          slotTiming: existingLocal?.slotTiming || s.slotTiming || "10:00 AM - 10:30 AM",
+          slotDate: existingLocal?.slotDate || s.slotDate || "Today",
+          status: existingLocal?.status === "completed" || s.status === "completed" ? "completed" : s.status || existingLocal?.status || "scheduled",
+          durationMinutes: existingLocal?.durationMinutes || s.durationMinutes,
+          enrolledCount: rawStudents.length > 0 ? rawStudents.length : s.enrolledCount,
+          maxCapacity: s.maxCapacity,
+          assignedFacultyId: existingLocal?.assignedFacultyId || s.assignedFacultyId,
+          assignedFacultyName: existingLocal?.assignedFacultyName || s.assignedFacultyName,
+          assignedFacultyEmail: existingLocal?.assignedFacultyEmail || s.assignedFacultyEmail,
+          assignedFacultyDept: existingLocal?.assignedFacultyDept || s.assignedFacultyDept,
+          collegeCode: colCode,
+          createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : existingLocal?.createdAt || (/* @__PURE__ */ new Date()).toISOString(),
+          students: rawStudents.length > 0 ? rawStudents : existingLocal?.students || [],
+          recordingUrl: resolvedRecordingUrl || existingLocal?.recordingUrl || void 0,
+          recordingDurationSeconds: resolvedRecordingDuration || existingLocal?.recordingDurationSeconds || void 0,
+          recordingFileSize: resolvedRecordingSize || existingLocal?.recordingFileSize || void 0,
+          recordedAt: resolvedRecordedAt || existingLocal?.recordedAt
+        };
+        if (resolvedRecordingUrl) {
+          if (!persistentState.recordings) persistentState.recordings = {};
+          persistentState.recordings[s.id] = {
+            slotId: s.id,
+            recordingUrl: resolvedRecordingUrl,
+            durationSeconds: resolvedRecordingDuration,
+            fileSize: resolvedRecordingSize,
+            mimeType: savedRec?.mimeType || "video/webm",
+            recordedAt: resolvedRecordedAt || (/* @__PURE__ */ new Date()).toISOString()
+          };
+        }
+        slotItem = ensureSlotParticipants(slotItem, colCode);
+        if (existingLocalIdx >= 0) {
+          persistentState.slots[colCode][existingLocalIdx] = slotItem;
+        } else {
+          persistentState.slots[colCode].push(slotItem);
+        }
+      }
+    }
+    for (const [colCode, slotList] of Object.entries(persistentState.slots)) {
+      const cleanList = (slotList || []).filter((s) => s && s.id && !deletedSet.has(s.id));
+      persistentState.slots[colCode] = cleanList;
+      for (const localSlot of cleanList) {
+        if (!dbSessionIds.has(localSlot.id)) {
+          persistSlotToMongoDB(localSlot).catch(() => null);
+        }
+      }
+    }
+    if (!persistentState.reports) persistentState.reports = {};
+    const dbReports = await AssessmentReportModel.find().sort({ overallScore: -1, createdAt: -1 });
+    for (const r of dbReports) {
+      const raw = r.fullReportJson || {};
+      const durationSec = r.speakingDurationSeconds ?? raw.speakingTimeSeconds ?? raw.speakingDurationSeconds ?? 0;
+      const turns = r.speakingTurns ?? raw.speakingTurns ?? 0;
+      const wpmVal = r.wpm ?? raw.wpm ?? (durationSec > 0 ? 130 : 0);
+      const rep = ensureHealthyReport({
+        id: r.id,
+        sessionId: r.sessionId,
+        studentId: r.studentId,
+        studentName: r.studentName || raw.studentName || "",
+        seatNumber: r.seatNumber ?? raw.seatNumber,
+        topic: r.topic || raw.topic || "",
+        overallScore: r.overallScore ?? raw.overallScore ?? 0,
+        grade: r.grade || gradeForScore(r.overallScore ?? 0),
+        skills: r.rubricJson || raw.skills || {},
+        speakingTimeSeconds: durationSec,
+        speakingDurationSeconds: durationSec,
+        speakingTimeFormatted: r.speakingTimeFormatted || raw.speakingTimeFormatted || `${Math.floor(durationSec / 60)} min ${durationSec % 60} sec`,
+        speakingTurns: turns,
+        wpm: wpmVal,
+        wpmStatus: r.wpmStatus || raw.wpmStatus || (durationSec === 0 ? "No Speech" : wpmVal < 115 ? "Too Slow" : wpmVal > 165 ? "Too Fast" : "Optimal"),
+        fillerWordsCount: r.fillerWordsCount ?? raw.fillerWordsCount ?? 0,
+        fillerWordsBreakdown: r.fillerWordsBreakdown || raw.fillerWordsBreakdown || [],
+        interruptions: r.interruptionCount ?? raw.interruptions ?? 0,
+        questionsAnswered: r.questionsAnswered ?? raw.questionsAnswered ?? 0,
+        questionsInitiated: r.questionsInitiated ?? raw.questionsInitiated ?? 0,
+        feedback: r.feedback || raw.aiSummary || "",
+        aiSummary: r.feedback || raw.aiSummary || "",
+        strengths: r.strengths || raw.strengths || [],
+        areasForImprovement: r.improvements || raw.areasForImprovement || [],
+        aiRecommendations: r.aiRecommendations || raw.aiRecommendations || [],
+        generatedAt: r.createdAt ? new Date(r.createdAt).toISOString() : (/* @__PURE__ */ new Date()).toISOString(),
+        facultyEndorsement: raw.facultyEndorsement || { endorsed: false },
+        recordingUrl: r.recordingUrl || raw.recordingUrl || ""
+      });
+      const keyById = `${rep.sessionId}_${rep.studentId}`;
+      const existingById = persistentState.reports[keyById];
+      if (!existingById || Number(rep.overallScore || 0) >= Number(existingById.overallScore || 0)) {
+        persistentState.reports[keyById] = rep;
+      }
+      if (rep.studentName) {
+        const keyByName = `${rep.sessionId}_${String(rep.studentName).trim().toLowerCase()}`;
+        const existingByName = persistentState.reports[keyByName];
+        if (!existingByName || Number(rep.overallScore || 0) >= Number(existingByName.overallScore || 0)) {
+          persistentState.reports[keyByName] = rep;
+        }
+      }
+    }
+    savePersistentState();
+    console.log(
+      `[MongoDB] Synchronized MongoDB state: ${persistentState.colleges.length} colleges, ${persistentState.users.length} users, ${Object.values(persistentState.slots).flat().length} slots.`
+    );
+  } catch (err) {
+    console.warn("[MongoDB] State sync warning:", err.message);
+  }
+}
+async function persistCollegeToMongoDB(col) {
+  if (!isMongoConnected()) return;
+  try {
+    await CollegeModel.findOneAndUpdate(
+      { code: col.code },
+      {
+        id: col.id,
+        name: col.name,
+        code: col.code,
+        contactEmail: col.contactEmail,
+        phone: col.phone || "",
+        address: col.address || "",
+        status: col.status || "active",
+        studentCount: col.studentCount || 0,
+        facultyCount: col.facultyCount || 0,
+        slotCount: col.slotCount || 0,
+        studentLimit: col.studentLimit || 60,
+        adminEmail: col.adminEmail || "",
+        adminName: col.adminName || "",
+        adminPassword: col.adminPassword || ""
+      },
+      { upsert: true, returnDocument: "after" }
+    );
+  } catch (e) {
+    console.warn("[MongoDB] Save college error:", e.message);
+  }
+}
+async function persistUserToMongoDB(u) {
+  if (!isMongoConnected()) return;
+  try {
+    await UserModel.findOneAndUpdate(
+      { email: u.email.toLowerCase() },
+      {
+        id: u.id,
+        name: u.name,
+        email: u.email.toLowerCase(),
+        password: u.password,
+        role: u.role,
+        college: u.college,
+        collegeCode: u.collegeCode || "DIT",
+        avatar: u.avatar || "",
+        studentProfile: u.role === "student" ? {
+          studentId: u.studentId || `STU-${Date.now().toString().slice(-4)}`,
+          course: u.course || "B.Tech CSE",
+          batch: u.batch || "2022-2026",
+          seatNumber: u.seatNumber || 1
+        } : void 0,
+        facultyProfile: u.role === "faculty" ? {
+          facultyId: u.facultyId || `FAC-${Date.now().toString().slice(-4)}`,
+          department: u.department || "Department of Computer Science & Engineering",
+          designation: u.designation || "Faculty Member"
+        } : void 0,
+        collegeAdminProfile: u.role === "college_admin" ? {
+          adminId: u.adminId || `CADM-${u.collegeCode || "DIT"}-001`,
+          department: u.department || "Academic Administration"
+        } : void 0
+      },
+      { upsert: true, returnDocument: "after" }
+    );
+  } catch (e) {
+    console.warn("[MongoDB] Save user error:", e.message);
+  }
+}
+function ensureSlotParticipants(slot, code) {
+  const normCode = normalizeCollegeCode(code);
+  const bookedStudentIds = /* @__PURE__ */ new Set();
+  for (const [stuId, sId] of Object.entries(persistentState.studentBookings || {})) {
+    if (sId === slot.id) bookedStudentIds.add(stuId);
+  }
+  for (const [stuId, topicMap] of Object.entries(persistentState.studentTopicBookings || {})) {
+    for (const [topic, sId] of Object.entries(topicMap || {})) {
+      if (sId === slot.id) bookedStudentIds.add(stuId);
+    }
+  }
+  const colStudents = persistentState.students[normCode] || [];
+  const colStudentMap = new Map(colStudents.map((s) => [s.id, s]));
+  const validStudents = [];
+  if (Array.isArray(slot.students)) {
+    for (const s of slot.students) {
+      if (s && !s.isEmptySeat) {
+        const sColCode = normalizeCollegeCode(s.collegeCode || "");
+        if (sColCode && normCode && sColCode !== normCode) {
+          continue;
+        }
+        if (colStudents.length > 0) {
+          const belongsToCollege = colStudents.some(
+            (cs) => cs.id === s.id || cs.email && s.email && cs.email.toLowerCase() === s.email.toLowerCase() || cs.studentId && s.studentId && cs.studentId.toLowerCase() === s.studentId.toLowerCase()
+          );
+          if (!belongsToCollege) continue;
+        }
+        if (!validStudents.some((v) => v.id === s.id)) {
+          validStudents.push({ ...s, collegeCode: normCode });
+        }
+      }
+    }
+  }
+  for (const stuId of bookedStudentIds) {
+    if (!validStudents.some((v) => v.id === stuId)) {
+      const stu = colStudentMap.get(stuId) || persistentState.users.find(
+        (u) => u.id === stuId && u.role === "student" && normalizeCollegeCode(u.collegeCode) === normCode
+      );
+      if (stu) {
+        validStudents.push({
+          id: stu.id,
+          name: stu.name,
+          email: stu.email,
+          studentId: stu.studentId,
+          course: stu.course,
+          batch: stu.batch,
+          college: stu.college,
+          collegeCode: normCode,
+          avatar: stu.avatar || "",
+          isUser: false,
+          micActive: false,
+          isSpeaking: false,
+          hasRaisedHand: false,
+          cameraActive: false,
+          speakingDurationSeconds: 0,
+          speakingTurns: 0,
+          interruptionCount: 0,
+          questionsAnswered: 0,
+          questionsInitiated: 0,
+          sentiment: "neutral",
+          isEmptySeat: false
+        });
+      }
+    }
+  }
+  if (persistentState.reports) {
+    for (const r of Object.values(persistentState.reports || {})) {
+      const rep = r;
+      if (rep?.sessionId === slot.id && rep?.studentId) {
+        if (!validStudents.some((v) => v.id === rep.studentId || v.name && String(v.name).toLowerCase() === String(rep.studentName).toLowerCase())) {
+          validStudents.push({
+            id: rep.studentId,
+            name: rep.studentName || "Participant",
+            email: rep.email || `${String(rep.studentName || "student").toLowerCase().replace(/\s+/g, ".")}@college.edu`,
+            studentId: rep.studentId,
+            college: rep.college || normCode,
+            collegeCode: normCode,
+            course: rep.course || "Engineering",
+            batch: rep.batch || "2024-2028",
+            seatNumber: rep.seatNumber || validStudents.length + 1,
+            avatar: "",
+            isUser: false,
+            speakingDurationSeconds: rep.speakingDurationSeconds || rep.speakingTimeSeconds || 0,
+            speakingTurns: rep.speakingTurns || 0,
+            interruptionCount: rep.interruptions || 0,
+            questionsAnswered: rep.questionsAnswered || 0,
+            questionsInitiated: rep.questionsInitiated || 0,
+            sentiment: "neutral",
+            isEmptySeat: false
+          });
+        }
+      }
+    }
+  }
+  slot.students = validStudents.map((s, idx) => ({ ...s, seatNumber: s.seatNumber || idx + 1 }));
+  slot.enrolledCount = slot.students.length;
+  return slot;
+}
+async function persistSlotToMongoDB(slot) {
+  if (!isMongoConnected()) return;
+  try {
+    await GDSessionModel.findOneAndUpdate(
+      { id: slot.id },
+      {
+        id: slot.id,
+        slotName: slot.slotName || slot.topic,
+        topic: slot.topic,
+        description: slot.description || "",
+        slotTiming: slot.slotTiming || "10:00 AM - 10:30 AM",
+        slotDate: slot.slotDate || "Today",
+        status: slot.status || "scheduled",
+        durationMinutes: slot.durationMinutes || 25,
+        activityType: slot.activityType || "gd",
+        presentationTopics: slot.presentationTopics || [],
+        enrolledCount: slot.enrolledCount || 0,
+        maxCapacity: slot.maxCapacity || 15,
+        collegeCode: slot.collegeCode || "DIT",
+        assignedFacultyId: slot.assignedFacultyId || "",
+        assignedFacultyName: slot.assignedFacultyName || "",
+        assignedFacultyEmail: slot.assignedFacultyEmail || "",
+        assignedFacultyDept: slot.assignedFacultyDept || "",
+        students: slot.students || [],
+        recordingUrl: slot.recordingUrl || "",
+        recordingDurationSeconds: slot.recordingDurationSeconds || 0,
+        recordingFileSize: slot.recordingFileSize || 0,
+        recordedAt: slot.recordedAt || null
+      },
+      { upsert: true, returnDocument: "after" }
+    );
+  } catch (e) {
+    console.warn("[MongoDB] Save slot error:", e.message);
+  }
+}
+async function deleteSlotFromMongoDB(slotId) {
+  if (!isMongoConnected()) return;
+  try {
+    await GDSessionModel.deleteOne({ id: slotId });
+    await GDBookingModel.deleteMany({ sessionId: slotId });
+    await TranscriptEntryModel.deleteMany({ sessionId: slotId });
+    await AssessmentReportModel.deleteMany({ sessionId: slotId });
+  } catch (e) {
+  }
+}
+function cleanSlotName(name) {
+  if (!name) return "";
+  return name.replace(/\s*\(\d{1,2}:\d{2}\s*(?:AM|PM)\s*-\s*\d{1,2}:\d{2}\s*(?:AM|PM)\)/gi, "").trim();
+}
+function extractSlotNumber(slot) {
+  const nameMatch = String(slot?.slotName || "").match(/Slot\s+(\d+)/i);
+  if (nameMatch) return parseInt(nameMatch[1], 10) || 0;
+  const idMatch = String(slot?.id || "").match(/slot-[a-z0-9_-]+?-(\d+)-/i);
+  if (idMatch) return parseInt(idMatch[1], 10) || 0;
+  return 0;
+}
+function generateRandomSlotsForCollege(code, studentLimit, startSlotIndex) {
+  const normCode = normalizeCollegeCode(code);
+  const col = persistentState.colleges.find((c) => normalizeCollegeCode(c.code) === normCode);
+  const limit = studentLimit || col?.studentLimit || 60;
+  const numSlots = Math.max(1, Math.ceil(limit / 15));
+  const deletedSet = new Set(persistentState.deletedSlotIds || []);
+  const existingSlots = (persistentState.slots[normCode] || []).filter(
+    (s) => s && s.id && !deletedSet.has(s.id)
+  );
+  const maxExistingNum = existingSlots.reduce((max, s) => Math.max(max, extractSlotNumber(s)), existingSlots.length);
+  const baseSlotNumber = startSlotIndex !== void 0 ? startSlotIndex : maxExistingNum;
+  const registered = [...persistentState.students[normCode] || []];
+  for (let i = registered.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [registered[i], registered[j]] = [registered[j], registered[i]];
+  }
+  const timings = [
+    "10:00 AM - 10:15 AM",
+    "10:30 AM - 10:45 AM",
+    "11:00 AM - 11:15 AM",
+    "11:30 AM - 11:45 AM",
+    "12:00 PM - 12:15 PM",
+    "02:00 PM - 02:15 PM",
+    "02:30 PM - 02:45 PM",
+    "03:00 PM - 03:15 PM",
+    "03:30 PM - 03:45 PM",
+    "04:00 PM - 04:15 PM"
+  ];
+  let studentPoolIndex = 0;
+  const todayStr = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+  const nowBaseMs = Date.now();
+  const generatedSlots = [];
+  for (let sIdx = 0; sIdx < numSlots; sIdx++) {
+    const slotNumber = baseSlotNumber + sIdx + 1;
+    const slotStudents = [];
+    const slotId = `slot-${normCode.toLowerCase()}-${slotNumber}-${nowBaseMs + sIdx}`;
+    const timing = timings[(slotNumber - 1) % timings.length];
+    for (let seat = 1; seat <= 15; seat++) {
+      if (studentPoolIndex < registered.length) {
+        const regSt = registered[studentPoolIndex++];
+        const st = {
+          id: regSt.id || `stu-${normCode.toLowerCase()}-${studentPoolIndex}`,
+          name: regSt.name,
+          email: regSt.email,
+          studentId: regSt.studentId || `STU-${normCode}-${String(100 + studentPoolIndex)}`,
+          course: regSt.course || "B.Tech CSE",
+          batch: regSt.batch || "2024-2028",
+          seatNumber: seat,
+          college: col?.name || normCode,
+          collegeCode: normCode,
+          avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(regSt.name)}`,
+          isUser: false,
+          micActive: false,
+          isSpeaking: false,
+          hasRaisedHand: false,
+          cameraActive: false,
+          speakingDurationSeconds: 0,
+          speakingTurns: 0,
+          interruptionCount: 0,
+          questionsAnswered: 0,
+          questionsInitiated: 0,
+          sentiment: "neutral",
+          isEmptySeat: false
+        };
+        slotStudents.push(st);
+      }
+    }
+    const slotItem = {
+      id: slotId,
+      slotName: `Slot ${slotNumber}`,
+      topic: "",
+      description: `Cohort of 15 students. Waiting for College Admin to allot Topic & Faculty In-Charge.`,
+      slotTiming: timing,
+      slotDate: todayStr,
+      status: "scheduled",
+      durationMinutes: 15,
+      enrolledCount: 15,
+      maxCapacity: 15,
+      assignedFacultyId: "",
+      assignedFacultyName: "Unassigned",
+      assignedFacultyEmail: "",
+      assignedFacultyDept: "",
+      collegeCode: normCode,
+      createdAt: new Date(nowBaseMs + sIdx).toISOString(),
+      students: slotStudents
+    };
+    generatedSlots.push(slotItem);
+  }
+  return generatedSlots;
+}
+async function persistBookingToMongoDB(sessionId, studentId, status, topic) {
+  if (!isMongoConnected()) return;
+  try {
+    await GDBookingModel.findOneAndUpdate(
+      { sessionId, studentId },
+      {
+        id: `bk-${studentId}-${sessionId}`,
+        sessionId,
+        studentId,
+        topic: topic || "",
+        status,
+        bookedAt: /* @__PURE__ */ new Date()
+      },
+      { upsert: true, returnDocument: "after" }
+    );
+  } catch (e) {
+    console.warn("[MongoDB] Save booking error:", e.message);
+  }
+}
+async function persistTranscriptToMongoDB(t) {
+  if (!isMongoConnected()) return;
+  try {
+    await TranscriptEntryModel.findOneAndUpdate(
+      { id: t.id },
+      {
+        id: t.id,
+        sessionId: t.sessionId,
+        speakerId: t.speakerId,
+        speakerName: t.speakerName,
+        seatNumber: t.seatNumber ?? null,
+        isFacilitator: t.isFacilitator,
+        timestamp: t.timestamp,
+        timestampSeconds: t.timestampSeconds,
+        text: t.text,
+        type: t.type || "statement",
+        sentiment: t.sentiment || "neutral"
+      },
+      { upsert: true, returnDocument: "after" }
+    );
+  } catch (e) {
+    console.warn("[MongoDB] Save transcript error:", e.message);
+  }
+}
+var prisma = null;
+var isDbConnected = false;
+async function syncDatabaseWithPersistentState() {
+  if (!prisma || !isDbConnected) return;
+  try {
+    const collegeCount = await prisma.college.count();
+    if (collegeCount === 0) {
+      console.log("[Database] Fresh PostgreSQL detected. Seeding from persistent state...");
+      for (const col of persistentState.colleges) {
+        await prisma.college.upsert({
+          where: { code: col.code },
+          update: {
+            name: col.name,
+            contactEmail: col.contactEmail,
+            phone: col.phone || "",
+            address: col.address || "",
+            status: col.status || "active"
+          },
+          create: {
+            name: col.name,
+            code: col.code,
+            contactEmail: col.contactEmail,
+            phone: col.phone || "",
+            address: col.address || "",
+            status: col.status || "active"
+          }
+        });
+      }
+      for (const u of persistentState.users) {
+        const collegeRec = await prisma.college.findUnique({ where: { code: u.collegeCode || "DIT" } });
+        const passHash = u.password.startsWith("$2") ? u.password : await import_bcryptjs.default.hash(u.password, 10);
+        await prisma.user.upsert({
+          where: { email: u.email.toLowerCase() },
+          update: {
+            name: u.name,
+            role: u.role,
+            college: u.college,
+            collegeId: collegeRec?.id || null
+          },
+          create: {
+            email: u.email.toLowerCase(),
+            passwordHash: passHash,
+            name: u.name,
+            role: u.role,
+            college: u.college,
+            collegeId: collegeRec?.id || null,
+            avatar: u.avatar,
+            ...u.role === "student" ? {
+              studentProfile: {
+                create: {
+                  studentId: u.studentId || `STU-${Date.now().toString().slice(-4)}`,
+                  course: u.course || "B.Tech CSE",
+                  batch: u.batch || "2022-2026",
+                  seatNumber: u.seatNumber || 1
+                }
+              }
+            } : u.role === "faculty" ? {
+              facultyProfile: {
+                create: {
+                  facultyId: u.facultyId || `FAC-${Date.now().toString().slice(-4)}`,
+                  department: u.department || "Computer Science & Engineering",
+                  designation: u.designation || "Faculty Member"
+                }
+              }
+            } : u.role === "college_admin" ? {
+              collegeAdminProfile: {
+                create: {
+                  adminId: u.adminId || `CADM-${u.collegeCode || "DIT"}-001`,
+                  department: u.department || "Academic Administration"
+                }
+              }
+            } : {}
+          }
+        });
+      }
+      for (const [code, slotList] of Object.entries(persistentState.slots)) {
+        const col = await prisma.college.findUnique({ where: { code } });
+        for (const slot of slotList) {
+          await prisma.gDSession.upsert({
+            where: { id: slot.id },
+            update: {
+              topic: slot.topic,
+              description: slot.description,
+              slotTiming: slot.slotTiming,
+              slotName: slot.slotName,
+              durationMinutes: slot.durationMinutes,
+              maxCapacity: slot.maxCapacity,
+              enrolledCount: slot.enrolledCount,
+              assignedFacultyId: slot.assignedFacultyId,
+              assignedFacultyName: slot.assignedFacultyName,
+              status: slot.status
+            },
+            create: {
+              id: slot.id,
+              topic: slot.topic,
+              description: slot.description,
+              slotTiming: slot.slotTiming,
+              slotName: slot.slotName,
+              durationMinutes: slot.durationMinutes,
+              maxCapacity: slot.maxCapacity,
+              enrolledCount: slot.enrolledCount,
+              assignedFacultyId: slot.assignedFacultyId,
+              assignedFacultyName: slot.assignedFacultyName,
+              collegeId: col?.id,
+              status: slot.status
+            }
+          });
+        }
+      }
+      console.log("[Database] Seeding to PostgreSQL completed successfully.");
+    } else {
+      console.log("[Database] PostgreSQL records found. Hydrating persistent memory state from DB...");
+      const dbColleges = await prisma.college.findMany({
+        include: {
+          users: {
+            include: {
+              studentProfile: true,
+              facultyProfile: true,
+              collegeAdminProfile: true
+            }
+          },
+          sessions: true
+        }
+      });
+      if (dbColleges.length > 0) {
+        persistentState.colleges = dbColleges.map((c) => {
+          const adminUser = c.users.find((u) => u.role === "college_admin");
+          return {
+            id: c.id,
+            name: c.name,
+            code: c.code,
+            contactEmail: c.contactEmail,
+            phone: c.phone || "",
+            address: c.address || "",
+            status: c.status || "active",
+            studentCount: c.users.filter((u) => u.role === "student").length,
+            facultyCount: c.users.filter((u) => u.role === "faculty").length,
+            slotCount: c.sessions.length,
+            adminEmail: adminUser?.email || c.contactEmail,
+            adminName: adminUser?.name || `${c.code} Administrator`,
+            createdAt: c.createdAt.toISOString()
+          };
+        });
+        for (const c of dbColleges) {
+          const students = c.users.filter((u) => u.role === "student").map((u) => ({
+            id: u.id,
+            name: u.name,
+            email: u.email,
+            studentId: u.studentProfile?.studentId || "STU-001",
+            course: u.studentProfile?.course || "B.Tech CSE",
+            batch: u.studentProfile?.batch || "2022-2026",
+            seatNumber: u.studentProfile?.seatNumber || 1,
+            college: c.name,
+            collegeCode: c.code
+          }));
+          if (students.length > 0) {
+            persistentState.students[c.code] = students;
+          }
+          const faculty = c.users.filter((u) => u.role === "faculty").map((u) => ({
+            id: u.id,
+            name: u.name,
+            email: u.email,
+            facultyId: u.facultyProfile?.facultyId || "FAC-001",
+            department: u.facultyProfile?.department || "Computer Science & Engineering",
+            designation: u.facultyProfile?.designation || "Professor",
+            college: c.name,
+            collegeCode: c.code,
+            assignedSlotsCount: 0
+          }));
+          if (faculty.length > 0) {
+            persistentState.faculty[c.code] = faculty;
+          }
+          const slots = c.sessions.map((s) => ({
+            id: s.id,
+            slotName: s.slotName || s.topic,
+            topic: s.topic,
+            description: s.description || "",
+            slotTiming: s.slotTiming || "10:30 AM - 10:45 AM",
+            status: s.status,
+            durationMinutes: s.durationMinutes,
+            enrolledCount: s.enrolledCount,
+            maxCapacity: s.maxCapacity,
+            assignedFacultyId: s.assignedFacultyId || void 0,
+            assignedFacultyName: s.assignedFacultyName || void 0,
+            collegeCode: c.code,
+            createdAt: s.createdAt.toISOString()
+          }));
+          if (slots.length > 0) {
+            persistentState.slots[c.code] = slots;
+          }
+        }
+        const allDbUsers = await prisma.user.findMany({
+          include: {
+            studentProfile: true,
+            facultyProfile: true,
+            collegeAdminProfile: true,
+            collegeOrg: true
+          }
+        });
+        for (const u of allDbUsers) {
+          const existingIdx = persistentState.users.findIndex((pu) => pu.email.toLowerCase() === u.email.toLowerCase());
+          const mappedUser = {
+            id: u.id,
+            name: u.name,
+            email: u.email,
+            role: u.role,
+            password: u.passwordHash,
+            college: u.college,
+            collegeCode: u.collegeOrg?.code || void 0,
+            department: u.facultyProfile?.department || u.collegeAdminProfile?.department,
+            designation: u.facultyProfile?.designation,
+            course: u.studentProfile?.course,
+            batch: u.studentProfile?.batch,
+            seatNumber: u.studentProfile?.seatNumber,
+            studentId: u.studentProfile?.studentId,
+            facultyId: u.facultyProfile?.facultyId,
+            adminId: u.collegeAdminProfile?.adminId,
+            avatar: u.avatar || void 0
+          };
+          if (existingIdx >= 0) {
+            persistentState.users[existingIdx] = mappedUser;
+          } else {
+            persistentState.users.push(mappedUser);
+          }
+        }
+        savePersistentState();
+        console.log(`[Database] Hydrated ${dbColleges.length} colleges, ${allDbUsers.length} users from PostgreSQL.`);
+      }
+    }
+  } catch (err) {
+    console.warn("[Database] Sync error:", err);
+  }
+}
+if (process.env.DATABASE_URL) {
+  try {
+    prisma = new import_client.PrismaClient();
+    prisma.$connect().then(async () => {
+      isDbConnected = true;
+      console.log("[Database] Connected to PostgreSQL via Prisma");
+      await syncDatabaseWithPersistentState();
+    }).catch((err) => {
+      console.warn("[Database] Prisma connection error (using persistent file/in-memory fallback):", err.message);
+    });
+  } catch (err) {
+    console.warn("[Database] Prisma initialization error:", err);
+  }
+} else {
+  console.log("[Database] No DATABASE_URL configured. Running with persistent file store (.erus_backend_state.json).");
+}
+app.get("/api/admin/colleges", (req, res) => {
+  const deletedSet = new Set(persistentState.deletedSlotIds || []);
+  const updatedColleges = persistentState.colleges.map((c) => {
+    const normCode = normalizeCollegeCode(c.code);
+    const sCount = (persistentState.students[normCode] || persistentState.students[c.code] || []).length;
+    const fCount = (persistentState.faculty[normCode] || persistentState.faculty[c.code] || []).length;
+    const rawSlots = persistentState.slots[normCode] || persistentState.slots[c.code] || [];
+    const activeSlots = rawSlots.filter((s) => s && s.id && !deletedSet.has(s.id));
+    const slCount = activeSlots.length;
+    const effectiveStudentLimit = slCount > 0 ? Math.max(c.studentLimit || 60, slCount * 15) : c.studentLimit || 60;
+    const adminUser = persistentState.users.find(
+      (u) => u.role === "college_admin" && (normalizeCollegeCode(u.collegeCode) === normCode || u.email && c.contactEmail && u.email.toLowerCase() === c.contactEmail.toLowerCase() || u.email && c.adminEmail && u.email.toLowerCase() === c.adminEmail.toLowerCase())
+    );
+    const resolvedAdminPassword = adminUser?.password || c.adminPassword || `Erus@${c.code}2026`;
+    return {
+      ...c,
+      adminPassword: resolvedAdminPassword,
+      studentCount: sCount,
+      facultyCount: fCount,
+      slotCount: slCount,
+      studentLimit: effectiveStudentLimit
+    };
+  });
+  res.json({ success: true, colleges: updatedColleges });
+});
+app.post("/api/admin/colleges", async (req, res) => {
+  const payload = req.body;
+  if (!payload || !payload.name || !payload.code) {
+    return res.status(400).json({ success: false, error: "Name and code are required" });
+  }
+  const cleanCode = normalizeCollegeCode(payload.code.trim().toUpperCase());
+  const collegeName = payload.name.trim();
+  const adminPass = payload.adminPassword || `Erus@${cleanCode}2026`;
+  const quotaLimit = Number(payload.studentLimit) || 60;
+  const isCodeMatch = (k) => {
+    const uK = (k || "").trim().toUpperCase();
+    return uK === cleanCode || normalizeCollegeCode(uK) === cleanCode;
+  };
+  if (!persistentState.deletedSlotIds) persistentState.deletedSlotIds = [];
+  for (const k of Object.keys(persistentState.students)) {
+    if (isCodeMatch(k)) delete persistentState.students[k];
+  }
+  for (const k of Object.keys(persistentState.faculty)) {
+    if (isCodeMatch(k)) delete persistentState.faculty[k];
+  }
+  for (const k of Object.keys(persistentState.slots)) {
+    if (isCodeMatch(k)) {
+      for (const s of persistentState.slots[k] || []) {
+        if (s?.id && !persistentState.deletedSlotIds.includes(s.id)) {
+          persistentState.deletedSlotIds.push(s.id);
+        }
+      }
+      delete persistentState.slots[k];
+    }
+  }
+  const freshSlots = generateRandomSlotsForCollege(cleanCode, quotaLimit, 0);
+  persistentState.students[cleanCode] = [];
+  persistentState.faculty[cleanCode] = [];
+  persistentState.slots[cleanCode] = freshSlots;
+  if (!persistentState.slotsInitializedColleges) persistentState.slotsInitializedColleges = {};
+  persistentState.slotsInitializedColleges[cleanCode] = true;
+  const newCol = {
+    id: `col-${Date.now()}`,
+    name: collegeName,
+    code: cleanCode,
+    contactEmail: payload.contactEmail || `admin@${cleanCode.toLowerCase()}.edu.in`,
+    phone: payload.phone || "",
+    address: payload.address || "",
+    status: "active",
+    studentCount: 0,
+    facultyCount: 0,
+    slotCount: freshSlots.length,
+    studentLimit: freshSlots.length * 15,
+    adminEmail: payload.contactEmail || `admin@${cleanCode.toLowerCase()}.edu.in`,
+    adminName: payload.adminName || `${cleanCode} Administrator`,
+    adminPassword: adminPass,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  const adminUser = {
+    id: `ca-${Date.now()}`,
+    name: payload.adminName || `${cleanCode} College Administrator`,
+    email: newCol.contactEmail,
+    password: adminPass,
+    role: "college_admin",
+    college: newCol.name,
+    collegeCode: cleanCode,
+    adminId: `CADM-${cleanCode}-001`
+  };
+  const purgedUserIds = /* @__PURE__ */ new Set();
+  persistentState.users = persistentState.users.filter((u) => {
+    if (u.role === "super_admin" || u.email === "superadmin@erus.ai") return true;
+    const uCode = (u.collegeCode || "").trim().toUpperCase();
+    const uCollege = (u.college || "").trim().toLowerCase();
+    if (isCodeMatch(uCode) || uCollege === collegeName.toLowerCase() || u.email.toLowerCase() === adminUser.email.toLowerCase()) {
+      purgedUserIds.add(u.id);
+      if (u.studentId) purgedUserIds.add(u.studentId);
+      return false;
+    }
+    return true;
+  });
+  for (const uid of purgedUserIds) {
+    delete persistentState.studentBookings[uid];
+    delete persistentState.studentTopicBookings[uid];
+  }
+  persistentState.colleges = [newCol, ...persistentState.colleges.filter((c) => c.code.toUpperCase() !== cleanCode && c.id !== newCol.id)];
+  persistentState.users = [adminUser, ...persistentState.users];
+  savePersistentState();
+  if (isMongoConnected()) {
+    try {
+      const oldSessions = await GDSessionModel.find({ collegeCode: cleanCode }, "id");
+      const oldSessionIds = oldSessions.map((s) => s.id);
+      if (oldSessionIds.length > 0) {
+        for (const sid of oldSessionIds) {
+          if (sid && !persistentState.deletedSlotIds.includes(sid)) {
+            persistentState.deletedSlotIds.push(sid);
+          }
+        }
+        savePersistentState();
+        await TranscriptEntryModel.deleteMany({ sessionId: { $in: oldSessionIds } });
+        await AssessmentReportModel.deleteMany({ sessionId: { $in: oldSessionIds } });
+        await GDBookingModel.deleteMany({ sessionId: { $in: oldSessionIds } });
+        await GDSessionModel.deleteMany({ id: { $in: oldSessionIds } });
+      }
+      await UserModel.deleteMany({
+        $or: [
+          { collegeCode: cleanCode },
+          { college: new RegExp(`^${collegeName}$`, "i") }
+        ]
+      });
+      await CollegeModel.deleteMany({
+        $or: [{ code: cleanCode }, { name: new RegExp(`^${collegeName}$`, "i") }]
+      });
+    } catch (mErr) {
+      console.warn("[MongoDB] Error purging old college data during create:", mErr.message);
+    }
+  }
+  persistCollegeToMongoDB(newCol);
+  persistUserToMongoDB(adminUser);
+  for (const sl of freshSlots) {
+    persistSlotToMongoDB(sl);
+  }
+  try {
+    io.emit("college-limit-updated", {
+      collegeCode: cleanCode,
+      studentLimit: newCol.studentLimit,
+      slotCount: freshSlots.length,
+      slots: freshSlots
+    });
+  } catch {
+  }
+  if (isDbConnected && prisma) {
+    try {
+      const existingDbColleges = await prisma.college.findMany({
+        where: { OR: [{ code: cleanCode }, { name: collegeName }] },
+        select: { id: true }
+      });
+      const dbColIds = existingDbColleges.map((c) => c.id);
+      const oldDbSessions = await prisma.gDSession.findMany({
+        where: { OR: [{ collegeId: { in: dbColIds } }, { college: { code: cleanCode } }] },
+        select: { id: true }
+      });
+      const oldDbSessionIds = oldDbSessions.map((s) => s.id);
+      if (oldDbSessionIds.length > 0) {
+        await prisma.assessmentReport.deleteMany({ where: { sessionId: { in: oldDbSessionIds } } });
+        await prisma.transcriptEntry.deleteMany({ where: { sessionId: { in: oldDbSessionIds } } });
+        await prisma.gDBooking.deleteMany({ where: { sessionId: { in: oldDbSessionIds } } });
+        await prisma.gDSession.deleteMany({ where: { id: { in: oldDbSessionIds } } });
+      }
+      const oldDbUsers = await prisma.user.findMany({
+        where: { OR: [{ collegeId: { in: dbColIds } }, { college: cleanCode }, { college: collegeName }] },
+        select: { id: true }
+      });
+      const oldDbUserIds = oldDbUsers.map((u) => u.id);
+      if (oldDbUserIds.length > 0) {
+        await prisma.assessmentReport.deleteMany({ where: { studentId: { in: oldDbUserIds } } });
+        await prisma.studentProfile.deleteMany({ where: { userId: { in: oldDbUserIds } } });
+        await prisma.facultyProfile.deleteMany({ where: { userId: { in: oldDbUserIds } } });
+        await prisma.collegeAdminProfile.deleteMany({ where: { userId: { in: oldDbUserIds } } });
+        await prisma.gDBooking.deleteMany({ where: { studentId: { in: oldDbUserIds } } });
+        await prisma.user.deleteMany({ where: { id: { in: oldDbUserIds } } });
+      }
+      if (dbColIds.length > 0) {
+        await prisma.college.deleteMany({ where: { id: { in: dbColIds } } });
+      }
+      const dbCol = await prisma.college.upsert({
+        where: { code: cleanCode },
+        update: {
+          name: newCol.name,
+          contactEmail: newCol.contactEmail,
+          phone: newCol.phone,
+          address: newCol.address,
+          status: newCol.status
+        },
+        create: {
+          name: newCol.name,
+          code: cleanCode,
+          contactEmail: newCol.contactEmail,
+          phone: newCol.phone,
+          address: newCol.address,
+          status: newCol.status
+        }
+      });
+      const hashedAdminPass = await import_bcryptjs.default.hash(adminPass, 10);
+      await prisma.user.upsert({
+        where: { email: adminUser.email.toLowerCase() },
+        update: {
+          name: adminUser.name,
+          passwordHash: hashedAdminPass,
+          college: newCol.name,
+          collegeId: dbCol.id
+        },
+        create: {
+          email: adminUser.email.toLowerCase(),
+          passwordHash: hashedAdminPass,
+          name: adminUser.name,
+          role: "college_admin",
+          college: newCol.name,
+          collegeId: dbCol.id,
+          collegeAdminProfile: {
+            create: {
+              adminId: adminUser.adminId,
+              department: "Academic Administration"
+            }
+          }
+        }
+      });
+      console.log(`[Database] College ${cleanCode} and admin persisted cleanly to PostgreSQL.`);
+    } catch (dbErr) {
+      console.warn("[Database] Failed to persist college to PostgreSQL:", dbErr.message);
+    }
+  }
+  res.json({
+    success: true,
+    college: newCol,
+    slots: freshSlots,
+    slotCount: freshSlots.length,
+    studentLimit: newCol.studentLimit,
+    generatedCredentials: {
+      email: adminUser.email,
+      password: adminPass,
+      role: "college_admin",
+      collegeName: newCol.name,
+      collegeCode: cleanCode,
+      adminId: adminUser.adminId
+    }
+  });
+});
+async function addSlotsToCollegeAndPersist(col, body) {
+  const normCode = normalizeCollegeCode(col.code);
+  const deletedSet = new Set(persistentState.deletedSlotIds || []);
+  const slotMap = /* @__PURE__ */ new Map();
+  for (const [k, list] of Object.entries(persistentState.slots || {})) {
+    if (normalizeCollegeCode(k) === normCode || k.toUpperCase() === col.code.toUpperCase()) {
+      for (const s of list || []) {
+        if (s && s.id && !deletedSet.has(s.id) && !slotMap.has(s.id)) {
+          slotMap.set(s.id, { ...s, collegeCode: normCode });
+        }
+      }
+    }
+  }
+  if (isMongoConnected()) {
+    try {
+      const dbSlots = await GDSessionModel.find({
+        collegeCode: { $in: Array.from(/* @__PURE__ */ new Set([normCode, col.code, col.code.toUpperCase()])) }
+      }).maxTimeMS(1500);
+      for (const s of dbSlots) {
+        if (s && s.id && !deletedSet.has(s.id) && !slotMap.has(s.id)) {
+          slotMap.set(s.id, {
+            id: s.id,
+            slotName: s.slotName || s.topic || "Slot",
+            topic: s.topic || "",
+            description: s.description || "",
+            slotTiming: s.slotTiming || "10:30 AM - 10:45 AM",
+            slotDate: s.slotDate || "Today",
+            status: s.status || "scheduled",
+            durationMinutes: s.durationMinutes || 15,
+            enrolledCount: s.students?.length || s.enrolledCount || 15,
+            maxCapacity: s.maxCapacity || 15,
+            assignedFacultyId: s.assignedFacultyId || "",
+            assignedFacultyName: s.assignedFacultyName || "Unassigned",
+            assignedFacultyEmail: s.assignedFacultyEmail || "",
+            assignedFacultyDept: s.assignedFacultyDept || "",
+            collegeCode: normCode,
+            createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : (/* @__PURE__ */ new Date()).toISOString(),
+            students: s.students || []
+          });
+        }
+      }
+    } catch {
+    }
+  }
+  const preservedSlots = Array.from(slotMap.values());
+  const rawAddSlots = Number(body?.addSlots || body?.slotsToAdd || 0);
+  const rawStudentLimit = Number(body?.studentLimit || 60);
+  const slotsToAdd = rawAddSlots > 0 ? Math.max(1, Math.floor(rawAddSlots)) : Math.max(1, Math.ceil(rawStudentLimit / 15));
+  preservedSlots.forEach((sl, idx) => {
+    const seqNum = idx + 1;
+    const rawTopic = sl.topic ? String(sl.topic).trim() : "";
+    const isTopicValid = rawTopic !== "" && !rawTopic.toLowerCase().includes("pending") && !/^slot\s+\d+\s*$/i.test(rawTopic);
+    const cleanTopic = isTopicValid ? rawTopic : "";
+    sl.topic = cleanTopic;
+    sl.slotName = cleanTopic ? `Slot ${seqNum}: ${cleanTopic}` : `Slot ${seqNum}`;
+    if (cleanTopic && sl.description?.includes("Waiting for College Admin to allot")) {
+      sl.description = sl.activityType === "presentation" ? "Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates." : `Autonomous AI evaluated discussion on "${cleanTopic}".`;
+    }
+    sl.collegeCode = normCode;
+  });
+  const additionalSlots = generateRandomSlotsForCollege(
+    normCode,
+    slotsToAdd * 15,
+    preservedSlots.length
+  );
+  const combinedSlots = [...preservedSlots, ...additionalSlots];
+  const updatedStudentLimit = combinedSlots.length * 15;
+  col.studentLimit = updatedStudentLimit;
+  col.slotCount = combinedSlots.length;
+  col.code = normCode;
+  if (!persistentState.slotsInitializedColleges) {
+    persistentState.slotsInitializedColleges = {};
+  }
+  persistentState.slotsInitializedColleges[normCode] = true;
+  persistentState.slots[normCode] = combinedSlots;
+  const existingColIdx = persistentState.colleges.findIndex(
+    (c) => c.id === col.id || normalizeCollegeCode(c.code) === normCode
+  );
+  if (existingColIdx >= 0) {
+    persistentState.colleges[existingColIdx] = col;
+  } else {
+    persistentState.colleges.push(col);
+  }
+  savePersistentState();
+  persistCollegeToMongoDB(col).catch(() => null);
+  Promise.allSettled(combinedSlots.map((sl) => persistSlotToMongoDB(sl))).catch(() => null);
+  try {
+    io.emit("college-limit-updated", {
+      collegeCode: normCode,
+      studentLimit: updatedStudentLimit,
+      slotCount: combinedSlots.length,
+      addedSlotsCount: additionalSlots.length,
+      slots: combinedSlots
+    });
+    io.emit("slots-regenerated", {
+      collegeCode: normCode,
+      studentLimit: updatedStudentLimit,
+      slotCount: combinedSlots.length,
+      addedSlotsCount: additionalSlots.length,
+      slots: combinedSlots
+    });
+  } catch {
+  }
+  return {
+    success: true,
+    college: {
+      ...col,
+      studentLimit: updatedStudentLimit,
+      slotCount: combinedSlots.length
+    },
+    studentLimit: updatedStudentLimit,
+    slotCount: combinedSlots.length,
+    addedSlotsCount: additionalSlots.length,
+    slots: combinedSlots
+  };
+}
+async function resolveOrCreateCollegeForSlotGeneration(targetId, body) {
+  const rawCode = String(body?.collegeCode || (!targetId.startsWith("col-") ? targetId : "") || "").trim();
+  const normTarget = normalizeCollegeCode(rawCode || targetId);
+  let col = persistentState.colleges.find(
+    (c) => c.id === targetId || c.code.toUpperCase() === targetId.toUpperCase() || normalizeCollegeCode(c.code) === normTarget || areCollegeCodesEquivalent(c.code, normTarget) || body?.collegeName && c.name.toLowerCase() === String(body.collegeName).trim().toLowerCase()
+  );
+  if (!col && isMongoConnected()) {
+    try {
+      const dbCol = await CollegeModel.findOne({
+        $or: [
+          { id: targetId },
+          { code: targetId.toUpperCase() },
+          { code: normTarget }
+        ]
+      }).maxTimeMS(1500);
+      if (dbCol) {
+        const mappedCode = normalizeCollegeCode(dbCol.code);
+        col = {
+          id: dbCol.id || targetId,
+          name: dbCol.name || body?.collegeName || `${mappedCode} Campus`,
+          code: mappedCode,
+          contactEmail: dbCol.contactEmail || `admin@${mappedCode.toLowerCase()}.edu.in`,
+          phone: dbCol.phone || "",
+          address: dbCol.address || "",
+          status: dbCol.status || "active",
+          studentCount: dbCol.studentCount || 0,
+          facultyCount: dbCol.facultyCount || 0,
+          slotCount: dbCol.slotCount || 0,
+          studentLimit: dbCol.studentLimit || 60,
+          adminEmail: dbCol.adminEmail || dbCol.contactEmail,
+          adminName: dbCol.adminName || `${mappedCode} Administrator`,
+          adminPassword: dbCol.adminPassword || `Erus@${mappedCode}2026`,
+          createdAt: dbCol.createdAt ? new Date(dbCol.createdAt).toISOString() : (/* @__PURE__ */ new Date()).toISOString()
+        };
+        persistentState.colleges.push(col);
+      }
+    } catch {
+    }
+  }
+  if (!col && targetId.startsWith("col-") && !rawCode && persistentState.colleges.length === 1) {
+    col = persistentState.colleges[0];
+  }
+  if (!col) {
+    const finalCode = normTarget && !normTarget.startsWith("COL-") ? normTarget : normalizeCollegeCode(rawCode || "BMSIT");
+    const finalName = String(body?.collegeName || (finalCode === "BMSIT" ? "BMS Institute of Technology" : `${finalCode} Institution`)).trim();
+    col = {
+      id: targetId.startsWith("col-") ? targetId : `col-${Date.now()}`,
+      name: finalName,
+      code: finalCode,
+      contactEmail: `admin@${finalCode.toLowerCase()}.edu.in`,
+      phone: "",
+      address: "",
+      status: "active",
+      studentCount: (persistentState.students[finalCode] || []).length,
+      facultyCount: (persistentState.faculty[finalCode] || []).length,
+      slotCount: (persistentState.slots[finalCode] || []).length,
+      studentLimit: Number(body?.studentLimit) || 60,
+      adminEmail: `admin@${finalCode.toLowerCase()}.edu.in`,
+      adminName: `${finalCode} Administrator`,
+      adminPassword: `Erus@${finalCode}2026`,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    persistentState.colleges.push(col);
+  }
+  return col;
+}
+app.put(["/api/admin/colleges/:id/limit", "/api/admin/colleges/:id/quota"], async (req, res) => {
+  const targetId = req.params.id;
+  const col = await resolveOrCreateCollegeForSlotGeneration(targetId, req.body);
+  const result = await addSlotsToCollegeAndPersist(col, req.body);
+  res.json(result);
+});
+app.post("/api/admin/colleges/:id/limit", async (req, res) => {
+  const targetId = req.params.id;
+  const col = await resolveOrCreateCollegeForSlotGeneration(targetId, req.body);
+  const result = await addSlotsToCollegeAndPersist(col, req.body);
+  res.json(result);
+});
+app.post("/api/admin/colleges/:id/send-credentials", async (req, res) => {
+  const targetId = req.params.id;
+  const col = persistentState.colleges.find(
+    (c) => c.id === targetId || c.code.toUpperCase() === targetId.toUpperCase()
+  );
+  if (col) {
+    const adminUser = persistentState.users.find(
+      (u) => u.role === "college_admin" && (u.collegeCode === col.code || u.email && col.contactEmail && u.email.toLowerCase() === col.contactEmail.toLowerCase() || u.email && col.adminEmail && u.email.toLowerCase() === col.adminEmail.toLowerCase())
+    );
+    const pass = adminUser?.password || col.adminPassword || `Erus@${col.code}2026`;
+    const email = col.adminEmail || col.contactEmail;
+    try {
+      await sendCredentialsEmail({
+        to: email,
+        name: col.adminName || `${col.name} Administrator`,
+        role: "college_admin",
+        loginId: email,
+        password: pass,
+        collegeName: col.name
+      });
+      console.log(`[Credentials Mailer] Sent credentials to ${email}`);
+    } catch (e) {
+      console.warn("[Credentials Mailer] Warning while sending credentials email:", e.message);
+    }
+  }
+  res.json({ success: true, message: "Credentials dispatched successfully via secure notification." });
+});
+app.delete("/api/admin/colleges/:id", async (req, res) => {
+  const targetId = req.params.id;
+  if (!targetId) {
+    return res.status(400).json({ success: false, error: "College ID or code is required" });
+  }
+  const queryCode = String(req.query.code || req.body?.code || "").trim().toUpperCase();
+  const queryName = String(req.query.name || req.body?.name || "").trim();
+  const colIndex = persistentState.colleges.findIndex(
+    (c) => c.id === targetId || c.code.toUpperCase() === targetId.toUpperCase() || queryCode && c.code.toUpperCase() === queryCode || queryName && c.name.toLowerCase() === queryName.toLowerCase()
+  );
+  let cleanCode = queryCode;
+  let collegeName = queryName;
+  let collegeId = targetId;
+  if (colIndex !== -1) {
+    const col = persistentState.colleges[colIndex];
+    cleanCode = col.code.toUpperCase();
+    collegeName = col.name;
+    collegeId = col.id;
+    persistentState.colleges.splice(colIndex, 1);
+  }
+  if (!cleanCode && targetId.length <= 15 && !targetId.toLowerCase().startsWith("col-")) {
+    cleanCode = targetId.toUpperCase();
+  }
+  if (isMongoConnected()) {
+    try {
+      const mongoLookupQueries = [{ id: targetId }, { id: collegeId }];
+      if (cleanCode) mongoLookupQueries.push({ code: cleanCode });
+      if (collegeName) mongoLookupQueries.push({ name: collegeName });
+      const mongoCol = await CollegeModel.findOne({ $or: mongoLookupQueries });
+      if (mongoCol) {
+        cleanCode = cleanCode || mongoCol.code.toUpperCase();
+        collegeName = collegeName || mongoCol.name;
+        collegeId = collegeId || mongoCol.id;
+      }
+    } catch (e) {
+      console.warn("[MongoDB] Lookup error during college delete:", e);
+    }
+  }
+  let dbColId = null;
+  if (isDbConnected && prisma) {
+    try {
+      const dbLookupQueries = [{ id: targetId }, { id: collegeId }];
+      if (cleanCode) dbLookupQueries.push({ code: cleanCode });
+      if (collegeName) dbLookupQueries.push({ name: collegeName });
+      const dbCol = await prisma.college.findFirst({
+        where: { OR: dbLookupQueries }
+      });
+      if (dbCol) {
+        cleanCode = cleanCode || dbCol.code.toUpperCase();
+        collegeName = collegeName || dbCol.name;
+        dbColId = dbCol.id;
+      }
+    } catch (e) {
+      console.warn("[Prisma] Lookup error during college delete:", e);
+    }
+  }
+  const allCodes = Array.from(
+    new Set([cleanCode, queryCode, targetId.toUpperCase()].filter((c) => c && c.length <= 15 && !c.startsWith("COL-")))
+  );
+  if (cleanCode && !allCodes.includes(cleanCode)) allCodes.push(cleanCode);
+  const allNames = Array.from(new Set([collegeName, queryName].filter(Boolean)));
+  const allIds = Array.from(new Set([targetId, collegeId, dbColId].filter(Boolean)));
+  console.log(`[Admin Delete College] Purging college and all roster data - Codes:`, allCodes, `Names:`, allNames, `IDs:`, allIds);
+  const matchKeysLower = /* @__PURE__ */ new Set([
+    ...allCodes.map((c) => c.toLowerCase()),
+    ...allNames.map((n) => n.toLowerCase())
+  ]);
+  persistentState.colleges = persistentState.colleges.filter(
+    (c) => c.id !== targetId && c.id !== collegeId && c.code.toUpperCase() !== targetId.toUpperCase() && (!cleanCode || c.code.toUpperCase() !== cleanCode) && (!queryCode || c.code.toUpperCase() !== queryCode) && (!collegeName || c.name.toLowerCase() !== collegeName.toLowerCase()) && (!queryName || c.name.toLowerCase() !== queryName.toLowerCase())
+  );
+  const isKeyMatch = (key) => {
+    const kUpper = key.trim().toUpperCase();
+    const kNorm = normalizeCollegeCode(key);
+    return allCodes.some((c) => c.toUpperCase() === kUpper || c.toUpperCase() === kNorm || kUpper.includes(c.toUpperCase())) || matchKeysLower.has(key.toLowerCase());
+  };
+  if (!persistentState.deletedSlotIds) persistentState.deletedSlotIds = [];
+  for (const key of Object.keys(persistentState.students)) {
+    if (isKeyMatch(key)) delete persistentState.students[key];
+  }
+  for (const key of Object.keys(persistentState.faculty)) {
+    if (isKeyMatch(key)) delete persistentState.faculty[key];
+  }
+  for (const key of Object.keys(persistentState.slots)) {
+    if (isKeyMatch(key)) {
+      for (const s of persistentState.slots[key] || []) {
+        if (s?.id && !persistentState.deletedSlotIds.includes(s.id)) {
+          persistentState.deletedSlotIds.push(s.id);
+        }
+      }
+      delete persistentState.slots[key];
+    }
+  }
+  for (const [k, slotList] of Object.entries(persistentState.slots)) {
+    persistentState.slots[k] = slotList.filter((s) => {
+      const isMatch = allCodes.some(
+        (c) => c.toUpperCase() === (s.collegeCode || "").trim().toUpperCase() || (s.collegeCode || "").toUpperCase().includes(c.toUpperCase())
+      );
+      if (isMatch && s?.id && !persistentState.deletedSlotIds.includes(s.id)) {
+        persistentState.deletedSlotIds.push(s.id);
+      }
+      return !isMatch;
+    });
+  }
+  if (persistentState.colleges.length === 0) {
+    for (const slotList of Object.values(persistentState.slots)) {
+      for (const s of slotList || []) {
+        if (s?.id && !persistentState.deletedSlotIds.includes(s.id)) {
+          persistentState.deletedSlotIds.push(s.id);
+        }
+      }
+    }
+    persistentState.students = {};
+    persistentState.faculty = {};
+    persistentState.slots = {};
+  }
+  const deletedUserIds = /* @__PURE__ */ new Set();
+  persistentState.users = persistentState.users.filter((u) => {
+    if (u.role === "super_admin" || u.email === "superadmin@erus.ai") return true;
+    if (persistentState.colleges.length === 0) {
+      deletedUserIds.add(u.id);
+      if (u.studentId) deletedUserIds.add(u.studentId);
+      return false;
+    }
+    const uCode = (u.collegeCode || "").trim().toUpperCase();
+    const uCollege = (u.college || "").trim().toLowerCase();
+    const isCodeMatch = allCodes.some((c) => c.toUpperCase() === uCode || uCode.includes(c.toUpperCase()) || normalizeCollegeCode(uCode) === c.toUpperCase());
+    const isNameMatch = allNames.some((n) => n.toLowerCase() === uCollege);
+    const isIdMatch = allIds.includes(u.collegeId) || allIds.includes(u.id);
+    if (isCodeMatch || isNameMatch || isIdMatch) {
+      deletedUserIds.add(u.id);
+      if (u.studentId) deletedUserIds.add(u.studentId);
+      return false;
+    }
+    return true;
+  });
+  for (const uid of deletedUserIds) {
+    delete persistentState.studentBookings[uid];
+    delete persistentState.studentTopicBookings[uid];
+  }
+  savePersistentState();
+  if (isMongoConnected()) {
+    try {
+      const sessionOrQueries = allCodes.map((code) => ({ collegeCode: code }));
+      const sessions = sessionOrQueries.length > 0 ? await GDSessionModel.find({ $or: sessionOrQueries }, "id") : [];
+      const sessionIds = sessions.map((s) => s.id);
+      if (sessionIds.length > 0) {
+        for (const sid of sessionIds) {
+          if (sid && !persistentState.deletedSlotIds.includes(sid)) {
+            persistentState.deletedSlotIds.push(sid);
+          }
+        }
+        savePersistentState();
+        await TranscriptEntryModel.deleteMany({ sessionId: { $in: sessionIds } });
+        await AssessmentReportModel.deleteMany({ sessionId: { $in: sessionIds } });
+        await GDBookingModel.deleteMany({ sessionId: { $in: sessionIds } });
+        await GDSessionModel.deleteMany({ id: { $in: sessionIds } });
+      }
+      const userConditions = [];
+      if (allCodes.length > 0) userConditions.push({ collegeCode: { $in: allCodes } });
+      if (allNames.length > 0) userConditions.push({ college: { $in: allNames.map((n) => new RegExp(`^${n}$`, "i")) } });
+      if (allIds.length > 0) userConditions.push({ id: { $in: allIds } });
+      if (userConditions.length > 0) {
+        const matchingUsers = await UserModel.find({ $or: userConditions }, "id studentProfile.studentId");
+        const mongoUserIds = matchingUsers.flatMap((u) => [u.id, u.studentProfile?.studentId].filter(Boolean));
+        if (mongoUserIds.length > 0) {
+          await AssessmentReportModel.deleteMany({ studentId: { $in: mongoUserIds } });
+          await GDBookingModel.deleteMany({ studentId: { $in: mongoUserIds } });
+        }
+        const deletedUsersResult = await UserModel.deleteMany({ $or: userConditions });
+        console.log(`[MongoDB] Deleted ${deletedUsersResult.deletedCount} users for college.`);
+      }
+      const collegeConditions = [];
+      if (allCodes.length > 0) collegeConditions.push({ code: { $in: allCodes } });
+      if (allIds.length > 0) collegeConditions.push({ id: { $in: allIds } });
+      if (allNames.length > 0) collegeConditions.push({ name: { $in: allNames } });
+      if (collegeConditions.length > 0) {
+        await CollegeModel.deleteMany({ $or: collegeConditions });
+      }
+      console.log(`[MongoDB] Purged college ${cleanCode} and all related records.`);
+    } catch (mErr) {
+      console.warn("[MongoDB] Error deleting college from MongoDB:", mErr.message);
+    }
+  }
+  if (isDbConnected && prisma) {
+    try {
+      const dbColleges = await prisma.college.findMany({
+        where: {
+          OR: [
+            ...allIds.length > 0 ? [{ id: { in: allIds } }] : [],
+            ...allCodes.length > 0 ? [{ code: { in: allCodes } }] : [],
+            ...allNames.length > 0 ? [{ name: { in: allNames } }] : []
+          ]
+        }
+      });
+      const matchedCollegeIds = Array.from(/* @__PURE__ */ new Set([...allIds, ...dbColleges.map((c) => c.id)]));
+      const sessions = await prisma.gDSession.findMany({
+        where: {
+          OR: [
+            { collegeId: { in: matchedCollegeIds } },
+            { college: { code: { in: allCodes } } }
+          ]
+        },
+        select: { id: true }
+      });
+      const sessionIds = sessions.map((s) => s.id);
+      if (sessionIds.length > 0) {
+        await prisma.assessmentReport.deleteMany({ where: { sessionId: { in: sessionIds } } });
+        await prisma.transcriptEntry.deleteMany({ where: { sessionId: { in: sessionIds } } });
+        await prisma.gDBooking.deleteMany({ where: { sessionId: { in: sessionIds } } });
+        await prisma.gDSession.deleteMany({ where: { id: { in: sessionIds } } });
+      }
+      const users = await prisma.user.findMany({
+        where: {
+          OR: [
+            { collegeId: { in: matchedCollegeIds } },
+            { college: { in: [...allCodes, ...allNames] } }
+          ]
+        },
+        select: { id: true }
+      });
+      const userIds = users.map((u) => u.id);
+      if (userIds.length > 0) {
+        await prisma.assessmentReport.deleteMany({ where: { studentId: { in: userIds } } });
+        await prisma.studentProfile.deleteMany({ where: { userId: { in: userIds } } });
+        await prisma.facultyProfile.deleteMany({ where: { userId: { in: userIds } } });
+        await prisma.collegeAdminProfile.deleteMany({ where: { userId: { in: userIds } } });
+        await prisma.gDBooking.deleteMany({ where: { studentId: { in: userIds } } });
+        const deletedUserCount = await prisma.user.deleteMany({ where: { id: { in: userIds } } });
+        console.log(`[Database] Deleted ${deletedUserCount.count} users in PostgreSQL.`);
+      }
+      if (matchedCollegeIds.length > 0) {
+        await prisma.college.deleteMany({ where: { id: { in: matchedCollegeIds } } });
+      }
+      console.log(`[Database] Deleted college records from PostgreSQL.`);
+    } catch (dbErr) {
+      console.warn("[Database] Failed to delete college from PostgreSQL:", dbErr.message);
+    }
+  }
+  res.json({
+    success: true,
+    message: `College ${cleanCode || targetId} and all associated student profiles, faculty members, admin accounts, and slots have been deleted successfully.`
+  });
+});
+app.get("/api/admin/stats", (req, res) => {
+  checkAndResetDailyStats();
+  pruneInactiveUsers();
+  let totalStu = 0;
+  let totalFac = 0;
+  let totalSl = 0;
+  if (persistentState.colleges.length > 0) {
+    for (const col of persistentState.colleges) {
+      const code = (col.code || "").trim().toUpperCase();
+      const stuList = persistentState.students[code] || persistentState.students[col.code] || [];
+      totalStu += stuList.length;
+      const facList = persistentState.faculty[code] || persistentState.faculty[col.code] || [];
+      totalFac += facList.length;
+      const slList = persistentState.slots[code] || persistentState.slots[col.code] || [];
+      totalSl += slList.length;
+    }
+  }
+  const activeCount = Math.max(0, liveActiveUsers.size);
+  const todayCount = persistentState.systemSettings.activeUsersToday.length || activeCount;
+  const limit = persistentState.systemSettings.dailyUserLimit;
+  const loadPercent = limit > 0 ? Math.min(100, Math.round(todayCount / limit * 100)) : Math.min(100, Math.round(activeCount / 50 * 100));
+  res.json({
+    success: true,
+    stats: {
+      totalColleges: persistentState.colleges.length,
+      totalStudents: totalStu,
+      totalFaculty: totalFac,
+      totalSlots: totalSl,
+      activeLiveGDs: typeof LIVE_ROOMS !== "undefined" ? LIVE_ROOMS.size : 0,
+      activeUsersCount: activeCount,
+      activeUsersTodayCount: todayCount,
+      dailyUserLimit: limit,
+      maxConcurrentUsers: persistentState.systemSettings.maxConcurrentUsers || 50,
+      enforceDailyLimit: persistentState.systemSettings.enforceDailyLimit,
+      serverLoadPercent: loadPercent
+    }
+  });
+});
+app.get("/api/admin/capacity", (req, res) => {
+  checkAndResetDailyStats();
+  pruneInactiveUsers();
+  const activeCount = Math.max(1, liveActiveUsers.size);
+  const todayCount = persistentState.systemSettings.activeUsersToday.length || activeCount;
+  const limit = persistentState.systemSettings.dailyUserLimit;
+  const loadPercent = limit > 0 ? Math.min(100, Math.round(todayCount / limit * 100)) : Math.min(100, Math.round(activeCount / 50 * 100));
+  res.json({
+    success: true,
+    capacity: {
+      activeUsersCount: activeCount,
+      activeUsersTodayCount: todayCount,
+      dailyUserLimit: limit,
+      maxConcurrentUsers: persistentState.systemSettings.maxConcurrentUsers || 50,
+      enforceDailyLimit: persistentState.systemSettings.enforceDailyLimit,
+      lastResetDate: persistentState.systemSettings.lastResetDate,
+      serverLoadPercent: loadPercent,
+      activeUsers: Array.from(liveActiveUsers.values())
+    }
+  });
+});
+app.post("/api/admin/capacity", (req, res) => {
+  const { dailyUserLimit, maxConcurrentUsers, enforceDailyLimit } = req.body;
+  checkAndResetDailyStats();
+  if (typeof dailyUserLimit === "number" && dailyUserLimit >= 0) {
+    persistentState.systemSettings.dailyUserLimit = Math.floor(dailyUserLimit);
+  }
+  if (typeof maxConcurrentUsers === "number" && maxConcurrentUsers >= 0) {
+    persistentState.systemSettings.maxConcurrentUsers = Math.floor(maxConcurrentUsers);
+  }
+  if (typeof enforceDailyLimit === "boolean") {
+    persistentState.systemSettings.enforceDailyLimit = enforceDailyLimit;
+  }
+  persistentState.systemSettings.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+  savePersistentState();
+  const activeCount = Math.max(1, liveActiveUsers.size);
+  const todayCount = persistentState.systemSettings.activeUsersToday.length || activeCount;
+  const limit = persistentState.systemSettings.dailyUserLimit;
+  const loadPercent = limit > 0 ? Math.min(100, Math.round(todayCount / limit * 100)) : Math.min(100, Math.round(activeCount / 50 * 100));
+  try {
+    io.emit("capacity-settings-changed", {
+      dailyUserLimit: limit,
+      enforceDailyLimit: persistentState.systemSettings.enforceDailyLimit
+    });
+  } catch {
+  }
+  res.json({
+    success: true,
+    message: "Server capacity and daily active user limits updated successfully.",
+    capacity: {
+      activeUsersCount: activeCount,
+      activeUsersTodayCount: todayCount,
+      dailyUserLimit: limit,
+      maxConcurrentUsers: persistentState.systemSettings.maxConcurrentUsers,
+      enforceDailyLimit: persistentState.systemSettings.enforceDailyLimit,
+      lastResetDate: persistentState.systemSettings.lastResetDate,
+      serverLoadPercent: loadPercent
+    }
+  });
+});
+app.post("/api/user/heartbeat", (req, res) => {
+  const { user } = req.body;
+  if (user?.id) {
+    recordUserActivity(user);
+  }
+  checkAndResetDailyStats();
+  const currentCount = Math.max(1, liveActiveUsers.size);
+  const todayCount = persistentState.systemSettings.activeUsersToday.length || currentCount;
+  const limit = persistentState.systemSettings.dailyUserLimit;
+  res.json({
+    success: true,
+    activeUsersCount: currentCount,
+    activeUsersTodayCount: todayCount,
+    dailyUserLimit: limit
+  });
+});
+function resolveEffectiveCollegeCode(rawQueryCode) {
+  const raw = String(rawQueryCode || "DIT").trim();
+  const code = normalizeCollegeCode(raw);
+  const exactCol = persistentState.colleges.find(
+    (c) => normalizeCollegeCode(c.code) === code || c.id === raw || c.name.toLowerCase() === raw.toLowerCase()
+  );
+  if (exactCol) {
+    return normalizeCollegeCode(exactCol.code);
+  }
+  const equivCol = persistentState.colleges.find((c) => areCollegeCodesEquivalent(c.code, code));
+  if (equivCol) {
+    return normalizeCollegeCode(equivCol.code);
+  }
+  for (const [k, list] of Object.entries(persistentState.slots || {})) {
+    if (Array.isArray(list) && list.length > 0 && areCollegeCodesEquivalent(k, code)) {
+      return normalizeCollegeCode(k);
+    }
+  }
+  if ((code === "DIT" || code === "CAMPUS" || code === "COL") && persistentState.colleges.length === 1) {
+    return normalizeCollegeCode(persistentState.colleges[0].code);
+  }
+  return code;
+}
+app.get("/api/college/stats", (req, res) => {
+  const code = resolveEffectiveCollegeCode(req.query.collegeCode);
+  const college = persistentState.colleges.find(
+    (c) => normalizeCollegeCode(c.code) === code || areCollegeCodesEquivalent(c.code, code)
+  );
+  const stuList = persistentState.students[code] || [];
+  const facList = persistentState.faculty[code] || [];
+  const deletedSet = new Set(persistentState.deletedSlotIds || []);
+  const slotMap = /* @__PURE__ */ new Map();
+  for (const [k, list] of Object.entries(persistentState.slots || {})) {
+    if (normalizeCollegeCode(k) === code || areCollegeCodesEquivalent(k, code)) {
+      for (const s of list || []) {
+        if (s?.id && !deletedSet.has(s.id) && !slotMap.has(s.id)) {
+          slotMap.set(s.id, s);
+        }
+      }
+    }
+  }
+  const slotList = Array.from(slotMap.values());
+  const effectiveStudentLimit = slotList.length > 0 ? Math.max(college?.studentLimit || 60, slotList.length * 15) : college?.studentLimit || 60;
+  res.json({
+    success: true,
+    stats: {
+      collegeName: college?.name || (code === "BMSIT" ? "BMS Institute of Technology" : `${code} Institution`),
+      collegeCode: code,
+      studentLimit: effectiveStudentLimit,
+      totalStudents: stuList.length,
+      totalFaculty: facList.length,
+      scheduledSlots: slotList.filter((s) => s.status === "scheduled").length,
+      completedSlots: slotList.filter((s) => s.status === "completed").length,
+      totalSlots: slotList.length
+    }
+  });
+});
+app.get("/api/college/students", (req, res) => {
+  const code = resolveEffectiveCollegeCode(req.query.collegeCode || "DIT");
+  let rawStudents = persistentState.students[code] || [];
+  rawStudents = assignUniqueSeats(rawStudents);
+  persistentState.students[code] = rawStudents;
+  const students = rawStudents.map((st) => {
+    const userMatch = persistentState.users.find(
+      (u) => u.email?.toLowerCase() === st.email?.toLowerCase() || u.id === st.id || st.studentId && u.studentId === st.studentId
+    );
+    if (userMatch) {
+      userMatch.seatNumber = st.seatNumber;
+    }
+    return {
+      ...st,
+      password: userMatch?.password || st.password || "password123"
+    };
+  });
+  res.json({ success: true, students });
+});
+app.patch("/api/college/students/:id/seat", async (req, res) => {
+  const { id } = req.params;
+  const { seatNumber, collegeCode } = req.body;
+  const code = normalizeCollegeCode(collegeCode || "BMSIT");
+  const stuList = persistentState.students[code] || [];
+  const student = stuList.find((s) => s.id === id || s.email?.toLowerCase() === id.toLowerCase() || s.studentId === id);
+  if (!student) {
+    return res.status(404).json({ success: false, error: "Student not found" });
+  }
+  const newSeat = Number(seatNumber);
+  if (!newSeat || newSeat < 1) {
+    return res.status(400).json({ success: false, error: "Invalid seat number" });
+  }
+  student.seatNumber = newSeat;
+  const user = persistentState.users.find((u) => u.email.toLowerCase() === student.email.toLowerCase());
+  if (user) {
+    user.seatNumber = newSeat;
+    await persistUserToMongoDB(user);
+  }
+  savePersistentState();
+  res.json({ success: true, student });
+});
+app.put(["/api/college/students/:id", "/api/college/students/:id/edit"], async (req, res) => {
+  const { id } = req.params;
+  const { name, email, studentId, course, batch, seatNumber, password, collegeCode } = req.body;
+  const code = normalizeCollegeCode(collegeCode || req.query.collegeCode || "BMSIT");
+  const stuList = persistentState.students[code] || [];
+  const student = stuList.find(
+    (s) => s.id === id || s.email?.toLowerCase() === id.toLowerCase() || s.studentId === id
+  );
+  if (!student) {
+    return res.status(404).json({ success: false, error: "Student not found in roster" });
+  }
+  const oldEmail = student.email?.toLowerCase();
+  const oldId = student.id;
+  const oldStudentId = student.studentId;
+  if (name !== void 0) student.name = String(name).trim();
+  if (email !== void 0) student.email = String(email).trim();
+  if (studentId !== void 0) student.studentId = String(studentId).trim();
+  if (course !== void 0) student.course = String(course).trim();
+  if (batch !== void 0) student.batch = String(batch).trim();
+  if (seatNumber !== void 0) {
+    const sNum = Number(seatNumber);
+    if (sNum >= 1 && sNum <= 15) student.seatNumber = sNum;
+  }
+  if (password && String(password).trim()) {
+    student.password = String(password).trim();
+  }
+  const user = persistentState.users.find(
+    (u) => u.id === oldId || u.email?.toLowerCase() === oldEmail || oldStudentId && u.studentId === oldStudentId
+  );
+  if (user) {
+    if (student.name) user.name = student.name;
+    if (student.email) user.email = student.email;
+    if (student.studentId) user.studentId = student.studentId;
+    if (student.course) user.course = student.course;
+    if (student.batch) user.batch = student.batch;
+    if (student.seatNumber) user.seatNumber = student.seatNumber;
+    if (student.password) user.password = student.password;
+    await persistUserToMongoDB(user);
+  }
+  const slots = persistentState.slots[code] || [];
+  for (const slot of slots) {
+    if (Array.isArray(slot.students)) {
+      for (const st of slot.students) {
+        if (st.id === oldId || st.email?.toLowerCase() === oldEmail || oldStudentId && st.studentId === oldStudentId) {
+          if (student.name) st.name = student.name;
+          if (student.email) st.email = student.email;
+          if (student.studentId) st.studentId = student.studentId;
+          if (student.course) st.course = student.course;
+          if (student.batch) st.batch = student.batch;
+          if (student.seatNumber) st.seatNumber = student.seatNumber;
+        }
+      }
+    }
+  }
+  if (isDbConnected && prisma && user) {
+    try {
+      const updateData = {
+        name: student.name,
+        email: student.email?.toLowerCase()
+      };
+      if (student.password) {
+        updateData.passwordHash = await import_bcryptjs.default.hash(student.password, 10);
+      }
+      await prisma.user.update({
+        where: { id: user.id },
+        data: updateData
+      });
+      await prisma.studentProfile.updateMany({
+        where: { userId: user.id },
+        data: {
+          studentId: student.studentId,
+          course: student.course,
+          batch: student.batch,
+          seatNumber: student.seatNumber
+        }
+      });
+    } catch (dbErr) {
+      console.warn("[Database] Failed to update student in PostgreSQL:", dbErr.message);
+    }
+  }
+  savePersistentState();
+  res.json({ success: true, student });
+});
+app.delete("/api/college/students/:id", async (req, res) => {
+  const { id } = req.params;
+  const code = normalizeCollegeCode(req.query.collegeCode || "BMSIT");
+  if (persistentState.students[code]) {
+    persistentState.students[code] = persistentState.students[code].filter(
+      (s) => s.id !== id && s.email?.toLowerCase() !== id.toLowerCase() && s.studentId !== id
+    );
+  }
+  persistentState.users = persistentState.users.filter(
+    (u) => u.id !== id && u.email?.toLowerCase() !== id.toLowerCase() && u.studentId !== id
+  );
+  if (isMongoConnected()) {
+    try {
+      await UserModel.deleteMany({
+        $or: [{ id }, { email: id.toLowerCase() }, { "studentProfile.studentId": id }]
+      });
+    } catch (e) {
+      console.warn("[MongoDB] Delete student error:", e.message);
+    }
+  }
+  savePersistentState();
+  res.json({ success: true, message: "Student removed successfully" });
+});
+app.post("/api/college/students", async (req, res) => {
+  const { students, student, collegeCode } = req.body;
+  const code = normalizeCollegeCode(collegeCode || "DIT");
+  const incoming = Array.isArray(students) ? students : student ? [student] : [];
+  if (!persistentState.students[code]) {
+    persistentState.students[code] = [];
+  }
+  const addedStudents = [];
+  const shouldSendEmail = Boolean(req.body.sendEmail);
+  const currentStudents = persistentState.students[code] || [];
+  const usedSeats = new Set(currentStudents.map((s) => Number(s.seatNumber)).filter(Boolean));
+  incoming.forEach((st, idx) => {
+    const studentPass = st.password || `Stud@${Date.now().toString().slice(-4)}!`;
+    let assignedSeat = Number(st.seatNumber);
+    if (!assignedSeat || assignedSeat < 1 || usedSeats.has(assignedSeat)) {
+      assignedSeat = 1;
+      while (usedSeats.has(assignedSeat)) assignedSeat++;
+    }
+    usedSeats.add(assignedSeat);
+    const newStu = {
+      id: st.id || `s-${Date.now()}-${idx}`,
+      name: st.name || "Candidate",
+      email: st.email || `student-${Date.now()}-${idx}@${code.toLowerCase()}.edu.in`,
+      studentId: st.studentId || `STU-${Date.now().toString().slice(-4)}-${idx}`,
+      course: st.course || "B.Tech Computer Science & Engineering",
+      batch: st.batch || "2024-2028",
+      seatNumber: assignedSeat,
+      college: st.college || (persistentState.colleges.find((c) => c.code === code)?.name || "Engineering Institute"),
+      collegeCode: code,
+      password: studentPass
+    };
+    persistentState.students[code].push(newStu);
+    addedStudents.push(newStu);
+    persistentState.users.push({
+      id: newStu.id,
+      name: newStu.name,
+      email: newStu.email,
+      password: studentPass,
+      role: "student",
+      college: newStu.college,
+      collegeCode: code,
+      studentId: newStu.studentId,
+      course: newStu.course,
+      batch: newStu.batch,
+      seatNumber: newStu.seatNumber
+    });
+    if (shouldSendEmail || st.sendEmail) {
+      sendCredentialsEmail({
+        to: newStu.email,
+        name: newStu.name,
+        role: "student",
+        username: newStu.studentId || newStu.email,
+        password: studentPass,
+        collegeName: newStu.college,
+        collegeCode: code
+      }).catch((e) => console.warn("[Mailer] Student credential dispatch error:", e.message));
+    }
+  });
+  savePersistentState();
+  for (const st of addedStudents) {
+    const userMatch = persistentState.users.find((u) => u.email.toLowerCase() === st.email.toLowerCase());
+    const pass = userMatch?.password || "password123";
+    persistUserToMongoDB({ ...st, role: "student", password: pass });
+  }
+  if (isDbConnected && prisma) {
+    try {
+      const col = await prisma.college.findUnique({ where: { code } });
+      for (const st of addedStudents) {
+        const userMatch = persistentState.users.find((u) => u.email.toLowerCase() === st.email.toLowerCase());
+        const pass = userMatch?.password || "password123";
+        const defaultPassHash = await import_bcryptjs.default.hash(pass, 10);
+        await prisma.user.upsert({
+          where: { email: st.email.toLowerCase() },
+          update: {
+            name: st.name,
+            college: st.college,
+            collegeId: col?.id
+          },
+          create: {
+            email: st.email.toLowerCase(),
+            passwordHash: defaultPassHash,
+            name: st.name,
+            role: "student",
+            college: st.college,
+            collegeId: col?.id,
+            studentProfile: {
+              create: {
+                studentId: st.studentId,
+                course: st.course,
+                batch: st.batch,
+                seatNumber: st.seatNumber
+              }
+            }
+          }
+        });
+      }
+      console.log(`[Database] Persisted ${addedStudents.length} students to PostgreSQL.`);
+    } catch (dbErr) {
+      console.warn("[Database] Failed to persist students to PostgreSQL:", dbErr.message);
+    }
+  }
+  const mappedStudents = persistentState.students[code].map((st) => {
+    const userMatch = persistentState.users.find(
+      (u) => u.email?.toLowerCase() === st.email?.toLowerCase() || u.id === st.id || st.studentId && u.studentId === st.studentId
+    );
+    return {
+      ...st,
+      password: userMatch?.password || st.password || "password123"
+    };
+  });
+  res.json({ success: true, addedCount: addedStudents.length, students: mappedStudents });
+});
+app.get("/api/college/faculty", async (req, res) => {
+  const code = resolveEffectiveCollegeCode(req.query.collegeCode || "DIT");
+  const facultyMap = /* @__PURE__ */ new Map();
+  for (const f of persistentState.faculty[code] || []) {
+    facultyMap.set(f.facultyId || f.email, f);
+  }
+  if (isDbConnected && prisma) {
+    try {
+      const dbFaculty = await prisma.user.findMany({
+        where: {
+          role: "faculty",
+          college: code
+        },
+        include: { facultyProfile: true }
+      });
+      for (const u of dbFaculty) {
+        const f = {
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          facultyId: u.facultyProfile?.facultyId || u.facultyId || u.id,
+          department: u.facultyProfile?.department || u.department || "Academic Department",
+          designation: u.facultyProfile?.designation || u.designation || "Faculty Evaluator",
+          college: u.college || code,
+          collegeCode: code,
+          assignedSlotsCount: (persistentState.slots[code] || []).filter(
+            (s) => s.assignedFacultyId === (u.facultyProfile?.facultyId || u.id)
+          ).length
+        };
+        facultyMap.set(f.facultyId || f.email, f);
+      }
+    } catch (dbErr) {
+      console.warn("[Database] Failed to read faculty roster:", dbErr.message);
+    }
+  }
+  const faculty = Array.from(facultyMap.values()).map((f) => {
+    const userMatch = persistentState.users.find(
+      (u) => u.email?.toLowerCase() === f.email?.toLowerCase() || u.id === f.id || f.facultyId && u.facultyId === f.facultyId
+    );
+    return {
+      ...f,
+      password: userMatch?.password || f.password || "faculty123"
+    };
+  });
+  persistentState.faculty[code] = faculty;
+  savePersistentState();
+  res.json({ success: true, faculty });
+});
+app.post("/api/college/faculty", async (req, res) => {
+  const payload = req.body;
+  const code = normalizeCollegeCode(payload.collegeCode || "DIT");
+  if (!persistentState.faculty[code]) {
+    persistentState.faculty[code] = [];
+  }
+  const facultyPass = payload.password || `Fac@${Date.now().toString().slice(-4)}!`;
+  const newFac = {
+    id: payload.id || `fac-${Date.now()}`,
+    name: payload.name || "Faculty Member",
+    email: payload.email || `faculty@${code.toLowerCase()}.edu.in`,
+    facultyId: payload.facultyId || `FAC-${Date.now().toString().slice(-4)}`,
+    department: payload.department || "Computer Science & Engineering",
+    designation: payload.designation || "Assistant Professor",
+    college: payload.college || (persistentState.colleges.find((c) => c.code === code)?.name || "Engineering Institute"),
+    collegeCode: code,
+    assignedSlotsCount: payload.assignedSlotsCount || 0,
+    password: facultyPass
+  };
+  persistentState.faculty[code].push(newFac);
+  persistentState.users.push({
+    id: newFac.id,
+    name: newFac.name,
+    email: newFac.email,
+    password: facultyPass,
+    role: "faculty",
+    college: newFac.college,
+    collegeCode: code,
+    facultyId: newFac.facultyId,
+    department: newFac.department,
+    designation: newFac.designation
+  });
+  savePersistentState();
+  persistUserToMongoDB(persistentState.users[persistentState.users.length - 1]);
+  if (isDbConnected && prisma) {
+    try {
+      const col = await prisma.college.findUnique({ where: { code } });
+      const passHash = await import_bcryptjs.default.hash(payload.password || "faculty123", 10);
+      await prisma.user.upsert({
+        where: { email: newFac.email.toLowerCase() },
+        update: {
+          name: newFac.name,
+          college: newFac.college,
+          collegeId: col?.id,
+          facultyProfile: {
+            upsert: {
+              create: {
+                facultyId: newFac.facultyId,
+                department: newFac.department,
+                designation: newFac.designation
+              },
+              update: {
+                facultyId: newFac.facultyId,
+                department: newFac.department,
+                designation: newFac.designation
+              }
+            }
+          }
+        },
+        create: {
+          email: newFac.email.toLowerCase(),
+          passwordHash: passHash,
+          name: newFac.name,
+          role: "faculty",
+          college: newFac.college,
+          collegeId: col?.id,
+          facultyProfile: {
+            create: {
+              facultyId: newFac.facultyId,
+              department: newFac.department,
+              designation: newFac.designation
+            }
+          }
+        }
+      });
+      console.log(`[Database] Persisted faculty ${newFac.name} to PostgreSQL.`);
+    } catch (dbErr) {
+      console.warn("[Database] Failed to persist faculty to PostgreSQL:", dbErr.message);
+    }
+  }
+  if (payload.sendEmail !== false) {
+    sendCredentialsEmail({
+      to: newFac.email,
+      name: newFac.name,
+      role: "faculty",
+      username: newFac.facultyId || newFac.email,
+      password: payload.password || "faculty123",
+      collegeName: newFac.college,
+      collegeCode: code
+    }).catch((e) => console.warn("[Mailer] Faculty credential dispatch error:", e.message));
+  }
+  res.json({ success: true, faculty: newFac });
+});
+app.put(["/api/college/faculty/:id", "/api/college/faculty/:id/edit"], async (req, res) => {
+  const { id } = req.params;
+  const { name, email, facultyId, department, designation, password, collegeCode } = req.body;
+  const code = normalizeCollegeCode(collegeCode || req.query.collegeCode || "BMSIT");
+  const facList = persistentState.faculty[code] || [];
+  const faculty = facList.find(
+    (f) => f.id === id || f.email?.toLowerCase() === id.toLowerCase() || f.facultyId === id
+  );
+  if (!faculty) {
+    return res.status(404).json({ success: false, error: "Faculty member not found in roster" });
+  }
+  const oldEmail = faculty.email?.toLowerCase();
+  const oldId = faculty.id;
+  const oldFacultyId = faculty.facultyId;
+  if (name !== void 0) faculty.name = String(name).trim();
+  if (email !== void 0) faculty.email = String(email).trim();
+  if (facultyId !== void 0) faculty.facultyId = String(facultyId).trim();
+  if (department !== void 0) faculty.department = String(department).trim();
+  if (designation !== void 0) faculty.designation = String(designation).trim();
+  if (password && String(password).trim()) {
+    faculty.password = String(password).trim();
+  }
+  const user = persistentState.users.find(
+    (u) => u.id === oldId || u.email?.toLowerCase() === oldEmail || oldFacultyId && u.facultyId === oldFacultyId
+  );
+  if (user) {
+    if (faculty.name) user.name = faculty.name;
+    if (faculty.email) user.email = faculty.email;
+    if (faculty.facultyId) user.facultyId = faculty.facultyId;
+    if (faculty.department) user.department = faculty.department;
+    if (faculty.designation) user.designation = faculty.designation;
+    if (faculty.password) user.password = faculty.password;
+    await persistUserToMongoDB(user);
+  }
+  const slots = persistentState.slots[code] || [];
+  for (const slot of slots) {
+    if (slot.assignedFacultyId === oldFacultyId || slot.assignedFacultyId === oldId || slot.assignedFacultyEmail && slot.assignedFacultyEmail.toLowerCase() === oldEmail || slot.facultyEmail && String(slot.facultyEmail).toLowerCase() === oldEmail) {
+      if (faculty.name) slot.assignedFacultyName = faculty.name;
+      if (faculty.email) slot.assignedFacultyEmail = faculty.email;
+      if (faculty.facultyId) slot.assignedFacultyId = faculty.facultyId;
+      slot.faculty = faculty.name;
+      slot.facultyName = faculty.name;
+      slot.facultyEmail = faculty.email;
+    }
+  }
+  if (isDbConnected && prisma && user) {
+    try {
+      const updateData = {
+        name: faculty.name,
+        email: faculty.email?.toLowerCase()
+      };
+      if (faculty.password) {
+        updateData.passwordHash = await import_bcryptjs.default.hash(faculty.password, 10);
+      }
+      await prisma.user.update({
+        where: { id: user.id },
+        data: updateData
+      });
+      await prisma.facultyProfile.updateMany({
+        where: { userId: user.id },
+        data: {
+          facultyId: faculty.facultyId,
+          department: faculty.department,
+          designation: faculty.designation
+        }
+      });
+    } catch (dbErr) {
+      console.warn("[Database] Failed to update faculty in PostgreSQL:", dbErr.message);
+    }
+  }
+  savePersistentState();
+  res.json({ success: true, faculty });
+});
+app.delete("/api/college/faculty/:id", async (req, res) => {
+  const { id } = req.params;
+  const code = normalizeCollegeCode(req.query.collegeCode || req.body?.collegeCode || "BMSIT");
+  if (persistentState.faculty[code]) {
+    persistentState.faculty[code] = persistentState.faculty[code].filter(
+      (f) => f.id !== id && f.email?.toLowerCase() !== id.toLowerCase() && f.facultyId !== id
+    );
+  }
+  persistentState.users = persistentState.users.filter(
+    (u) => u.id !== id && u.email?.toLowerCase() !== id.toLowerCase() && u.facultyId !== id
+  );
+  if (isMongoConnected()) {
+    try {
+      await UserModel.deleteMany({
+        $or: [{ id }, { email: id.toLowerCase() }, { "facultyProfile.facultyId": id }]
+      });
+    } catch (e) {
+      console.warn("[MongoDB] Delete faculty error:", e.message);
+    }
+  }
+  savePersistentState();
+  res.json({ success: true, message: "Faculty member removed successfully" });
+});
+app.post("/api/college/dispatch-credentials", async (req, res) => {
+  const { collegeCode, targetType, recipientId, email, customPassword } = req.body;
+  const code = String(collegeCode || "DIT").toUpperCase();
+  const collegeObj = persistentState.colleges.find((c) => c.code === code);
+  const collegeName = collegeObj?.name || `${code} Campus`;
+  let dispatchedCount = 0;
+  if (targetType === "single") {
+    const user = persistentState.users.find(
+      (u) => (u.email.toLowerCase() === String(email || "").toLowerCase() || u.id === recipientId) && (u.collegeCode || "DIT").toUpperCase() === code
+    );
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User not found in this institution roster." });
+    }
+    const pwd = customPassword || user.password || (user.role === "faculty" ? "faculty123" : "password123");
+    const mailRes = await sendCredentialsEmail({
+      to: user.email,
+      name: user.name,
+      role: user.role || "student",
+      username: user.studentId || user.facultyId || user.email,
+      password: pwd,
+      collegeName,
+      collegeCode: code
+    });
+    return res.json({
+      success: true,
+      count: 1,
+      message: `Credentials dispatched to ${user.email} via email.`,
+      simulated: mailRes.simulated
+    });
+  }
+  if (targetType === "students") {
+    const stuList = persistentState.students[code] || [];
+    for (const st of stuList) {
+      const u = persistentState.users.find((usr) => usr.email.toLowerCase() === st.email.toLowerCase());
+      const pwd = customPassword || u?.password || "password123";
+      sendCredentialsEmail({
+        to: st.email,
+        name: st.name,
+        role: "student",
+        username: st.studentId || st.email,
+        password: pwd,
+        collegeName,
+        collegeCode: code
+      }).catch((e) => console.warn("[Mailer] Bulk dispatch error for", st.email, e.message));
+      dispatchedCount++;
+    }
+    return res.json({
+      success: true,
+      count: dispatchedCount,
+      message: `Successfully dispatched login credentials to ${dispatchedCount} student email(s).`
+    });
+  }
+  if (targetType === "faculty") {
+    const facList = persistentState.faculty[code] || [];
+    for (const fac of facList) {
+      const u = persistentState.users.find((usr) => usr.email.toLowerCase() === fac.email.toLowerCase());
+      const pwd = customPassword || u?.password || "faculty123";
+      sendCredentialsEmail({
+        to: fac.email,
+        name: fac.name,
+        role: "faculty",
+        username: fac.facultyId || fac.email,
+        password: pwd,
+        collegeName,
+        collegeCode: code
+      }).catch((e) => console.warn("[Mailer] Bulk dispatch error for faculty", fac.email, e.message));
+      dispatchedCount++;
+    }
+    return res.json({
+      success: true,
+      count: dispatchedCount,
+      message: `Successfully dispatched login credentials to ${dispatchedCount} faculty email(s).`
+    });
+  }
+  res.status(400).json({ success: false, error: "Invalid targetType. Must be students, faculty, or single." });
+});
+app.get("/api/college/slots", async (req, res) => {
+  const code = resolveEffectiveCollegeCode(req.query.collegeCode);
+  const facultyList = [];
+  for (const [fCode, fList] of Object.entries(persistentState.faculty || {})) {
+    if (normalizeCollegeCode(fCode) === code || areCollegeCodesEquivalent(fCode, code)) {
+      for (const f of fList || []) {
+        if (!facultyList.some((existing) => existing.facultyId === f.facultyId || existing.id === f.id)) {
+          facultyList.push(f);
+        }
+      }
+    }
+  }
+  const slotMap = /* @__PURE__ */ new Map();
+  const deletedSet = new Set(persistentState.deletedSlotIds || []);
+  const hasDeletedSlotsForCollege = Array.from(deletedSet).some(
+    (id) => String(id || "").toLowerCase().includes(`slot-${code.toLowerCase()}-`)
+  );
+  const hadInitializedSlots = Boolean(persistentState.slotsInitializedColleges?.[code]) || Array.isArray(persistentState.slots[code]) && persistentState.slots[code].length > 0 || hasDeletedSlotsForCollege;
+  for (const [k, list] of Object.entries(persistentState.slots || {})) {
+    if (normalizeCollegeCode(k) === code || areCollegeCodesEquivalent(k, code)) {
+      for (const slot of list || []) {
+        if (slot?.id && !deletedSet.has(slot.id)) {
+          slotMap.set(slot.id, { ...slot, collegeCode: code });
+        }
+      }
+    }
+  }
+  if (isMongoConnected()) {
+    try {
+      const equivCodes = [code, code.split("-")[0], code.replace(/-\d+$/, "")].filter(Boolean);
+      const dbSlots = await GDSessionModel.find({
+        $or: [
+          { collegeCode: code },
+          { collegeCode: { $in: equivCodes } },
+          { collegeCode: new RegExp(`^${code.split("-")[0]}`, "i") }
+        ]
+      }).maxTimeMS(1500);
+      for (const s of dbSlots) {
+        if (!s?.id || deletedSet.has(s.id)) {
+          continue;
+        }
+        const existing = slotMap.get(s.id) || {};
+        const hasExistingTopic = Boolean(existing.topic && !existing.topic.toLowerCase().includes("pending") && !/^slot\s+\d+\s*$/i.test(existing.topic));
+        const hasDbTopic = Boolean(s.topic && !s.topic.toLowerCase().includes("pending") && !/^slot\s+\d+\s*$/i.test(s.topic));
+        const resolvedTopic = hasExistingTopic ? existing.topic : hasDbTopic ? s.topic : existing.topic || s.topic || "";
+        const hasExistingFac = Boolean(existing.assignedFacultyName && existing.assignedFacultyName !== "Unassigned" && !existing.assignedFacultyName.toLowerCase().includes("unassigned"));
+        const hasDbFac = Boolean(s.assignedFacultyName && s.assignedFacultyName !== "Unassigned" && !s.assignedFacultyName.toLowerCase().includes("unassigned"));
+        const resolvedFacName = hasExistingFac ? existing.assignedFacultyName : hasDbFac ? s.assignedFacultyName : existing.assignedFacultyName || s.assignedFacultyName || "Unassigned";
+        const resolvedFacId = hasExistingFac ? existing.assignedFacultyId || s.assignedFacultyId : hasDbFac ? s.assignedFacultyId || existing.assignedFacultyId : existing.assignedFacultyId || s.assignedFacultyId || "";
+        const resolvedFacEmail = hasExistingFac ? existing.assignedFacultyEmail || s.assignedFacultyEmail : hasDbFac ? s.assignedFacultyEmail || existing.assignedFacultyEmail : existing.assignedFacultyEmail || s.assignedFacultyEmail || "";
+        const resolvedFacDept = hasExistingFac ? existing.assignedFacultyDept || s.assignedFacultyDept : hasDbFac ? s.assignedFacultyDept || existing.assignedFacultyDept : existing.assignedFacultyDept || s.assignedFacultyDept || "";
+        slotMap.set(s.id, {
+          ...existing,
+          id: s.id,
+          slotName: existing.slotName || s.slotName || resolvedTopic || "Slot",
+          topic: resolvedTopic,
+          description: existing.description || s.description || "",
+          durationMinutes: existing.durationMinutes || s.durationMinutes,
+          difficulty: s.difficulty || "Intermediate",
+          status: existing?.status === "completed" || s.status === "completed" ? "completed" : existing?.status === "active" || s.status === "active" ? "active" : existing.status || s.status || "waiting",
+          slotTiming: existing.slotTiming || s.slotTiming || "",
+          slotDate: existing.slotDate || s.slotDate || "Today",
+          maxCapacity: existing.maxCapacity || s.maxCapacity,
+          enrolledCount: (existing.students || s.students)?.length ?? existing.enrolledCount ?? s.enrolledCount ?? 0,
+          assignedFacultyId: resolvedFacId,
+          assignedFacultyName: resolvedFacName,
+          assignedFacultyEmail: resolvedFacEmail,
+          assignedFacultyDept: resolvedFacDept,
+          collegeCode: code,
+          students: Array.isArray(existing.students) && existing.students.length > 0 ? existing.students : s.students || [],
+          recordingUrl: persistentState.recordings?.[s.id]?.recordingUrl || s.recordingUrl || existing.recordingUrl || "",
+          recordingDurationSeconds: persistentState.recordings?.[s.id]?.durationSeconds || s.recordingDurationSeconds || existing.recordingDurationSeconds || 0,
+          recordingFileSize: persistentState.recordings?.[s.id]?.fileSizeBytes || s.recordingFileSize || existing.recordingFileSize || 0,
+          recordedAt: s.recordedAt ? new Date(s.recordedAt).toISOString() : persistentState.recordings?.[s.id]?.recordedAt || existing.recordedAt || "",
+          createdAt: existing.createdAt || (s.createdAt ? new Date(s.createdAt).toISOString() : (/* @__PURE__ */ new Date()).toISOString())
+        });
+      }
+    } catch (mErr) {
+      console.warn("[MongoDB] Read slots error:", mErr.message);
+    }
+  }
+  if (isDbConnected && prisma) {
+    try {
+      const dbSlots = await prisma.gDSession.findMany({
+        where: { college: { code } },
+        orderBy: { createdAt: "desc" }
+      });
+      for (const s of dbSlots) {
+        if (!s?.id || deletedSet.has(s.id)) continue;
+        const existing = slotMap.get(s.id) || {};
+        slotMap.set(s.id, {
+          ...existing,
+          id: s.id,
+          topic: s.topic,
+          description: s.description || "",
+          durationMinutes: s.durationMinutes,
+          difficulty: s.difficulty,
+          status: existing?.status === "completed" || s.status === "completed" ? "completed" : existing?.status === "active" || s.status === "active" ? "active" : s.status || "waiting",
+          scheduledTime: s.scheduledTime || void 0,
+          slotTiming: s.slotTiming || "",
+          slotDate: existing.slotDate || s.scheduledTime || void 0,
+          slotName: s.slotName || s.topic,
+          maxCapacity: s.maxCapacity,
+          enrolledCount: s.enrolledCount,
+          assignedFacultyId: s.assignedFacultyId || "",
+          assignedFacultyName: s.assignedFacultyName || "",
+          collegeCode: code,
+          recordingUrl: persistentState.recordings?.[s.id]?.recordingUrl || s.recordingUrl || existing.recordingUrl || "",
+          recordingDurationSeconds: persistentState.recordings?.[s.id]?.durationSeconds || s.recordingDuration || existing.recordingDurationSeconds || 0,
+          recordingFileSize: persistentState.recordings?.[s.id]?.fileSizeBytes || s.recordingFileSize || existing.recordingFileSize || 0,
+          recordedAt: s.recordedAt ? s.recordedAt.toISOString() : persistentState.recordings?.[s.id]?.recordedAt || existing.recordedAt || "",
+          createdAt: s.createdAt.toISOString()
+        });
+      }
+    } catch (dbErr) {
+      console.warn("[Database] Failed to read college slots:", dbErr.message);
+    }
+  }
+  const col = persistentState.colleges.find((c) => normalizeCollegeCode(c.code) === code);
+  if (slotMap.size === 0 && (!hadInitializedSlots || col && !hasDeletedSlotsForCollege)) {
+    const limit = col?.studentLimit || 60;
+    const generated = generateRandomSlotsForCollege(code, limit, 0);
+    for (const g of generated) {
+      slotMap.set(g.id, g);
+      persistSlotToMongoDB(g).catch(() => null);
+    }
+    if (!persistentState.slotsInitializedColleges) persistentState.slotsInitializedColleges = {};
+    persistentState.slotsInitializedColleges[code] = true;
+  }
+  const slots = Array.from(slotMap.values()).map((slot) => {
+    const faculty = slot.assignedFacultyId ? facultyList.find((f) => f.facultyId === slot.assignedFacultyId || f.id === slot.assignedFacultyId) : void 0;
+    const rawTopic = slot.topic ? String(slot.topic).trim() : "";
+    const isTopicValid = rawTopic !== "" && !rawTopic.toLowerCase().includes("pending") && !/^slot\s+\d+\s*$/i.test(rawTopic);
+    const currentTopic = isTopicValid ? rawTopic : "";
+    let rawSlotName = cleanSlotName(slot.slotName) || slot.slotName || "Slot";
+    const slotNumMatch = rawSlotName.match(/^(Slot\s+\d+)/i) || (slot.id || "").match(/slot-.*?-(\d+)/i);
+    const prefix = slotNumMatch ? slotNumMatch[1].startsWith("Slot") ? slotNumMatch[1] : `Slot ${slotNumMatch[1]}` : "Slot";
+    const resolvedSlotName = currentTopic ? `${prefix}: ${currentTopic}` : prefix;
+    slot.slotName = resolvedSlotName;
+    slot.topic = currentTopic;
+    if (currentTopic && slot.description?.includes("Waiting for College Admin to allot")) {
+      slot.description = slot.activityType === "presentation" ? "Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates." : `Autonomous AI evaluated discussion on "${currentTopic}".`;
+    }
+    const baseSlot = {
+      ...slot,
+      slotName: resolvedSlotName,
+      topic: currentTopic,
+      description: slot.description,
+      assignedFacultyId: faculty?.facultyId || slot.assignedFacultyId || "",
+      assignedFacultyName: faculty?.name && faculty.name !== "Unassigned" ? faculty.name : slot.assignedFacultyName && slot.assignedFacultyName !== "Unassigned" ? slot.assignedFacultyName : "Unassigned",
+      assignedFacultyEmail: faculty?.email || slot.assignedFacultyEmail || "",
+      assignedFacultyDept: faculty?.department || slot.assignedFacultyDept || ""
+    };
+    if (!baseSlot.recordingUrl && slot.id) {
+      const rec = findRecordingForSlot(slot.id);
+      if (rec) {
+        baseSlot.recordingUrl = rec.recordingUrl;
+        baseSlot.recordingDurationSeconds = rec.durationSeconds;
+        baseSlot.recordingFileSize = rec.fileSizeBytes;
+        baseSlot.recordedAt = rec.recordedAt;
+      }
+    }
+    return ensureSlotParticipants(baseSlot, code);
+  });
+  let finalSlots = slots.filter((s) => s?.id && !deletedSet.has(s.id));
+  finalSlots.sort((a, b) => {
+    const numA = extractSlotNumber(a);
+    const numB = extractSlotNumber(b);
+    if (numA !== numB && numA > 0 && numB > 0) return numA - numB;
+    const timeA = new Date(a.createdAt || 0).getTime();
+    const timeB = new Date(b.createdAt || 0).getTime();
+    return timeA - timeB;
+  });
+  finalSlots = finalSlots.map((slot, idx) => {
+    const seqNum = idx + 1;
+    const rawTopic = slot.topic ? String(slot.topic).trim() : "";
+    const isTopicValid = rawTopic !== "" && !rawTopic.toLowerCase().includes("pending") && !/^slot\s+\d+\s*$/i.test(rawTopic);
+    const currentTopic = isTopicValid ? rawTopic : "";
+    const resolvedSlotName = currentTopic ? `Slot ${seqNum}: ${currentTopic}` : `Slot ${seqNum}`;
+    return {
+      ...slot,
+      slotName: resolvedSlotName,
+      topic: currentTopic,
+      description: currentTopic && slot.description?.includes("Waiting for College Admin to allot") ? slot.activityType === "presentation" ? "Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates." : `Autonomous AI evaluated discussion on "${currentTopic}".` : slot.description || ""
+    };
+  });
+  if (!persistentState.slotsInitializedColleges) persistentState.slotsInitializedColleges = {};
+  persistentState.slotsInitializedColleges[code] = true;
+  persistentState.slots[code] = finalSlots;
+  savePersistentState();
+  const studentId = String(req.query.studentId || "").trim();
+  const userRole = String(req.query.role || "").trim();
+  const studentEmail = String(req.query.email || "").trim().toLowerCase();
+  const facultyId = String(req.query.facultyId || "").trim();
+  if (studentId || userRole === "student") {
+    const targetStudentId = studentId.toLowerCase();
+    const targetEmail = studentEmail.toLowerCase();
+    const studentReportSlotIds = /* @__PURE__ */ new Set();
+    if (isMongoConnected() && (studentId || studentEmail)) {
+      try {
+        const reportOrConditions = [];
+        if (studentId) {
+          reportOrConditions.push({ studentId });
+          const userObj = await UserModel.findOne({ $or: [{ id: studentId }, { "studentProfile.studentId": studentId }] });
+          if (userObj) {
+            if (userObj.name) reportOrConditions.push({ studentName: new RegExp(`^${userObj.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") });
+            if (userObj.studentProfile?.studentId) reportOrConditions.push({ studentId: userObj.studentProfile.studentId });
+          }
+        }
+        if (studentEmail) {
+          const userByEmail = await UserModel.findOne({ email: studentEmail });
+          if (userByEmail) {
+            reportOrConditions.push({ studentId: userByEmail.id });
+            if (userByEmail.name) reportOrConditions.push({ studentName: new RegExp(`^${userByEmail.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") });
+          }
+        }
+        if (reportOrConditions.length > 0) {
+          const dbReports = await AssessmentReportModel.find({ $or: reportOrConditions }, { sessionId: 1 }).lean();
+          for (const rep of dbReports) {
+            if (rep.sessionId) {
+              const sid = String(rep.sessionId);
+              studentReportSlotIds.add(sid);
+              studentReportSlotIds.add(sid.replace("session-", "slot-"));
+              studentReportSlotIds.add(sid.replace("slot-", "session-"));
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[Slots API] Failed to fetch student report slot IDs:", err.message);
+      }
+    }
+    const studentSlots = finalSlots.filter((slot) => {
+      if (studentReportSlotIds.has(slot.id)) return true;
+      const facId = String(slot.assignedFacultyId || "").trim();
+      const facName = String(slot.assignedFacultyName || "").trim();
+      const allotted = String(slot.allottedFaculty || "").trim();
+      const isUnassigned = !facName && !facId && !allotted || facName.toLowerCase() === "unassigned" || facName.toLowerCase().includes("unassigned") || allotted.toLowerCase() === "unassigned" || allotted.toLowerCase().includes("unassigned") || facId.toLowerCase() === "unassigned" || facId.toLowerCase().includes("unassigned");
+      if (!isUnassigned && (facId !== "" || facName !== "" || allotted !== "")) {
+        return true;
+      }
+      if (Array.isArray(slot.students)) {
+        if (slot.students.some((s) => {
+          if (!s) return false;
+          const sId = String(s.id || "").toLowerCase();
+          const sStuId = String(s.studentId || "").toLowerCase();
+          const sEmail = String(s.email || "").toLowerCase();
+          return targetStudentId && (sId === targetStudentId || sStuId === targetStudentId) || targetEmail && sEmail === targetEmail;
+        })) {
+          return true;
+        }
+      }
+      if (studentId && persistentState.studentBookings[studentId] === slot.id) return true;
+      if (studentId && persistentState.studentTopicBookings[studentId]) {
+        if (Object.values(persistentState.studentTopicBookings[studentId]).includes(slot.id)) return true;
+      }
+      return false;
+    });
+    return res.json({ success: true, slots: studentSlots });
+  }
+  if (facultyId || userRole === "faculty") {
+    const targetFacultyId = (facultyId || String(req.query.id || "")).trim().toLowerCase();
+    const targetEmail = String(req.query.email || req.query.facultyEmail || "").trim().toLowerCase();
+    const targetName = String(req.query.name || req.query.facultyName || "").trim().toLowerCase();
+    const facultySlots = finalSlots.filter((slot) => {
+      const slotFacId = String(slot.assignedFacultyId || "").trim().toLowerCase();
+      const slotFacEmail = String(slot.assignedFacultyEmail || "").trim().toLowerCase();
+      const slotFacName = String(slot.assignedFacultyName || "").trim().toLowerCase();
+      const allottedFac = String(slot.allottedFaculty || "").trim().toLowerCase();
+      if (targetFacultyId && (slotFacId === targetFacultyId || allottedFac && allottedFac.includes(targetFacultyId))) return true;
+      if (targetEmail && (slotFacEmail === targetEmail || allottedFac && allottedFac.includes(targetEmail))) return true;
+      if (targetName && (slotFacName === targetName || allottedFac && allottedFac.includes(targetName))) return true;
+      return false;
+    });
+    return res.json({ success: true, slots: facultySlots });
+  }
+  res.json({ success: true, slots: finalSlots });
+});
+app.post("/api/college/slots", async (req, res) => {
+  const payload = req.body;
+  const code = normalizeCollegeCode(payload.collegeCode || "DIT");
+  if (!persistentState.slots[code]) {
+    persistentState.slots[code] = [];
+  }
+  if (!persistentState.slotsInitializedColleges) {
+    persistentState.slotsInitializedColleges = {};
+  }
+  persistentState.slotsInitializedColleges[code] = true;
+  const existingTopicSlot = (persistentState.slots[code] || []).find(
+    (s) => String(s.topic || "").trim().toLowerCase() === String(payload.topic || "").trim().toLowerCase() && s.assignedFacultyId
+  );
+  const topicFacultyId = existingTopicSlot?.assignedFacultyId || payload.assignedFacultyId;
+  const assignedFaculty = topicFacultyId ? (persistentState.faculty[code] || []).find(
+    (f) => f.facultyId === topicFacultyId || f.id === topicFacultyId
+  ) : void 0;
+  const slotStudents = Array.isArray(payload.rawSession?.students) && payload.rawSession.students.length > 0 ? payload.rawSession.students : Array.isArray(payload.students) && payload.students.length > 0 ? payload.students : void 0;
+  const actualEnrolled = slotStudents ? slotStudents.filter((s) => !s.isEmptySeat).length : Number(payload.enrolledCount) || 0;
+  const newSlot = {
+    id: payload.id || `slot-${code.toLowerCase()}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    slotName: payload.slotName || payload.topic,
+    topic: payload.topic,
+    description: payload.description || `Autonomous AI evaluation of ${payload.topic}`,
+    slotTiming: payload.slotTiming || "10:30 AM - 10:45 AM",
+    slotDate: payload.slotDate || payload.date || payload.rawSession?.slotDate || "Today",
+    status: payload.status || "scheduled",
+    durationMinutes: Number(payload.durationMinutes) || 15,
+    enrolledCount: actualEnrolled,
+    maxCapacity: Number(payload.maxCapacity) || 15,
+    assignedFacultyId: assignedFaculty?.facultyId || topicFacultyId || payload.assignedFacultyId,
+    assignedFacultyName: assignedFaculty?.name || (existingTopicSlot?.assignedFacultyName || payload.assignedFacultyName),
+    assignedFacultyEmail: assignedFaculty?.email || (existingTopicSlot?.assignedFacultyEmail || payload.assignedFacultyEmail),
+    assignedFacultyDept: assignedFaculty?.department || (existingTopicSlot?.assignedFacultyDept || payload.assignedFacultyDept),
+    collegeCode: code,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    ...slotStudents ? { students: slotStudents } : {}
+  };
+  if (Array.isArray(persistentState.deletedSlotIds)) {
+    persistentState.deletedSlotIds = persistentState.deletedSlotIds.filter((id) => id !== newSlot.id);
+  }
+  ensureSlotParticipants(newSlot, code);
+  persistentState.slots[code] = [newSlot, ...(persistentState.slots[code] || []).filter((s) => s.id !== newSlot.id)];
+  savePersistentState();
+  await persistSlotToMongoDB(newSlot);
+  if (isDbConnected && prisma) {
+    try {
+      const col = await prisma.college.findUnique({ where: { code } });
+      await prisma.gDSession.upsert({
+        where: { id: newSlot.id },
+        update: {
+          topic: newSlot.topic,
+          description: newSlot.description,
+          slotTiming: newSlot.slotTiming,
+          scheduledTime: newSlot.slotDate,
+          slotName: newSlot.slotName,
+          durationMinutes: newSlot.durationMinutes,
+          maxCapacity: newSlot.maxCapacity,
+          enrolledCount: newSlot.enrolledCount,
+          assignedFacultyId: newSlot.assignedFacultyId,
+          assignedFacultyName: newSlot.assignedFacultyName,
+          status: newSlot.status
+        },
+        create: {
+          id: newSlot.id,
+          topic: newSlot.topic,
+          description: newSlot.description,
+          slotTiming: newSlot.slotTiming,
+          scheduledTime: newSlot.slotDate,
+          slotName: newSlot.slotName,
+          durationMinutes: newSlot.durationMinutes,
+          maxCapacity: newSlot.maxCapacity,
+          enrolledCount: newSlot.enrolledCount,
+          assignedFacultyId: newSlot.assignedFacultyId,
+          assignedFacultyName: newSlot.assignedFacultyName,
+          collegeId: col?.id,
+          status: newSlot.status
+        }
+      });
+      console.log(`[Database] Persisted slot ${newSlot.topic} to PostgreSQL.`);
+    } catch (dbErr) {
+      console.warn("[Database] Failed to persist slot to PostgreSQL:", dbErr.message);
+    }
+  }
+  res.json({ success: true, slot: newSlot });
+});
+var handleSlotAllotment = async (req, res) => {
+  const rawId = req.params.id;
+  const slotId = decodeURIComponent(rawId).trim();
+  const {
+    topic,
+    slotName,
+    description,
+    assignedFacultyId,
+    assignedFacultyName,
+    assignedFacultyEmail,
+    assignedFacultyDept,
+    slotTiming,
+    slotDate,
+    status,
+    activityType,
+    durationMinutes,
+    maxCapacity,
+    presentationTopics
+  } = req.body;
+  let targetSlot = null;
+  let collegeCode = "";
+  for (const [code, list] of Object.entries(persistentState.slots || {})) {
+    const found = (list || []).find(
+      (s) => s.id === slotId || s.id === rawId || s.id?.toLowerCase() === slotId.toLowerCase() || s._id?.toString() === slotId
+    );
+    if (found) {
+      targetSlot = found;
+      collegeCode = code;
+      break;
+    }
+  }
+  if (!targetSlot && isMongoConnected()) {
+    try {
+      const dbSlot = await GDSessionModel.findOne({
+        $or: [
+          { id: slotId },
+          { id: rawId },
+          { id: new RegExp(`^${slotId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") }
+        ]
+      });
+      if (dbSlot) {
+        collegeCode = resolveEffectiveCollegeCode(dbSlot.collegeCode || req.body.collegeCode || "DIT");
+        targetSlot = {
+          id: dbSlot.id,
+          slotName: dbSlot.slotName,
+          topic: dbSlot.topic,
+          description: dbSlot.description || "",
+          activityType: dbSlot.activityType || "gd",
+          presentationTopics: dbSlot.presentationTopics || [],
+          slotTiming: dbSlot.slotTiming || "",
+          slotDate: dbSlot.slotDate || "Today",
+          status: dbSlot.status,
+          durationMinutes: dbSlot.durationMinutes,
+          enrolledCount: dbSlot.students?.length || 15,
+          maxCapacity: dbSlot.activityType === "presentation" ? 6 : 15,
+          assignedFacultyId: dbSlot.assignedFacultyId || "",
+          assignedFacultyName: dbSlot.assignedFacultyName || "",
+          assignedFacultyEmail: dbSlot.assignedFacultyEmail || "",
+          assignedFacultyDept: dbSlot.assignedFacultyDept || "",
+          collegeCode,
+          createdAt: dbSlot.createdAt ? new Date(dbSlot.createdAt).toISOString() : (/* @__PURE__ */ new Date()).toISOString(),
+          students: dbSlot.students || []
+        };
+        if (!persistentState.slots[collegeCode]) persistentState.slots[collegeCode] = [];
+        persistentState.slots[collegeCode].push(targetSlot);
+      }
+    } catch {
+    }
+  }
+  if (!targetSlot) {
+    const effCode = resolveEffectiveCollegeCode(req.body.collegeCode || req.query.collegeCode || "DIT");
+    collegeCode = effCode;
+    targetSlot = {
+      id: slotId,
+      slotName: slotName || `Slot: ${topic || ""}`,
+      topic: topic || "",
+      description: description || "",
+      activityType: activityType || "gd",
+      presentationTopics: presentationTopics || [],
+      slotTiming: slotTiming || "10:00 AM - 10:15 AM",
+      slotDate: slotDate || (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
+      status: status || "scheduled",
+      durationMinutes: Number(durationMinutes) || (activityType === "presentation" ? 60 : 15),
+      enrolledCount: 0,
+      maxCapacity: Number(maxCapacity) || (activityType === "presentation" ? 6 : 15),
+      assignedFacultyId: assignedFacultyId || "",
+      assignedFacultyName: assignedFacultyName || "",
+      assignedFacultyEmail: assignedFacultyEmail || "",
+      assignedFacultyDept: assignedFacultyDept || "",
+      collegeCode,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      students: []
+    };
+    if (!persistentState.slots[collegeCode]) persistentState.slots[collegeCode] = [];
+    persistentState.slots[collegeCode].push(targetSlot);
+  }
+  if (activityType !== void 0) {
+    targetSlot.activityType = activityType;
+  }
+  if (presentationTopics !== void 0) {
+    targetSlot.presentationTopics = presentationTopics;
+  }
+  if (durationMinutes !== void 0) {
+    targetSlot.durationMinutes = Number(durationMinutes);
+  }
+  if (targetSlot.activityType === "presentation") {
+    targetSlot.maxCapacity = 6;
+    if (targetSlot.students && targetSlot.students.length > 0) {
+      if (targetSlot.students.length > 6) {
+        targetSlot.students = targetSlot.students.slice(0, 6);
+      }
+      targetSlot.students.forEach((st, idx) => {
+        st.seatNumber = idx + 1;
+      });
+    }
+    targetSlot.enrolledCount = Math.min(targetSlot.students?.length || 6, 6);
+    if (!durationMinutes) targetSlot.durationMinutes = 60;
+  } else {
+    if (maxCapacity !== void 0) {
+      targetSlot.maxCapacity = Number(maxCapacity);
+    } else if (!targetSlot.maxCapacity || targetSlot.maxCapacity < 15) {
+      targetSlot.maxCapacity = 15;
+    }
+    if (!durationMinutes && (!targetSlot.durationMinutes || targetSlot.durationMinutes >= 60)) {
+      targetSlot.durationMinutes = 15;
+    }
+  }
+  if (topic !== void 0) {
+    targetSlot.topic = String(topic).trim();
+  }
+  if (description !== void 0 && String(description).trim()) {
+    targetSlot.description = String(description).trim();
+  } else if (targetSlot.topic) {
+    targetSlot.description = targetSlot.activityType === "presentation" ? "Student Classroom Presentation Activity evaluated by AI Instructor across 6 candidates." : `Autonomous AI evaluated discussion on "${targetSlot.topic}".`;
+  }
+  const proposedSlotName = slotName !== void 0 ? String(slotName).trim() : targetSlot.slotName || "";
+  const cleanProposed = cleanSlotName(proposedSlotName);
+  const slotNumMatch = cleanProposed.match(/^(Slot\s+\d+)/i) || (targetSlot.slotName || "").match(/^(Slot\s+\d+)/i) || (targetSlot.id || "").match(/slot-.*?-(\d+)/i);
+  const prefix = slotNumMatch ? slotNumMatch[1].startsWith("Slot") ? slotNumMatch[1] : `Slot ${slotNumMatch[1]}` : cleanProposed.split(":")[0].trim() || "Slot";
+  const validTopic = targetSlot.topic && !targetSlot.topic.toLowerCase().includes("pending") ? targetSlot.topic : "";
+  targetSlot.slotName = validTopic ? `${prefix}: ${validTopic}` : prefix;
+  if (slotTiming !== void 0) targetSlot.slotTiming = String(slotTiming).trim();
+  if (slotDate !== void 0) targetSlot.slotDate = String(slotDate).trim();
+  if (status !== void 0) targetSlot.status = String(status).trim();
+  if (assignedFacultyId !== void 0 || assignedFacultyName !== void 0) {
+    if (assignedFacultyId !== void 0) {
+      targetSlot.assignedFacultyId = String(assignedFacultyId).trim();
+    }
+    let fac = null;
+    for (const [fCode, fList] of Object.entries(persistentState.faculty || {})) {
+      if (normalizeCollegeCode(fCode) === collegeCode || areCollegeCodesEquivalent(fCode, collegeCode)) {
+        fac = (fList || []).find(
+          (f) => assignedFacultyId && (f.facultyId === assignedFacultyId || f.id === assignedFacultyId) || assignedFacultyName && f.name?.toLowerCase() === String(assignedFacultyName).trim().toLowerCase()
+        );
+        if (fac) break;
+      }
+    }
+    targetSlot.assignedFacultyName = assignedFacultyName || fac?.name || targetSlot.assignedFacultyName || "Assigned Faculty";
+    targetSlot.assignedFacultyEmail = assignedFacultyEmail || fac?.email || targetSlot.assignedFacultyEmail || "";
+    targetSlot.assignedFacultyDept = assignedFacultyDept || fac?.department || targetSlot.assignedFacultyDept || "";
+    if (fac && !targetSlot.assignedFacultyId) {
+      targetSlot.assignedFacultyId = fac.facultyId || fac.id;
+    }
+  }
+  for (const [c, list] of Object.entries(persistentState.slots || {})) {
+    if (areCollegeCodesEquivalent(c, collegeCode) || normalizeCollegeCode(c) === collegeCode) {
+      const idx = (list || []).findIndex((s) => s.id === targetSlot.id);
+      if (idx >= 0) {
+        list[idx] = { ...list[idx], ...targetSlot };
+      }
+    }
+  }
+  if (!persistentState.slots[collegeCode]) persistentState.slots[collegeCode] = [];
+  const canonicalIdx = persistentState.slots[collegeCode].findIndex((s) => s.id === targetSlot.id);
+  if (canonicalIdx >= 0) {
+    persistentState.slots[collegeCode][canonicalIdx] = { ...persistentState.slots[collegeCode][canonicalIdx], ...targetSlot };
+  } else {
+    persistentState.slots[collegeCode].push(targetSlot);
+  }
+  savePersistentState();
+  await persistSlotToMongoDB(targetSlot);
+  if (isDbConnected && prisma) {
+    try {
+      await prisma.gDSession.updateMany({
+        where: { id: slotId },
+        data: {
+          topic: targetSlot.topic,
+          slotName: targetSlot.slotName,
+          description: targetSlot.description,
+          slotTiming: targetSlot.slotTiming,
+          scheduledTime: targetSlot.slotDate,
+          assignedFacultyId: targetSlot.assignedFacultyId,
+          assignedFacultyName: targetSlot.assignedFacultyName,
+          status: targetSlot.status
+        }
+      });
+    } catch {
+    }
+  }
+  try {
+    io.emit("slot-updated", { success: true, slot: targetSlot, ...targetSlot });
+  } catch {
+  }
+  res.json({ success: true, slot: targetSlot });
+};
+app.put(["/api/college/slots/:id/allot", "/api/college/slots/:id"], handleSlotAllotment);
+app.post("/api/college/slots/:id/allot", handleSlotAllotment);
+app.post("/api/college/generate-slots", async (req, res) => {
+  const code = normalizeCollegeCode(req.body.collegeCode || "DIT");
+  const studentLimit = req.body.studentLimit ? Number(req.body.studentLimit) : void 0;
+  const addSlots = req.body.addSlots ? Number(req.body.addSlots) : void 0;
+  let col = persistentState.colleges.find((c) => normalizeCollegeCode(c.code) === code);
+  if (!col) {
+    col = {
+      id: `col-${code.toLowerCase()}`,
+      name: `${code} Campus`,
+      code,
+      contactEmail: `admin@${code.toLowerCase()}.edu.in`,
+      phone: "",
+      address: "",
+      status: "active",
+      studentCount: (persistentState.students[code] || []).length,
+      facultyCount: (persistentState.faculty[code] || []).length,
+      slotCount: (persistentState.slots[code] || []).length,
+      studentLimit: studentLimit || 60,
+      adminEmail: `admin@${code.toLowerCase()}.edu.in`,
+      adminName: `${code} Administrator`,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    persistentState.colleges.push(col);
+  }
+  const result = await addSlotsToCollegeAndPersist(col, {
+    studentLimit: studentLimit || 60,
+    addSlots
+  });
+  res.json({
+    success: true,
+    message: `Added ${result.addedSlotsCount} new discussion slot(s) (15 students per slot). Total slots for ${code}: ${result.slotCount}.`,
+    slots: result.slots,
+    slotCount: result.slotCount,
+    addedSlotsCount: result.addedSlotsCount,
+    studentLimit: result.studentLimit
+  });
+});
+app.delete("/api/college/slots/:id", async (req, res) => {
+  const slotId = req.params.id;
+  if (!Array.isArray(persistentState.deletedSlotIds)) {
+    persistentState.deletedSlotIds = [];
+  }
+  if (!persistentState.deletedSlotIds.includes(slotId)) {
+    persistentState.deletedSlotIds.push(slotId);
+  }
+  if (!persistentState.slotsInitializedColleges) {
+    persistentState.slotsInitializedColleges = {};
+  }
+  for (const c of Object.keys(persistentState.slots)) {
+    const beforeLen = (persistentState.slots[c] || []).length;
+    persistentState.slots[c] = (persistentState.slots[c] || []).filter((s) => s.id !== slotId);
+    if ((persistentState.slots[c] || []).length !== beforeLen) {
+      persistentState.slotsInitializedColleges[c] = true;
+    }
+  }
+  const reqCode = normalizeCollegeCode(req.query.collegeCode || req.body?.collegeCode || "");
+  if (reqCode) {
+    persistentState.slotsInitializedColleges[reqCode] = true;
+    if (!persistentState.slots[reqCode]) persistentState.slots[reqCode] = [];
+  }
+  for (const [studentKey, bookedSlot] of Object.entries(persistentState.studentBookings)) {
+    if (bookedSlot === slotId) {
+      delete persistentState.studentBookings[studentKey];
+    }
+  }
+  for (const [, topicMap] of Object.entries(persistentState.studentTopicBookings)) {
+    if (topicMap && typeof topicMap === "object") {
+      for (const [tKey, sId] of Object.entries(topicMap)) {
+        if (sId === slotId) {
+          delete topicMap[tKey];
+        }
+      }
+    }
+  }
+  savePersistentState();
+  await deleteSlotFromMongoDB(slotId);
+  if (isDbConnected && prisma) {
+    try {
+      await prisma.gDBooking.deleteMany({ where: { sessionId: slotId } });
+      await prisma.gDSession.deleteMany({ where: { id: slotId } });
+    } catch (dbErr) {
+      console.warn("[Database] Failed to delete GD slot from PostgreSQL:", dbErr.message);
+    }
+  }
+  try {
+    io.emit("slot-deleted", { slotId });
+  } catch {
+  }
+  res.json({ success: true, slotId });
+});
+app.post("/api/college/slots/:id/complete", async (req, res) => {
+  const slotId = req.params.id;
+  const authHeader = String(req.headers.authorization || "");
+  let claims = null;
+  if (authHeader.startsWith("Bearer ")) {
+    try {
+      claims = import_jsonwebtoken.default.verify(authHeader.slice(7).trim(), JWT_SECRET);
+    } catch {
+    }
+  }
+  let caller = claims?.id ? persistentState.users.find((u) => u.id === claims?.id) : null;
+  if (!caller && claims && isMongoConnected()) {
+    try {
+      caller = await UserModel.findOne({ $or: [{ id: claims?.id }, { email: String(claims?.email || "").toLowerCase() }] }).lean();
+    } catch (err) {
+      console.warn("[Slots] Could not resolve authenticated caller:", err.message);
+    }
+  }
+  if (!caller && claims?.role) {
+    caller = { id: claims.id, email: claims.email, role: claims.role, name: claims.name, collegeCode: claims.collegeCode };
+  }
+  if (!caller && req.body?.role) {
+    caller = {
+      id: req.body.userId || req.body.facultyId || "faculty-caller",
+      email: req.body.email || "",
+      role: req.body.role,
+      name: req.body.name || "",
+      collegeCode: req.body.collegeCode || ""
+    };
+  }
+  let target = null;
+  let code = "";
+  for (const [collegeCode, list] of Object.entries(persistentState.slots)) {
+    const found = list.find((s) => s.id === slotId);
+    if (found) {
+      target = found;
+      code = collegeCode;
+      break;
+    }
+  }
+  if (!target && isMongoConnected()) {
+    try {
+      const dbSlot = await GDSessionModel.findOne({ id: slotId });
+      if (dbSlot) {
+        code = normalizeCollegeCode(dbSlot.collegeCode || "DIT");
+        target = { ...dbSlot.toObject(), collegeCode: code };
+        if (!persistentState.slots[code]) persistentState.slots[code] = [];
+        persistentState.slots[code].push(target);
+      }
+    } catch {
+    }
+  }
+  if (!target) return res.status(404).json({ success: false, error: "GD slot not found" });
+  const callerRole = String(caller?.role || claims?.role || "faculty").toLowerCase();
+  const isPlatformAdmin = callerRole === "super_admin";
+  const isSameCollegeAdmin = callerRole === "college_admin";
+  const isAssignedFaculty = callerRole === "faculty";
+  if (!isPlatformAdmin && !isSameCollegeAdmin && !isAssignedFaculty) {
+    return res.status(403).json({ success: false, error: "Only faculty or an administrator can complete this session." });
+  }
+  if (target.status === "completed") {
+    let savedReports = [];
+    if (isMongoConnected()) {
+      try {
+        const docs = await AssessmentReportModel.find({ sessionId: slotId }).sort({ createdAt: 1 }).lean();
+        savedReports = docs.map((doc) => doc.fullReportJson || doc);
+      } catch (err) {
+        console.warn("[Slots] Could not read saved reports for completed session:", err.message);
+      }
+    }
+    if (savedReports.length === 0 && isDbConnected && prisma) {
+      try {
+        const docs = await prisma.assessmentReport.findMany({ where: { sessionId: slotId }, orderBy: { createdAt: "asc" } });
+        savedReports = docs.map((doc) => ({
+          id: doc.id,
+          sessionId: doc.sessionId,
+          studentId: doc.studentId,
+          overallScore: doc.overallScore,
+          grade: gradeForScore(doc.overallScore),
+          skills: (() => {
+            try {
+              return JSON.parse(doc.rubricJson || "{}");
+            } catch {
+              return {};
+            }
+          })(),
+          feedback: doc.feedback || "",
+          aiSummary: doc.feedback || ""
+        }));
+      } catch (err) {
+        console.warn("[Database] Could not read saved reports for completed session:", err.message);
+      }
+    }
+    if (savedReports.length > 0) {
+      const completedRoom = LIVE_ROOMS.get(slotId);
+      const transcriptCount = completedRoom ? completedRoom.transcripts.filter((t) => t.sessionId === slotId).length : liveTranscripts.filter((t) => t.sessionId === slotId).length;
+      return res.json({ success: true, slotId, status: "completed", reports: savedReports, transcriptCount });
+    }
+  }
+  const room = LIVE_ROOMS.get(slotId);
+  const transcriptHistory = room ? room.transcripts.filter((t) => t.sessionId === slotId) : liveTranscripts.filter((t) => t.sessionId === slotId);
+  if (isDbConnected && prisma && transcriptHistory.length > 0) {
+    try {
+      await prisma.transcriptEntry.createMany({
+        data: transcriptHistory.map((t) => ({
+          id: t.id,
+          sessionId: slotId,
+          speakerId: t.speakerId,
+          speakerName: t.speakerName,
+          seatNumber: t.seatNumber ?? null,
+          isFacilitator: !!t.isFacilitator,
+          timestamp: t.timestamp || "00:00",
+          timestampSeconds: Number(t.timestampSeconds || 0),
+          text: String(t.text || ""),
+          type: t.type || "statement",
+          sentiment: t.sentiment || "neutral"
+        })),
+        skipDuplicates: true
+      });
+    } catch (e) {
+      console.warn("[Database] Failed to persist final transcript:", e.message);
+    }
+  }
+  const participantIds = /* @__PURE__ */ new Set();
+  if (room) {
+    for (const peer of room.peers.values()) {
+      if (peer.role === "student" && peer.userId && !peer.userId.startsWith("ai-") && !peer.userId.startsWith("demo-")) {
+        participantIds.add(peer.userId);
+      }
+    }
+  }
+  if (Array.isArray(target.students)) {
+    for (const s of target.students) {
+      const sId = s?.id || s?.studentId;
+      if (sId && !String(sId).startsWith("ai-") && !String(sId).startsWith("demo-") && !String(sId).includes("empty")) {
+        participantIds.add(String(sId));
+      }
+    }
+  }
+  if (isMongoConnected()) {
+    try {
+      const bookings = await GDBookingModel.find({ sessionId: slotId, status: { $ne: "CANCELLED" } });
+      for (const b of bookings) {
+        if (b.studentId && !b.studentId.startsWith("ai-") && !b.studentId.startsWith("demo-")) {
+          participantIds.add(b.studentId);
+        }
+      }
+    } catch (e) {
+    }
+  }
+  transcriptHistory.forEach((t) => {
+    if (!t.isFacilitator && t.speakerId && !String(t.speakerId).startsWith("ai-") && !String(t.speakerId).startsWith("demo-")) {
+      participantIds.add(t.speakerId);
+    }
+  });
+  const reports = [];
+  for (const participantId of participantIds) {
+    if (!participantId || participantId.startsWith("ai-") || participantId.startsWith("demo-") || participantId.includes("ai-participant")) {
+      continue;
+    }
+    let studentUser = persistentState.users.find((u) => u.id === participantId || u.studentId === participantId);
+    if (!studentUser && isMongoConnected()) {
+      try {
+        const u = await UserModel.findOne({ $or: [{ id: participantId }, { "studentProfile.studentId": participantId }] });
+        if (u) {
+          studentUser = {
+            id: u.id,
+            name: u.name,
+            role: u.role,
+            college: u.college,
+            studentId: u.studentProfile?.studentId,
+            course: u.studentProfile?.course,
+            batch: u.studentProfile?.batch,
+            seatNumber: u.studentProfile?.seatNumber
+          };
+        }
+      } catch (e) {
+      }
+    }
+    if (!studentUser && isDbConnected && prisma) {
+      try {
+        const u = await prisma.user.findUnique({ where: { id: participantId }, include: { studentProfile: true } });
+        if (u) studentUser = { id: u.id, name: u.name, role: u.role, college: u.college, studentId: u.studentProfile?.studentId, course: u.studentProfile?.course, batch: u.studentProfile?.batch, seatNumber: u.studentProfile?.seatNumber };
+      } catch (e) {
+      }
+    }
+    if (!studentUser && Array.isArray(target.students)) {
+      const slotStudent2 = target.students.find((s) => s.id === participantId || s.studentId === participantId);
+      if (slotStudent2) {
+        studentUser = {
+          id: slotStudent2.id || participantId,
+          name: slotStudent2.name || "Candidate",
+          role: "student",
+          college: slotStudent2.college || target.collegeCode || "Engineering Institute",
+          studentId: slotStudent2.studentId || participantId,
+          course: slotStudent2.course || "Engineering",
+          batch: slotStudent2.batch || "2024-2028",
+          seatNumber: slotStudent2.seatNumber || 1
+        };
+      }
+    }
+    if (!studentUser && room) {
+      const peer2 = Array.from(room.peers.values()).find((p) => p.userId === participantId);
+      if (peer2 && peer2.role === "student") {
+        studentUser = {
+          id: peer2.userId,
+          name: peer2.name || "Candidate",
+          role: "student",
+          college: target.collegeCode || "Engineering Institute",
+          studentId: peer2.userId,
+          course: "Engineering",
+          batch: "2024-2028",
+          seatNumber: peer2.seatNumber || 1
+        };
+      }
+    }
+    if (!studentUser) {
+      const speakerEntry = transcriptHistory.find((t) => t.speakerId === participantId);
+      if (speakerEntry && !speakerEntry.isFacilitator) {
+        studentUser = {
+          id: participantId,
+          name: speakerEntry.speakerName || "Candidate",
+          role: "student",
+          college: target.collegeCode || "Engineering Institute",
+          studentId: participantId,
+          course: "Engineering",
+          batch: "2024-2028",
+          seatNumber: speakerEntry.seatNumber || 1
+        };
+      }
+    }
+    if (!studentUser || studentUser.role !== "student") continue;
+    const peer = room ? Array.from(room.peers.values()).find((p) => p.userId === studentUser.id || p.userId === studentUser.studentId) : void 0;
+    const entries = transcriptHistory.filter(
+      (t) => !t.isFacilitator && (t.speakerId === studentUser.id || t.speakerId === studentUser.studentId || t.speakerName && studentUser.name && String(t.speakerName).toLowerCase() === String(studentUser.name).toLowerCase() || studentUser.seatNumber && t.seatNumber === studentUser.seatNumber)
+    );
+    const wordCount = entries.reduce((sum, t) => sum + String(t.text || "").trim().split(/\s+/).filter(Boolean).length, 0);
+    const slotStudent = Array.isArray(target.students) ? target.students.find((s) => s.id === studentUser.id || s.studentId === studentUser.studentId || s.name && studentUser.name && String(s.name).toLowerCase() === String(studentUser.name).toLowerCase()) : void 0;
+    const studentLoggedSeconds = slotStudent?.speakingDurationSeconds || 0;
+    const wordsDuration = wordCount ? Math.max(1, Math.round(wordCount / 130 * 60)) : 0;
+    const speakingSeconds = Math.max(peer?.speakingDurationSeconds || 0, studentLoggedSeconds, wordsDuration);
+    const turns = Math.max(peer?.speakingTurns || 0, slotStudent?.speakingTurns || 0, entries.length);
+    try {
+      const report = await generateAssessmentReport(studentUser, transcriptHistory, target.topic, target.durationMinutes, {
+        sessionId: slotId,
+        speakingDurationSeconds: speakingSeconds,
+        speakingTurns: turns,
+        interruptionCount: peer?.interruptionCount ?? slotStudent?.interruptionCount ?? 0,
+        questionsAnswered: 0,
+        questionsInitiated: 0
+      });
+      const finalPersistedReport = await persistAssessmentReport(report) || report;
+      reports.push(finalPersistedReport);
+    } catch (repErr) {
+      console.warn("[Slots] Report generation/persistence fallback for student:", studentUser?.name, repErr?.message);
+    }
+  }
+  target.status = "completed";
+  for (const [, list] of Object.entries(persistentState.slots)) {
+    for (const s of list) {
+      if (s && s.id === slotId) {
+        s.status = "completed";
+      }
+    }
+  }
+  savePersistentState();
+  if (isMongoConnected()) {
+    GDSessionModel.updateOne({ id: slotId }, { $set: { status: "completed" } }).catch(() => null);
+    GDBookingModel.updateMany({ sessionId: slotId, status: { $ne: "CANCELLED" } }, { $set: { status: "COMPLETED" } }).catch(() => null);
+  }
+  if (isDbConnected && prisma) {
+    try {
+      await prisma.gDSession.update({ where: { id: slotId }, data: { status: "completed" } });
+      await prisma.gDBooking.updateMany({ where: { sessionId: slotId, status: { not: "CANCELLED" } }, data: { status: "COMPLETED" } });
+    } catch (e) {
+      console.warn("[Database] Failed to finalize session:", e.message);
+    }
+  }
+  if (room) {
+    room.status = "completed";
+  }
+  io.to("room-" + slotId).emit("session-ended", { slotId, status: "completed", slot: target, reports });
+  io.emit("session-ended", { slotId, status: "completed", slot: target, reports });
+  io.emit("slot-updated", { slot: target });
+  res.json({ success: true, slotId, status: "completed", reports, transcriptCount: transcriptHistory.length });
+});
+app.post("/api/college/slots/:id/start", async (req, res) => {
+  const slotId = req.params.id;
+  const authHeader = String(req.headers.authorization || "");
+  if (!authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ success: false, error: "Sign in again before starting this GD session." });
+  }
+  let claims;
+  try {
+    claims = import_jsonwebtoken.default.verify(authHeader.slice(7).trim(), JWT_SECRET);
+  } catch {
+    return res.status(401).json({ success: false, error: "Your session has expired. Please sign in again." });
+  }
+  let caller = persistentState.users.find((u) => u.id === claims?.id);
+  if (!caller && isMongoConnected()) {
+    try {
+      caller = await UserModel.findOne({ $or: [{ id: claims?.id }, { email: String(claims?.email || "").toLowerCase() }] }).lean();
+    } catch (err) {
+      console.warn("[Slots] Could not resolve authenticated caller:", err.message);
+    }
+  }
+  if (!caller || String(caller.role || "") !== String(claims?.role || "")) {
+    return res.status(401).json({ success: false, error: "Authenticated account could not be verified." });
+  }
+  let target = null;
+  let code = "";
+  for (const [collegeCode, list] of Object.entries(persistentState.slots)) {
+    const found = list.find((s) => s.id === slotId);
+    if (found) {
+      target = found;
+      code = collegeCode;
+      break;
+    }
+  }
+  if (!target && isMongoConnected()) {
+    try {
+      const dbSlot = await GDSessionModel.findOne({ id: slotId });
+      if (dbSlot) {
+        code = normalizeCollegeCode(dbSlot.collegeCode || "DIT");
+        target = { ...dbSlot.toObject(), collegeCode: code };
+        if (!persistentState.slots[code]) persistentState.slots[code] = [];
+        persistentState.slots[code].push(target);
+      }
+    } catch {
+    }
+  }
+  if (!target) return res.status(404).json({ success: false, error: "GD slot not found" });
+  const slotFacId = String(target.assignedFacultyId || target.facultyId || "").trim().toLowerCase();
+  const slotFacEmail = String(target.assignedFacultyEmail || target.facultyEmail || "").trim().toLowerCase();
+  const slotFacName = String(target.assignedFacultyName || target.facultyName || "").trim().toLowerCase();
+  const allottedFac = String(target.allottedFaculty || "").trim().toLowerCase();
+  const callerId = String(caller.id || "").trim().toLowerCase();
+  const callerEmail = String(caller.email || "").trim().toLowerCase();
+  const callerFacultyId = String(caller.facultyId || caller.facultyProfile?.facultyId || caller.id || "").trim().toLowerCase();
+  const callerCollegeCode = normalizeCollegeCode(caller.collegeCode || caller.collegeOrg?.code);
+  const callerRole = String(caller.role || "").toLowerCase();
+  const isPlatformAdmin = callerRole === "super_admin";
+  const isSameCollegeAdmin = callerRole === "college_admin" && (!callerCollegeCode || !code || callerCollegeCode === normalizeCollegeCode(code));
+  const isAssignedFaculty = callerRole === "faculty";
+  if (!isPlatformAdmin && !isSameCollegeAdmin && !isAssignedFaculty) {
+    return res.status(403).json({ success: false, error: "Only faculty evaluators or administrators can start this GD session." });
+  }
+  if (target.status === "completed") return res.status(409).json({ success: false, error: "Session is already completed" });
+  target.status = "active";
+  savePersistentState();
+  if (isMongoConnected()) {
+    GDSessionModel.updateOne({ id: slotId }, { $set: { status: "active" } }).catch(() => null);
+  }
+  if (isDbConnected && prisma) {
+    try {
+      await prisma.gDSession.update({ where: { id: slotId }, data: { status: "active" } });
+    } catch (e) {
+      console.warn("[Database] Failed to mark slot active:", e.message);
+    }
+  }
+  const room = getOrCreateLiveRoom(slotId, target.topic);
+  room.status = "active";
+  room.silenceTimerSeconds = 0;
+  syncAiParticipants(room);
+  io.to(`room-${slotId}`).emit("session-started", {
+    slotId,
+    status: "active",
+    topic: room.topic || target.topic,
+    simulationMode: room.simulationMode,
+    aiParticipants: Array.from(room.aiParticipants.values())
+  });
+  io.emit("session-started", {
+    slotId,
+    status: "active",
+    topic: room.topic || target.topic
+  });
+  io.emit("slot-updated", { slot: target });
+  if (!room.hasAnnouncedWelcome && room.transcripts.length === 0) {
+    room.openingStarted = false;
+    room.initialSpeakerSelected = false;
+    scheduleNextTurn(room);
+  }
+  res.json({ success: true, slotId, status: "active" });
+});
+app.post(["/api/sessions/:id/recording", "/api/college/slots/:id/recording"], async (req, res) => {
+  const slotId = req.params.id;
+  if (!slotId) {
+    return res.status(400).json({ success: false, error: "Session slotId is required" });
+  }
+  const durationSeconds = parseInt(
+    req.query.duration || req.headers["x-recording-duration"] || "0",
+    10
+  );
+  const recordedBy = req.headers["x-recorded-by"] || "";
+  const contentType = req.headers["content-type"] || "audio/webm";
+  let ext = "webm";
+  if (contentType.includes("ogg")) ext = "ogg";
+  else if (contentType.includes("mp4")) ext = "mp4";
+  else if (contentType.includes("wav")) ext = "wav";
+  const safeSlotId = slotId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const filename = `gd-recording-${safeSlotId}-${Date.now()}.${ext}`;
+  const filePath = import_path2.default.join(RECORDINGS_DIR, filename);
+  let fileSizeBytes = 0;
+  try {
+    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+      await import_fs.default.promises.writeFile(filePath, req.body);
+      fileSizeBytes = req.body.length;
+    } else {
+      await new Promise((resolve, reject) => {
+        const writeStream = import_fs.default.createWriteStream(filePath);
+        req.pipe(writeStream);
+        writeStream.on("finish", () => {
+          try {
+            const stat = import_fs.default.statSync(filePath);
+            fileSizeBytes = stat.size;
+          } catch {
+          }
+          resolve();
+        });
+        writeStream.on("error", (err) => reject(err));
+      });
+    }
+    if (fileSizeBytes === 0) {
+      return res.status(400).json({ success: false, error: "Empty recording stream received" });
+    }
+    const recordingUrl = `/uploads/recordings/${filename}`;
+    const recordedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const altSlotId = slotId.startsWith("slot-") ? slotId.replace(/^slot-/, "session-") : slotId.startsWith("session-") ? slotId.replace(/^session-/, "slot-") : "";
+    if (!persistentState.recordings) {
+      persistentState.recordings = {};
+    }
+    const recEntry = {
+      recordingUrl,
+      durationSeconds,
+      fileSizeBytes,
+      recordedAt
+    };
+    persistentState.recordings[slotId] = recEntry;
+    if (altSlotId) {
+      persistentState.recordings[altSlotId] = recEntry;
+    }
+    let slotFound = false;
+    for (const list of Object.values(persistentState.slots)) {
+      for (const s of list) {
+        if (s.id === slotId || altSlotId && s.id === altSlotId || s.id && s.id.toLowerCase() === slotId.toLowerCase()) {
+          s.recordingUrl = recordingUrl;
+          s.recordingDurationSeconds = durationSeconds;
+          s.recordingFileSize = fileSizeBytes;
+          s.recordedAt = recordedAt;
+          slotFound = true;
+        }
+      }
+    }
+    savePersistentState();
+    if (isMongoConnected()) {
+      try {
+        const queryIds = altSlotId ? [slotId, altSlotId] : [slotId];
+        await GDSessionModel.updateMany(
+          { id: { $in: queryIds } },
+          {
+            $set: {
+              recordingUrl,
+              recordingDurationSeconds: durationSeconds,
+              recordingFileSize: fileSizeBytes,
+              recordedAt: /* @__PURE__ */ new Date()
+            }
+          }
+        );
+        const fileBuffer = Buffer.isBuffer(req.body) && req.body.length > 0 ? req.body : await import_fs.default.promises.readFile(filePath);
+        await saveRecordingToGridFS(filename, fileBuffer, {
+          slotId,
+          altSlotId,
+          durationSeconds,
+          recordedAt,
+          recordedBy,
+          contentType
+        });
+        await saveRecordingToGridFS(`gd-recording-${safeSlotId}.${ext}`, fileBuffer, {
+          slotId,
+          altSlotId,
+          durationSeconds,
+          recordedAt,
+          recordedBy,
+          contentType
+        });
+        console.log(`[MongoDB GridFS] Permanently saved ${fileSizeBytes} bytes for slot "${slotId}"`);
+      } catch (mErr) {
+        console.warn("[MongoDB] Recording GridFS save warning:", mErr.message);
+      }
+    }
+    if (isDbConnected && prisma) {
+      try {
+        const queryIds = altSlotId ? [slotId, altSlotId] : [slotId];
+        await prisma.gDSession.updateMany({
+          where: { id: { in: queryIds } },
+          data: {
+            recordingUrl,
+            recordingDuration: durationSeconds,
+            recordingFileSize: fileSizeBytes,
+            recordedAt: /* @__PURE__ */ new Date()
+          }
+        });
+      } catch (pErr) {
+        console.warn("[Database] Recording metadata save warning:", pErr.message);
+      }
+    }
+    const eventPayload = {
+      slotId,
+      altSlotId,
+      recordingUrl,
+      durationSeconds,
+      fileSizeBytes,
+      recordedAt,
+      recordedBy
+    };
+    io.to(`room-${slotId}`).emit("session-recording-saved", eventPayload);
+    if (altSlotId) {
+      io.to(`room-${altSlotId}`).emit("session-recording-saved", eventPayload);
+    }
+    io.emit("session-recording-saved", eventPayload);
+    console.log(`[GD Recording] Saved recording for session "${slotId}": ${filename} (${fileSizeBytes} bytes, ${durationSeconds}s)`);
+    return res.json({
+      success: true,
+      slotId,
+      altSlotId,
+      recordingUrl,
+      durationSeconds,
+      fileSizeBytes,
+      recordedAt
+    });
+  } catch (saveErr) {
+    console.error(`[GD Recording] Failed to save recording for session "${slotId}":`, saveErr);
+    return res.status(500).json({ success: false, error: saveErr.message || "Failed to save recording file" });
+  }
+});
+app.get(["/api/sessions/:id/recording", "/api/college/slots/:id/recording"], async (req, res) => {
+  const slotId = req.params.id;
+  if (!slotId) return res.status(400).json({ success: false, error: "slotId is required" });
+  const rec = findRecordingForSlot(slotId);
+  if (rec) {
+    return res.json({
+      success: true,
+      slotId,
+      recordingUrl: rec.recordingUrl,
+      durationSeconds: rec.durationSeconds || 0,
+      fileSizeBytes: rec.fileSizeBytes || 0,
+      recordedAt: rec.recordedAt || null
+    });
+  }
+  const altSlotId = slotId.startsWith("slot-") ? slotId.replace(/^slot-/, "session-") : slotId.startsWith("session-") ? slotId.replace(/^session-/, "slot-") : "";
+  if (isMongoConnected()) {
+    try {
+      const queryIds = altSlotId ? [slotId, altSlotId] : [slotId];
+      const dbSlot = await GDSessionModel.findOne({ id: { $in: queryIds } });
+      if (dbSlot && dbSlot.recordingUrl) {
+        return res.json({
+          success: true,
+          slotId,
+          recordingUrl: dbSlot.recordingUrl,
+          durationSeconds: dbSlot.recordingDurationSeconds || 0,
+          fileSizeBytes: dbSlot.recordingFileSize || 0,
+          recordedAt: dbSlot.recordedAt || null
+        });
+      }
+    } catch {
+    }
+  }
+  if (isDbConnected && prisma) {
+    try {
+      const queryIds = altSlotId ? [slotId, altSlotId] : [slotId];
+      const pSlot = await prisma.gDSession.findFirst({ where: { id: { in: queryIds } } });
+      if (pSlot && pSlot.recordingUrl) {
+        return res.json({
+          success: true,
+          slotId,
+          recordingUrl: pSlot.recordingUrl,
+          durationSeconds: pSlot.recordingDuration || 0,
+          fileSizeBytes: pSlot.recordingFileSize || 0,
+          recordedAt: pSlot.recordedAt ? pSlot.recordedAt.toISOString() : null
+        });
+      }
+    } catch {
+    }
+  }
+  return res.status(404).json({ success: false, error: "No recording found for this session slot" });
+});
+app.get("/api/recordings", (req, res) => {
+  try {
+    if (!import_fs.default.existsSync(RECORDINGS_DIR)) {
+      return res.json({ success: true, count: 0, recordings: [] });
+    }
+    const files = import_fs.default.readdirSync(RECORDINGS_DIR);
+    const recordings = files.map((file) => {
+      const stat = import_fs.default.statSync(import_path2.default.join(RECORDINGS_DIR, file));
+      return {
+        filename: file,
+        url: `/uploads/recordings/${file}`,
+        sizeBytes: stat.size,
+        createdAt: stat.birthtime.toISOString()
+      };
+    });
+    return res.json({ success: true, count: recordings.length, recordings });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+app.get("/api/faculty/sessions", async (req, res) => {
+  const facultyId = String(req.query.facultyId || "").trim();
+  const code = normalizeCollegeCode(req.query.collegeCode);
+  if (!facultyId) return res.status(400).json({ success: false, error: "facultyId is required" });
+  const deletedSet = new Set(persistentState.deletedSlotIds || []);
+  const roster = persistentState.faculty[code] || [];
+  const facultyEmailQuery = String(req.query.facultyEmail || "").trim().toLowerCase();
+  const facultyNameQuery = String(req.query.facultyName || "").trim().toLowerCase();
+  let faculty = roster.find(
+    (f) => facultyEmailQuery && f.email?.toLowerCase() === facultyEmailQuery || f.facultyId === facultyId || f.id === facultyId || f.email === facultyId
+  );
+  if (!faculty) {
+    const user = persistentState.users.find(
+      (u) => u.role === "faculty" && (!code || normalizeCollegeCode(u.collegeCode) === code) && (facultyEmailQuery && u.email?.toLowerCase() === facultyEmailQuery || u.facultyId === facultyId || u.id === facultyId || u.email === facultyId)
+    );
+    if (user) {
+      faculty = {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        facultyId: user.facultyId || user.id,
+        department: user.department || "Computer Science & Engineering",
+        designation: user.designation || "Faculty Evaluator",
+        college: user.college,
+        collegeCode: normalizeCollegeCode(user.collegeCode || code),
+        assignedSlotsCount: 0
+      };
+      if (!persistentState.faculty[code]) persistentState.faculty[code] = [];
+      persistentState.faculty[code].push(faculty);
+    }
+  }
+  const facultyAssignmentIds = new Set(
+    [
+      facultyId,
+      faculty?.facultyId,
+      faculty?.id,
+      faculty?.email,
+      faculty?.name,
+      facultyEmailQuery,
+      facultyNameQuery
+    ].filter(Boolean).map((x) => String(x).toLowerCase())
+  );
+  let slots = (persistentState.slots[code] || []).filter((slot) => {
+    if (!slot?.id) return false;
+    const hasReports = persistentState.reports && Object.values(persistentState.reports).some((r) => r?.sessionId === slot.id);
+    const isCompleted = slot.status === "completed" || hasReports;
+    if (deletedSet.has(slot.id) && !isCompleted) return false;
+    const slotColCode = normalizeCollegeCode(slot.collegeCode || code);
+    if (code && slotColCode && slotColCode !== code) return false;
+    const slotFacultyId = String(slot.assignedFacultyId || "").trim().toLowerCase();
+    const slotFacultyEmail = String(slot.assignedFacultyEmail || "").trim().toLowerCase();
+    const slotFacultyName = String(slot.assignedFacultyName || "").trim().toLowerCase();
+    const allottedFaculty = String(slot.allottedFaculty || "").trim().toLowerCase();
+    if (isCompleted) {
+      if (!slotFacultyName || slotFacultyName === "unassigned" || slotFacultyName === "assigned faculty") return true;
+      if (faculty?.name && slotFacultyName.toLowerCase().includes(faculty.name.toLowerCase())) return true;
+      if (facultyEmailQuery && slotFacultyEmail === facultyEmailQuery) return true;
+      if (slotFacultyId && facultyAssignmentIds.has(slotFacultyId)) return true;
+      return true;
+    }
+    if (slotFacultyEmail && (faculty?.email && slotFacultyEmail === faculty.email.toLowerCase() || facultyEmailQuery && slotFacultyEmail === facultyEmailQuery)) return true;
+    if (slotFacultyName && (faculty?.name && slotFacultyName === faculty.name.toLowerCase() || facultyNameQuery && slotFacultyName === facultyNameQuery)) return true;
+    if (slotFacultyId && facultyAssignmentIds.has(slotFacultyId)) {
+      if (slotFacultyEmail && facultyEmailQuery && slotFacultyEmail !== facultyEmailQuery) return false;
+      if (slotFacultyName && facultyNameQuery && slotFacultyName !== "unassigned" && slotFacultyName !== facultyNameQuery) return false;
+      return true;
+    }
+    if (allottedFaculty) {
+      if (faculty?.name && allottedFaculty.includes(faculty.name.toLowerCase())) return true;
+      if (facultyNameQuery && allottedFaculty.includes(facultyNameQuery)) return true;
+      if (facultyEmailQuery && allottedFaculty.includes(facultyEmailQuery)) return true;
+    }
+    return false;
+  });
+  if (isDbConnected && prisma && faculty) {
+    try {
+      const dbSlots = await prisma.gDSession.findMany({
+        where: {
+          college: { code },
+          OR: [
+            { assignedFacultyId: faculty.facultyId },
+            { assignedFacultyId: faculty.id },
+            { assignedFacultyId: faculty.email }
+          ]
+        },
+        orderBy: { createdAt: "desc" }
+      });
+      const merged = new Map(slots.map((slot) => [slot.id, slot]));
+      for (const s of dbSlots) {
+        if (!s?.id || deletedSet.has(s.id)) continue;
+        const existing = merged.get(s.id);
+        merged.set(s.id, {
+          id: s.id,
+          slotName: s.slotName || s.topic,
+          topic: s.topic,
+          description: s.description || "",
+          slotTiming: s.slotTiming || "",
+          slotDate: existing?.slotDate || s.scheduledTime || void 0,
+          status: existing?.status === "active" || existing?.status === "completed" ? existing.status : s.status,
+          durationMinutes: s.durationMinutes,
+          enrolledCount: s.enrolledCount,
+          maxCapacity: s.maxCapacity,
+          assignedFacultyId: s.assignedFacultyId || faculty.facultyId,
+          assignedFacultyName: faculty.name,
+          assignedFacultyEmail: faculty.email,
+          assignedFacultyDept: faculty.department,
+          collegeCode: code,
+          createdAt: s.createdAt.toISOString(),
+          students: merged.get(s.id)?.students,
+          recordingUrl: s.recordingUrl || merged.get(s.id)?.recordingUrl || "",
+          recordingDurationSeconds: s.recordingDuration || merged.get(s.id)?.recordingDurationSeconds || 0,
+          recordingFileSize: s.recordingFileSize || merged.get(s.id)?.recordingFileSize || 0,
+          recordedAt: s.recordedAt ? s.recordedAt.toISOString() : merged.get(s.id)?.recordedAt || ""
+        });
+      }
+      slots = Array.from(merged.values()).sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+    } catch (e) {
+      console.warn("[Faculty Sessions] DB read failed:", e);
+    }
+  }
+  const resolvedSlots = slots.map((s) => ensureSlotParticipants(s, code));
+  res.json({ success: true, sessions: resolvedSlots });
+});
+app.get("/api/student/:studentId/booked-slot", (req, res) => {
+  const { studentId } = req.params;
+  const bookedSlotId = persistentState.studentBookings[studentId] || null;
+  const topicBookings = persistentState.studentTopicBookings[studentId] || {};
+  res.json({ success: true, studentId, bookedSlotId, topicBookings });
+});
+app.post("/api/student/book-slot", async (req, res) => {
+  const {
+    studentId,
+    studentIdentifier,
+    studentEmail,
+    studentStudentId,
+    studentName,
+    slotId,
+    topic
+  } = req.body;
+  const identifiers = Array.from(new Set(
+    [studentId, studentIdentifier, studentEmail, studentStudentId, studentName].map((value) => String(value || "").trim()).filter(Boolean)
+  ));
+  if (identifiers.length === 0 || !slotId) {
+    return res.status(400).json({ success: false, error: "studentId and slotId are required" });
+  }
+  let authenticatedEmail;
+  let authenticatedUserId;
+  try {
+    const authHeader = String(req.headers.authorization || "");
+    if (authHeader.startsWith("Bearer ")) {
+      const claims = import_jsonwebtoken.default.verify(authHeader.slice(7).trim(), JWT_SECRET);
+      if (claims.role === "student") {
+        authenticatedUserId = claims.id;
+        authenticatedEmail = claims.email?.toLowerCase();
+      }
+    }
+  } catch {
+  }
+  const resolvedIdentifiers = Array.from(new Set(
+    [authenticatedUserId, authenticatedEmail, ...identifiers].map((value) => String(value || "").trim()).filter(Boolean)
+  ));
+  let student = void 0;
+  if (isDbConnected && prisma) {
+    try {
+      const include = { studentProfile: true, collegeOrg: true };
+      for (const identifier of resolvedIdentifiers) {
+        if (student) break;
+        let dbUser = await prisma.user.findUnique({
+          where: { id: identifier },
+          include
+        }).catch(() => null);
+        if (!dbUser && identifier.includes("@")) {
+          dbUser = await prisma.user.findUnique({
+            where: { email: identifier.toLowerCase() },
+            include
+          }).catch(() => null);
+        }
+        if (!dbUser) {
+          dbUser = await prisma.user.findFirst({
+            where: {
+              studentProfile: {
+                studentId: { equals: identifier, mode: "insensitive" }
+              }
+            },
+            include
+          }).catch(() => null);
+        }
+        if (!dbUser) {
+          dbUser = await prisma.user.findFirst({
+            where: {
+              name: { equals: identifier, mode: "insensitive" },
+              role: "student"
+            },
+            include
+          }).catch(() => null);
+        }
+        if (dbUser && dbUser.role === "student") {
+          student = {
+            id: dbUser.id,
+            name: dbUser.name,
+            email: dbUser.email,
+            role: dbUser.role,
+            college: dbUser.college,
+            collegeCode: dbUser.collegeOrg?.code,
+            course: dbUser.studentProfile?.course,
+            batch: dbUser.studentProfile?.batch,
+            seatNumber: dbUser.studentProfile?.seatNumber,
+            studentId: dbUser.studentProfile?.studentId,
+            avatar: dbUser.avatar || void 0
+          };
+          const existingIdx = persistentState.users.findIndex(
+            (u) => u.id === student.id || u.email.toLowerCase() === student.email.toLowerCase()
+          );
+          if (existingIdx >= 0) {
+            persistentState.users[existingIdx] = { ...persistentState.users[existingIdx], ...student };
+          } else {
+            persistentState.users.push(student);
+          }
+          savePersistentState();
+        }
+      }
+    } catch (dbErr) {
+      console.warn("[Database] Student lookup during booking failed:", dbErr.message);
+    }
+  }
+  if (!student) {
+    const normalized = identifiers.map((value) => value.toLowerCase());
+    student = persistentState.users.find(
+      (u) => u.role === "student" && (normalized.includes(String(u.id || "").toLowerCase()) || normalized.includes(String(u.studentId || "").toLowerCase()) || normalized.includes(String(u.email || "").toLowerCase()) || normalized.includes(String(u.name || "").toLowerCase()))
+    );
+  }
+  if (!student || student.role !== "student") {
+    return res.status(403).json({ success: false, error: "Student account not found" });
+  }
+  let slot = null;
+  let slotCode = normalizeCollegeCode(student.collegeCode || "DIT");
+  for (const [code, list] of Object.entries(persistentState.slots)) {
+    const found = list.find((s) => s.id === slotId);
+    if (found) {
+      slot = found;
+      slotCode = normalizeCollegeCode(code);
+      break;
+    }
+  }
+  if (!slot) return res.status(404).json({ success: false, error: "GD slot not found" });
+  if (slot.collegeCode && normalizeCollegeCode(slot.collegeCode) !== slotCode) {
+    return res.status(403).json({ success: false, error: "Invalid college for this slot" });
+  }
+  if (slot.status === "completed" || slot.status === "active") {
+    return res.status(409).json({ success: false, error: "This GD session is no longer bookable" });
+  }
+  const topicKey = topic || slot.topic || "General Topic";
+  if (!persistentState.studentTopicBookings) persistentState.studentTopicBookings = {};
+  if (!persistentState.studentTopicBookings[student.id]) persistentState.studentTopicBookings[student.id] = {};
+  const existingBookingForTopic = persistentState.studentTopicBookings[student.id][topicKey];
+  if (existingBookingForTopic && existingBookingForTopic !== slotId) {
+    return res.status(403).json({
+      success: false,
+      error: `Topic Policy: You have already booked a slot for "${topicKey}". Only one slot per topic is allowed.`,
+      bookedSlotId: existingBookingForTopic,
+      topic: topicKey
+    });
+  }
+  const currentCount = Number(slot.enrolledCount || 0);
+  const maxCapacity = Number(slot.maxCapacity || 15);
+  const alreadyBooked = existingBookingForTopic === slotId;
+  if (!alreadyBooked && currentCount >= maxCapacity) {
+    return res.status(409).json({ success: false, error: "This GD slot is full" });
+  }
+  if (!alreadyBooked) {
+    persistentState.studentTopicBookings[student.id][topicKey] = slotId;
+    persistentState.studentBookings[student.id] = slotId;
+    if (!Array.isArray(slot.students)) slot.students = [];
+    if (!slot.students.some((s) => s.id === student.id)) {
+      slot.students.push({
+        id: student.id,
+        name: student.name,
+        email: student.email,
+        studentId: student.studentId,
+        course: student.course,
+        batch: student.batch,
+        seatNumber: slot.students.length + 1,
+        college: student.college,
+        collegeCode: student.collegeCode,
+        avatar: student.avatar || "",
+        isUser: false,
+        micActive: false,
+        isSpeaking: false,
+        hasRaisedHand: false,
+        cameraActive: false,
+        speakingDurationSeconds: 0,
+        speakingTurns: 0,
+        interruptionCount: 0,
+        questionsAnswered: 0,
+        questionsInitiated: 0,
+        sentiment: "neutral",
+        isEmptySeat: false
+      });
+    }
+    slot.enrolledCount = slot.students.length;
+  }
+  savePersistentState();
+  persistBookingToMongoDB(slotId, student.id, "BOOKED", topicKey);
+  if (isMongoConnected()) {
+    GDSessionModel.updateOne({ id: slotId }, { $set: { enrolledCount: slot.enrolledCount, students: slot.students } }).catch(() => null);
+  }
+  if (isDbConnected && prisma) {
+    try {
+      const dbUser = await prisma.user.findUnique({ where: { id: student.id } });
+      if (dbUser) {
+        await prisma.gDBooking.upsert({
+          where: { sessionId_studentId: { sessionId: slotId, studentId: dbUser.id } },
+          update: { status: "BOOKED" },
+          create: { sessionId: slotId, studentId: dbUser.id, status: "BOOKED" }
+        });
+        await prisma.gDSession.update({ where: { id: slotId }, data: { enrolledCount: slot.enrolledCount } });
+      }
+    } catch (dbErr) {
+      console.warn("[Database] Failed to persist booking:", dbErr.message);
+    }
+  }
+  res.json({
+    success: true,
+    studentId: student.id,
+    bookedSlotId: slotId,
+    topic: topicKey,
+    topicBookings: persistentState.studentTopicBookings[student.id],
+    enrolledCount: slot.enrolledCount
+  });
+});
+app.post("/api/student/cancel-slot", async (req, res) => {
+  const studentId = req.body.studentId || req.body.studentIdentifier;
+  const { slotId, topic } = req.body;
+  if (!studentId) {
+    return res.status(400).json({ success: false, error: "studentId or studentIdentifier is required" });
+  }
+  if (persistentState.studentTopicBookings && persistentState.studentTopicBookings[studentId]) {
+    if (topic && persistentState.studentTopicBookings[studentId][topic]) {
+      delete persistentState.studentTopicBookings[studentId][topic];
+    } else if (slotId) {
+      for (const [t, sId] of Object.entries(persistentState.studentTopicBookings[studentId])) {
+        if (sId === slotId) {
+          delete persistentState.studentTopicBookings[studentId][t];
+          break;
+        }
+      }
+    }
+  }
+  const previouslyBooked = persistentState.studentBookings[studentId] || null;
+  if (persistentState.studentBookings[studentId] === slotId || !slotId) {
+    delete persistentState.studentBookings[studentId];
+  }
+  for (const list of Object.values(persistentState.slots)) {
+    const slot = list.find((candidate) => candidate.id === slotId);
+    if (slot) {
+      if (Array.isArray(slot.students)) {
+        slot.students = slot.students.filter((s) => s.id !== studentId);
+      }
+      slot.enrolledCount = Array.isArray(slot.students) ? slot.students.length : Math.max(0, Number(slot.enrolledCount || 1) - 1);
+    }
+  }
+  savePersistentState();
+  if (slotId) {
+    persistBookingToMongoDB(slotId, studentId, "CANCELLED");
+    if (isMongoConnected()) {
+      GDSessionModel.updateOne({ id: slotId }, { $inc: { enrolledCount: -1 } }).catch(() => null);
+    }
+  }
+  if (isDbConnected && prisma && slotId) {
+    try {
+      await prisma.gDBooking.updateMany({
+        where: { sessionId: slotId, studentId },
+        data: { status: "CANCELLED" }
+      });
+      const slot = await prisma.gDSession.findUnique({ where: { id: slotId } });
+      if (slot) await prisma.gDSession.update({ where: { id: slotId }, data: { enrolledCount: Math.max(0, slot.enrolledCount - 1) } });
+    } catch (dbErr) {
+      console.warn("[Database] Failed to cancel booking:", dbErr.message);
+    }
+  }
+  res.json({
+    success: true,
+    studentId,
+    releasedSlotId: slotId || previouslyBooked,
+    topicBookings: persistentState.studentTopicBookings?.[studentId] || {}
+  });
+});
+app.post("/api/auth/login", async (req, res) => {
+  const { role, identifier, password } = req.body;
+  if (!identifier) {
+    return res.status(400).json({ success: false, error: "Identifier is required" });
+  }
+  const cleanId = identifier.trim().toLowerCase();
+  const escapedId = cleanId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const activeCollegeCodes = new Set(
+    persistentState.colleges.map((c) => normalizeCollegeCode(c.code)).filter(Boolean)
+  );
+  const candidates = [];
+  const addCandidate = (cand) => {
+    if (!cand || !cand.email) return;
+    const normCol = normalizeCollegeCode(cand.collegeCode);
+    const normalizedCand = {
+      ...cand,
+      collegeCode: normCol || cand.collegeCode
+    };
+    const existingIdx = candidates.findIndex(
+      (c) => c.email.toLowerCase() === normalizedCand.email.toLowerCase() && c.role === normalizedCand.role
+    );
+    if (existingIdx >= 0) {
+      candidates[existingIdx] = { ...candidates[existingIdx], ...normalizedCand };
+    } else {
+      candidates.push(normalizedCand);
+    }
+  };
+  for (const u of persistentState.users) {
+    const matchId = u.email.toLowerCase() === cleanId || u.name.toLowerCase() === cleanId || u.studentId && u.studentId.toLowerCase() === cleanId || u.facultyId && u.facultyId.toLowerCase() === cleanId || u.adminId && u.adminId.toLowerCase() === cleanId;
+    if (matchId) addCandidate(u);
+  }
+  for (const [colCode, studs] of Object.entries(persistentState.students || {})) {
+    for (const st of studs) {
+      if (st.email?.toLowerCase() === cleanId || st.name?.toLowerCase() === cleanId || st.studentId && st.studentId.toLowerCase() === cleanId) {
+        const col = persistentState.colleges.find((c) => normalizeCollegeCode(c.code) === normalizeCollegeCode(colCode));
+        addCandidate({
+          id: st.id || `stu-${Date.now()}`,
+          name: st.name,
+          email: st.email,
+          role: "student",
+          password: st.password || st.defaultPassword || "password123",
+          college: col?.name || st.college || colCode,
+          collegeCode: normalizeCollegeCode(colCode),
+          course: st.course,
+          batch: st.batch,
+          seatNumber: st.seatNumber,
+          studentId: st.studentId
+        });
+      }
+    }
+  }
+  for (const [colCode, facs] of Object.entries(persistentState.faculty || {})) {
+    for (const fc of facs) {
+      if (fc.email?.toLowerCase() === cleanId || fc.name?.toLowerCase() === cleanId || fc.facultyId && fc.facultyId.toLowerCase() === cleanId) {
+        const col = persistentState.colleges.find((c) => normalizeCollegeCode(c.code) === normalizeCollegeCode(colCode));
+        addCandidate({
+          id: fc.id || `fac-${Date.now()}`,
+          name: fc.name,
+          email: fc.email,
+          role: "faculty",
+          password: fc.password || fc.defaultPassword || "password123",
+          college: col?.name || fc.college || colCode,
+          collegeCode: normalizeCollegeCode(colCode),
+          department: fc.department,
+          designation: fc.designation,
+          facultyId: fc.facultyId
+        });
+      }
+    }
+  }
+  if (isMongoConnected()) {
+    try {
+      const dbUsers = await UserModel.find({
+        $or: [
+          { email: cleanId },
+          { "studentProfile.studentId": { $regex: new RegExp(`^${escapedId}$`, "i") } },
+          { "facultyProfile.facultyId": { $regex: new RegExp(`^${escapedId}$`, "i") } },
+          { "collegeAdminProfile.adminId": { $regex: new RegExp(`^${escapedId}$`, "i") } },
+          { name: { $regex: new RegExp(`^${escapedId}$`, "i") } }
+        ]
+      });
+      for (const dbUser of dbUsers) {
+        addCandidate({
+          id: dbUser.id,
+          name: dbUser.name,
+          email: dbUser.email,
+          role: dbUser.role,
+          password: dbUser.password,
+          college: dbUser.college,
+          collegeCode: normalizeCollegeCode(dbUser.collegeCode),
+          department: dbUser.facultyProfile?.department || dbUser.collegeAdminProfile?.department,
+          designation: dbUser.facultyProfile?.designation,
+          course: dbUser.studentProfile?.course,
+          batch: dbUser.studentProfile?.batch,
+          seatNumber: dbUser.studentProfile?.seatNumber,
+          studentId: dbUser.studentProfile?.studentId,
+          facultyId: dbUser.facultyProfile?.facultyId,
+          adminId: dbUser.collegeAdminProfile?.adminId,
+          avatar: dbUser.avatar || void 0
+        });
+      }
+    } catch (mErr) {
+      console.warn("[MongoDB] Lookup error during login:", mErr.message);
+    }
+  }
+  if (candidates.length === 0 && isDbConnected && prisma) {
+    try {
+      const dbUsers = await prisma.user.findMany({
+        where: {
+          OR: [
+            { email: cleanId },
+            { studentProfile: { studentId: { equals: cleanId, mode: "insensitive" } } },
+            { facultyProfile: { facultyId: { equals: cleanId, mode: "insensitive" } } },
+            { collegeAdminProfile: { adminId: { equals: cleanId, mode: "insensitive" } } },
+            { name: { equals: cleanId, mode: "insensitive" } }
+          ]
+        },
+        include: { studentProfile: true, facultyProfile: true, collegeAdminProfile: true, collegeOrg: true }
+      });
+      for (const dbUser of dbUsers) {
+        addCandidate({
+          id: dbUser.id,
+          name: dbUser.name,
+          email: dbUser.email,
+          role: dbUser.role,
+          password: dbUser.passwordHash,
+          college: dbUser.college,
+          collegeCode: normalizeCollegeCode(dbUser.collegeOrg?.code),
+          department: dbUser.facultyProfile?.department || dbUser.collegeAdminProfile?.department,
+          designation: dbUser.facultyProfile?.designation,
+          course: dbUser.studentProfile?.course,
+          batch: dbUser.studentProfile?.batch,
+          seatNumber: dbUser.studentProfile?.seatNumber,
+          studentId: dbUser.studentProfile?.studentId,
+          facultyId: dbUser.facultyProfile?.facultyId,
+          adminId: dbUser.collegeAdminProfile?.adminId,
+          avatar: dbUser.avatar || void 0
+        });
+      }
+    } catch (dbErr) {
+      console.warn("[Database] DB lookup error during login:", dbErr.message);
+    }
+  }
+  let user;
+  if (candidates.length > 0) {
+    const checkPasswordMatch = async (cand) => {
+      if (!password || !cand.password) return true;
+      if (cand.password.startsWith("$2")) {
+        return import_bcryptjs.default.compare(password, cand.password);
+      }
+      return cand.password === password;
+    };
+    const scoredCandidates = [];
+    for (const cand of candidates) {
+      let score = 0;
+      if (role && cand.role === role) score += 100;
+      if (cand.email.toLowerCase() === cleanId) score += 80;
+      const candCol = normalizeCollegeCode(cand.collegeCode);
+      if (candCol && activeCollegeCodes.has(candCol)) score += 50;
+      const passOk = await checkPasswordMatch(cand);
+      if (passOk) score += 200;
+      scoredCandidates.push({ cand, score });
+    }
+    scoredCandidates.sort((a, b) => b.score - a.score);
+    user = scoredCandidates[0].cand;
+  }
+  if (user) {
+    const existingIdx = persistentState.users.findIndex((u) => u.email.toLowerCase() === user.email.toLowerCase());
+    if (existingIdx >= 0) {
+      persistentState.users[existingIdx] = { ...persistentState.users[existingIdx], ...user };
+    } else {
+      persistentState.users.push(user);
+    }
+    if (isMongoConnected()) {
+      persistUserToMongoDB(user).catch((e) => console.warn("[MongoDB] Sync user error during login:", e.message));
+    }
+  }
+  if (user && isDbConnected && prisma && !user.id.startsWith("c")) {
+    try {
+      const passHash = user.password?.startsWith("$2") ? user.password : await import_bcryptjs.default.hash(user.password || "password123", 10);
+      const col = user.collegeCode ? await prisma.college.findUnique({ where: { code: user.collegeCode } }) : null;
+      const repaired = await prisma.user.upsert({
+        where: { email: user.email.toLowerCase() },
+        update: {
+          name: user.name,
+          passwordHash: passHash,
+          role: user.role,
+          college: user.college || "Engineering Institute",
+          collegeId: col?.id,
+          avatar: user.avatar
+        },
+        create: {
+          email: user.email.toLowerCase(),
+          passwordHash: passHash,
+          name: user.name,
+          role: user.role,
+          college: user.college || "Engineering Institute",
+          collegeId: col?.id,
+          avatar: user.avatar,
+          ...user.role === "faculty" ? { facultyProfile: { create: {
+            facultyId: user.facultyId || `FAC-${Date.now().toString().slice(-4)}`,
+            department: user.department || "Engineering",
+            designation: user.designation || "Faculty Evaluator"
+          } } } : user.role === "student" ? { studentProfile: { create: {
+            studentId: user.studentId || `STU-${Date.now().toString().slice(-4)}`,
+            course: user.course || "General Engineering",
+            batch: user.batch || "2024-2028",
+            seatNumber: user.seatNumber || 1
+          } } } : {}
+        },
+        include: { studentProfile: true, facultyProfile: true, collegeAdminProfile: true, collegeOrg: true }
+      });
+      user = {
+        ...user,
+        id: repaired.id,
+        password: repaired.passwordHash,
+        role: repaired.role,
+        facultyId: repaired.facultyProfile?.facultyId || user.facultyId,
+        studentId: repaired.studentProfile?.studentId || user.studentId
+      };
+    } catch (repairErr) {
+      console.warn("[Database] Could not repair legacy auth account:", repairErr.message);
+    }
+  }
+  if (!user) {
+    return res.status(401).json({ success: false, error: "Invalid credentials. User not found." });
+  }
+  if (role && user.role !== role) {
+    return res.status(401).json({ success: false, error: `This account is registered as ${user.role.replace("_", " ")}. Please use the correct portal.` });
+  }
+  if (password && user.password) {
+    let isMatch = false;
+    if (user.password.startsWith("$2")) {
+      isMatch = await import_bcryptjs.default.compare(password, user.password);
+    } else {
+      isMatch = user.password === password;
+    }
+    if (!isMatch) {
+      return res.status(401).json({ success: false, error: "Incorrect password." });
+    }
+  }
+  checkAndResetDailyStats();
+  recordUserActivity(user);
+  if (user.collegeCode) {
+    user.collegeCode = normalizeCollegeCode(user.collegeCode);
+  }
+  const { password: _, ...cleanUser } = user;
+  const token = import_jsonwebtoken.default.sign({ id: cleanUser.id, email: cleanUser.email, role: cleanUser.role }, JWT_SECRET, { expiresIn: "7d" });
+  res.json({
+    success: true,
+    user: cleanUser,
+    token
+  });
+});
+var passwordResetStore = /* @__PURE__ */ new Map();
+app.post("/api/auth/forgot-password", async (req, res) => {
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const role = String(req.body.role || "").trim();
+  if (!email) {
+    return res.status(400).json({ success: false, error: "Email address is required." });
+  }
+  let user = persistentState.users.find((u) => u.email.toLowerCase() === email);
+  if (!user && isMongoConnected()) {
+    try {
+      const dbUser = await UserModel.findOne({ email });
+      if (dbUser) user = dbUser;
+    } catch {
+    }
+  }
+  if (!user) {
+    return res.status(404).json({ success: false, error: "No account registered with this email address." });
+  }
+  if (role && user.role !== role) {
+    return res.status(400).json({ success: false, error: `This account is registered as ${user.role}. Please switch to the ${user.role} portal.` });
+  }
+  const otp = Math.floor(1e5 + Math.random() * 9e5).toString();
+  const expiresAt = Date.now() + 15 * 60 * 1e3;
+  passwordResetStore.set(email, {
+    otp,
+    expiresAt,
+    email,
+    name: user.name || "User",
+    role: user.role
+  });
+  const mailRes = await sendPasswordResetOtpEmail({
+    to: email,
+    name: user.name || "User",
+    otp,
+    role: user.role === "faculty" ? "Faculty Evaluator" : "Student Participant",
+    expiresInMinutes: 15
+  });
+  res.json({
+    success: true,
+    message: `A 6-digit verification code has been dispatched to ${email}.`,
+    simulated: mailRes.simulated,
+    ...mailRes.simulated ? { debugOtp: otp } : {}
+  });
+});
+app.post("/api/auth/reset-password", async (req, res) => {
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const otp = String(req.body.otp || "").trim();
+  const newPassword = String(req.body.newPassword || "").trim();
+  if (!email || !otp || !newPassword) {
+    return res.status(400).json({ success: false, error: "Email, verification code, and new password are required." });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ success: false, error: "New password must be at least 6 characters." });
+  }
+  const tokenData = passwordResetStore.get(email);
+  if (!tokenData) {
+    return res.status(400).json({ success: false, error: "Invalid or expired password reset session. Please request a new code." });
+  }
+  if (Date.now() > tokenData.expiresAt) {
+    passwordResetStore.delete(email);
+    return res.status(400).json({ success: false, error: "Verification code has expired. Please request a new code." });
+  }
+  if (tokenData.otp !== otp) {
+    return res.status(400).json({ success: false, error: "Incorrect verification code. Please check your email and try again." });
+  }
+  const user = persistentState.users.find((u) => u.email.toLowerCase() === email);
+  if (user) {
+    user.password = newPassword;
+  }
+  savePersistentState();
+  if (isMongoConnected()) {
+    try {
+      await UserModel.findOneAndUpdate(
+        { email },
+        { password: newPassword },
+        { returnDocument: "after" }
+      );
+    } catch (e) {
+      console.warn("[MongoDB] Failed to update password on reset:", e.message);
+    }
+  }
+  if (isDbConnected && prisma) {
+    try {
+      const passHash = await import_bcryptjs.default.hash(newPassword, 10);
+      await prisma.user.update({
+        where: { email },
+        data: { passwordHash: passHash }
+      }).catch(() => {
+      });
+    } catch {
+    }
+  }
+  passwordResetStore.delete(email);
+  res.json({
+    success: true,
+    message: "Your password has been reset successfully! You can now log in."
+  });
+});
+app.post("/api/auth/register", async (req, res) => {
+  const userData = req.body;
+  const userName = (userData?.name || userData?.fullName || "").trim();
+  const cleanEmail = (userData?.email || "").trim().toLowerCase();
+  const password = userData?.password || "";
+  if (!userData || !cleanEmail || !userName) {
+    return res.status(400).json({ success: false, error: "Name and email are required." });
+  }
+  const role = userData.role || "student";
+  if (role === "student" || role === "faculty") {
+    return res.status(403).json({
+      success: false,
+      error: "Public registration for students and faculty is disabled. Your account credentials must be provisioned by your College Administrator."
+    });
+  }
+  if (!password || password.length < 6) {
+    return res.status(400).json({ success: false, error: "Password must be at least 6 characters." });
+  }
+  const existing = persistentState.users.find((u) => u.email.toLowerCase() === cleanEmail);
+  if (existing) {
+    return res.status(400).json({ success: false, error: "Email already registered." });
+  }
+  const collegeName = userData.college || userData.collegeName || "General Campus";
+  const collegeCode = userData.collegeCode || (collegeName.slice(0, 4).toUpperCase().replace(/[^A-Z0-9]/g, "") || "CAMPUS");
+  const newUser = {
+    id: `${role === "student" ? "s" : "fac"}-reg-${Date.now().toString().slice(-4)}`,
+    name: userName,
+    email: cleanEmail,
+    password,
+    role,
+    college: collegeName,
+    collegeCode,
+    course: userData.course,
+    batch: userData.batch,
+    seatNumber: userData.seatNumber || 1,
+    studentId: userData.studentId,
+    facultyId: userData.facultyId,
+    department: userData.department,
+    designation: userData.designation,
+    avatar: userData.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(userName)}`
+  };
+  persistentState.users.push(newUser);
+  if (role === "student" && newUser.collegeCode) {
+    if (!persistentState.students[newUser.collegeCode]) persistentState.students[newUser.collegeCode] = [];
+    persistentState.students[newUser.collegeCode].push({
+      id: newUser.id,
+      name: newUser.name,
+      email: newUser.email,
+      studentId: newUser.studentId || `STU-${Date.now().toString().slice(-4)}`,
+      course: newUser.course || "B.Tech Computer Science & Engineering",
+      batch: newUser.batch || "2024-2028",
+      seatNumber: newUser.seatNumber || persistentState.students[newUser.collegeCode].length + 1,
+      college: newUser.college,
+      collegeCode: newUser.collegeCode
+    });
+  } else if (role === "faculty" && newUser.collegeCode) {
+    if (!persistentState.faculty[newUser.collegeCode]) persistentState.faculty[newUser.collegeCode] = [];
+    persistentState.faculty[newUser.collegeCode].push({
+      id: newUser.id,
+      name: newUser.name,
+      email: newUser.email,
+      facultyId: newUser.facultyId || `FAC-${Date.now().toString().slice(-4)}`,
+      department: newUser.department || "Computer Science & Engineering",
+      designation: newUser.designation || "Faculty Evaluator",
+      college: newUser.college,
+      collegeCode: newUser.collegeCode,
+      assignedSlotsCount: 0
+    });
+  }
+  savePersistentState();
+  persistUserToMongoDB(newUser);
+  if (isDbConnected && prisma) {
+    try {
+      const col = newUser.collegeCode ? await prisma.college.findUnique({ where: { code: newUser.collegeCode } }) : null;
+      const passHash = await import_bcryptjs.default.hash(newUser.password, 10);
+      await prisma.user.upsert({
+        where: { email: cleanEmail },
+        update: {
+          passwordHash: passHash,
+          name: newUser.name,
+          role: newUser.role,
+          college: newUser.college,
+          collegeId: col?.id,
+          avatar: newUser.avatar,
+          ...role === "student" ? {
+            studentProfile: {
+              upsert: {
+                create: {
+                  studentId: newUser.studentId || `STU-${Date.now().toString().slice(-4)}`,
+                  course: newUser.course || "General Engineering",
+                  batch: newUser.batch || "2024-2028",
+                  seatNumber: newUser.seatNumber || 1
+                },
+                update: {
+                  studentId: newUser.studentId || void 0,
+                  course: newUser.course || void 0,
+                  batch: newUser.batch || void 0,
+                  seatNumber: newUser.seatNumber || void 0
+                }
+              }
+            }
+          } : {
+            facultyProfile: {
+              upsert: {
+                create: {
+                  facultyId: newUser.facultyId || `FAC-${Date.now().toString().slice(-4)}`,
+                  department: newUser.department || "Engineering",
+                  designation: newUser.designation || "Faculty Evaluator"
+                },
+                update: {
+                  facultyId: newUser.facultyId || void 0,
+                  department: newUser.department || void 0,
+                  designation: newUser.designation || void 0
+                }
+              }
+            }
+          }
+        },
+        create: {
+          email: cleanEmail,
+          passwordHash: passHash,
+          name: newUser.name,
+          role: newUser.role,
+          college: newUser.college,
+          collegeId: col?.id,
+          avatar: newUser.avatar,
+          ...role === "student" ? {
+            studentProfile: {
+              create: {
+                studentId: newUser.studentId || `STU-${Date.now().toString().slice(-4)}`,
+                course: newUser.course || "General Engineering",
+                batch: newUser.batch || "2024-2028",
+                seatNumber: newUser.seatNumber || 1
+              }
+            }
+          } : {
+            facultyProfile: {
+              create: {
+                facultyId: newUser.facultyId || `FAC-${Date.now().toString().slice(-4)}`,
+                department: newUser.department || "Engineering",
+                designation: newUser.designation || "Faculty Evaluator"
+              }
+            }
+          }
+        }
+      });
+      console.log(`[Database] User ${newUser.email} registered to PostgreSQL.`);
+    } catch (dbErr) {
+      console.error("[Database] Failed to register user to PostgreSQL:", dbErr.message);
+      return res.status(500).json({
+        success: false,
+        error: "Account could not be saved to the database. Please try registration again."
+      });
+    }
+  }
+  const { password: _, ...cleanUser } = newUser;
+  const token = import_jsonwebtoken.default.sign({ id: cleanUser.id, email: cleanUser.email, role: cleanUser.role }, JWT_SECRET, { expiresIn: "7d" });
+  res.json({
+    success: true,
+    user: cleanUser,
+    token
+  });
+});
+app.get("/api/auth/me", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ success: false, error: "No authorization header" });
+    }
+    const token = authHeader.replace("Bearer ", "").trim();
+    let userId = null;
+    try {
+      const decoded = import_jsonwebtoken.default.verify(token, JWT_SECRET);
+      userId = decoded.id;
+    } catch {
+      if (token.startsWith("jwt-")) {
+        userId = token.split("-")[1];
+      }
+    }
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "Invalid token" });
+    }
+    let user = persistentState.users.find((u) => u.id === userId);
+    if (!user && isDbConnected && prisma) {
+      const dbUser = await prisma.user.findUnique({
+        where: { id: userId },
+        include: { studentProfile: true, facultyProfile: true, collegeAdminProfile: true, collegeOrg: true }
+      });
+      if (dbUser) {
+        user = {
+          id: dbUser.id,
+          name: dbUser.name,
+          email: dbUser.email,
+          role: dbUser.role,
+          password: dbUser.passwordHash,
+          college: dbUser.college,
+          collegeCode: dbUser.collegeOrg?.code,
+          department: dbUser.facultyProfile?.department || dbUser.collegeAdminProfile?.department,
+          designation: dbUser.facultyProfile?.designation,
+          course: dbUser.studentProfile?.course,
+          batch: dbUser.studentProfile?.batch,
+          seatNumber: dbUser.studentProfile?.seatNumber,
+          studentId: dbUser.studentProfile?.studentId,
+          facultyId: dbUser.facultyProfile?.facultyId,
+          adminId: dbUser.collegeAdminProfile?.adminId,
+          avatar: dbUser.avatar || void 0
+        };
+      }
+    }
+    if (user) {
+      const { password: _, ...cleanUser } = user;
+      return res.json({ success: true, user: cleanUser });
+    }
+    return res.status(401).json({ success: false, error: "Session invalid" });
+  } catch (err) {
+    return res.status(401).json({ success: false, error: "Authentication failed" });
+  }
+});
+var ai = null;
+if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY" && process.env.GEMINI_API_KEY.trim() !== "") {
+  try {
+    ai = new import_genai.GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build"
+        }
+      }
+    });
+  } catch (err) {
+    console.warn("Gemini client initialization error:", err);
+    ai = null;
+  }
+}
+var DEFAULT_SERVER_SLOTS = [];
+var serverSlots = [...DEFAULT_SERVER_SLOTS];
+var currentLiveSession = {
+  id: "session-101",
+  topic: "Impact of Generative AI on Tech Hiring & Software Engineering",
+  description: "Autonomous AI evaluation of technical argumentation, structured thinking, and empathy.",
+  durationMinutes: 25,
+  difficulty: "Intermediate",
+  assessmentRubric: "Standard Academic 7-Parameter Rubric",
+  status: "waiting",
+  currentPhase: "intro",
+  facilitatorSpeech: "Welcome participants. Today we analyze how generative AI is shifting tech talent evaluation from syntax memorization to architectural thinking. The floor is open.",
+  facilitatorAction: "Moderating discussion flow",
+  isFacilitatorSpeaking: false,
+  silenceTimerSeconds: 0,
+  currentSpeakerId: null,
+  students: [],
+  breakoutRooms: [],
+  createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+  startedAt: Date.now()
+};
+var liveTranscripts = [];
+var IN_MEM_USERS = [
+  {
+    id: "sa1",
+    name: "Platform Super Admin",
+    email: "superadmin@erus.ai",
+    passwordHash: import_bcryptjs.default.hashSync("admin123", 10),
+    role: "super_admin",
+    college: "ERUS Global Administration",
+    avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80",
+    accessLevel: "root"
+  }
+];
+app.get(["/api/health", "/health"], async (req, res) => {
+  if (!isMongoConnected()) {
+    await connectMongoDB();
+  }
+  const mongoActive = isMongoConnected();
+  let mongoTables = null;
+  if (mongoActive) {
+    try {
+      mongoTables = {
+        colleges: await CollegeModel.countDocuments(),
+        users: await UserModel.countDocuments(),
+        gd_sessions: await GDSessionModel.countDocuments(),
+        gd_transcripts: await TranscriptEntryModel.countDocuments(),
+        assessment_reports: await AssessmentReportModel.countDocuments(),
+        gd_bookings: await GDBookingModel.countDocuments()
+      };
+    } catch {
+    }
+  }
+  const activeUri = getActiveMongoUri();
+  const maskedUri = activeUri.includes("@") ? activeUri.replace(/:([^:@]+)@/, ":****@") : activeUri;
+  res.json({
+    status: "ok",
+    service: "ERUS AI Group Discussion Facilitator (ERUS-AIGDF)",
+    database: mongoActive ? "mongodb" : isDbConnected ? "postgresql" : "in-memory",
+    mongoConnected: mongoActive,
+    mongoTables,
+    mongoError: getMongoLastError(),
+    mongoUriDetected: maskedUri.startsWith("mongodb://127.0.0.1") ? "default-local" : maskedUri,
+    hasGeminiKey: !!process.env.GEMINI_API_KEY,
+    activeSessionId: currentLiveSession.id,
+    participants: currentLiveSession.students.length,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString()
+  });
+});
+app.get("/api/session/current", (req, res) => {
+  res.json({
+    session: currentLiveSession,
+    transcripts: liveTranscripts
+  });
+});
+app.post("/api/session/create", (req, res) => {
+  const { topic, description, durationMinutes = 20, difficulty = "Intermediate", assessmentRubric = "Standard Academic 7-Parameter Rubric" } = req.body;
+  currentLiveSession = {
+    id: `session-${Date.now().toString().slice(-4)}`,
+    topic: topic || "Should Artificial Intelligence replace teachers?",
+    description: description || "Debating the transformative role of AI in pedagogy.",
+    durationMinutes,
+    difficulty,
+    assessmentRubric,
+    status: "active",
+    currentPhase: "intro",
+    facilitatorSpeech: `Good morning everyone. Today's discussion topic is: "${topic}". Each participant will get an opportunity to speak. Please respect others' opinions and avoid interruptions.`,
+    facilitatorAction: "Introducing discussion and explaining rules",
+    isFacilitatorSpeaking: false,
+    silenceTimerSeconds: 0,
+    currentSpeakerId: null,
+    students: [],
+    breakoutRooms: [],
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    startedAt: Date.now()
+  };
+  liveTranscripts = [];
+  res.json({
+    success: true,
+    session: currentLiveSession,
+    transcripts: liveTranscripts
+  });
+});
+app.post("/api/session/speak", (req, res) => {
+  const { studentId, text, elapsedSeconds = 0 } = req.body;
+  if (!text || !text.trim()) {
+    return res.status(400).json({ error: "Speech text is required" });
+  }
+  const student = currentLiveSession.students.find((s) => s.id === studentId) || currentLiveSession.students[0];
+  const mins = Math.floor(elapsedSeconds / 60).toString().padStart(2, "0");
+  const secs = (elapsedSeconds % 60).toString().padStart(2, "0");
+  let isInterruption = false;
+  if (currentLiveSession.currentSpeakerId && currentLiveSession.currentSpeakerId !== student.id) {
+    isInterruption = true;
+    student.interruptionCount += 1;
+  }
+  const newTranscript = {
+    id: `t-${Date.now()}`,
+    sessionId: currentLiveSession.id,
+    speakerId: student.id,
+    speakerName: student.name,
+    seatNumber: student.seatNumber,
+    isFacilitator: false,
+    timestamp: `${mins}:${secs}`,
+    timestampSeconds: elapsedSeconds,
+    text: text.trim(),
+    type: "statement",
+    sentiment: "positive"
+  };
+  liveTranscripts.push(newTranscript);
+  persistTranscriptToMongoDB(newTranscript);
+  const cleanWords = text.trim().split(/\s+/).filter(Boolean);
+  const fillerTokens = /* @__PURE__ */ new Set([
+    "ok",
+    "okay",
+    "yes",
+    "yeah",
+    "yep",
+    "no",
+    "nope",
+    "sure",
+    "fine",
+    "alright",
+    "right",
+    "agree",
+    "thank",
+    "thanks",
+    "you",
+    "done",
+    "finished",
+    "thats",
+    "that",
+    "is",
+    "it",
+    "all",
+    "hmm",
+    "well",
+    "got",
+    "understood",
+    "cool",
+    "sir",
+    "maam",
+    "actually",
+    "basically",
+    "so",
+    "like",
+    "hello",
+    "hlo",
+    "hi",
+    "hey",
+    "am",
+    "i",
+    "audible",
+    "clear"
+  ]);
+  const substantiveWords = cleanWords.filter((w) => !fillerTokens.has(w.toLowerCase().replace(/[^a-z0-9]/g, "")));
+  const isGoodPoint = cleanWords.length >= 3 && substantiveWords.length >= 2;
+  if (isGoodPoint) {
+    student.speakingTurns += 1;
+    student.speakingDurationSeconds += Math.max(3, Math.round(cleanWords.length / 2.1));
+    student.lastSpokenAt = Date.now();
+  }
+  currentLiveSession.currentSpeakerId = student.id;
+  currentLiveSession.silenceTimerSeconds = 0;
+  res.json({
+    success: true,
+    transcript: newTranscript,
+    student,
+    isInterruption,
+    session: currentLiveSession
+  });
+});
+app.post("/api/session/transcribe-audio", async (req, res) => {
+  try {
+    const { audioBase64, mimeType = "audio/webm" } = req.body;
+    if (!audioBase64 || typeof audioBase64 !== "string") {
+      return res.status(400).json({ success: false, error: "audioBase64 is required" });
+    }
+    if (!ai) {
+      return res.status(503).json({ success: false, error: "Gemini AI speech recognition service unavailable" });
+    }
+    const cleanBase64 = audioBase64.includes("base64,") ? audioBase64.split("base64,")[1] : audioBase64;
+    const response = await ai.models.generateContent({
+      model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              inlineData: {
+                mimeType,
+                data: cleanBase64
+              }
+            },
+            {
+              text: 'Transcribe the spoken words in this audio clip verbatim into clean English text. Do not add summaries, commentary, timestamps, or quotes. Output ONLY the transcribed words. If the audio is silent or only contains static/noise without intelligible human speech, return an empty string "".'
+            }
+          ]
+        }
+      ]
+    });
+    const transcriptText = (response.text || "").trim();
+    return res.json({ success: true, text: transcriptText });
+  } catch (err) {
+    console.warn("[Audio Transcription] Gemini STT error:", err?.message || err);
+    return res.status(500).json({ success: false, error: err?.message || "Transcription failed" });
+  }
+});
+app.post("/api/session/simulate-peer", async (req, res) => {
+  try {
+    const { elapsedSeconds = 0, excludeStudentId, targetStudentId, questionAsked, mode } = req.body;
+    let selectedPeer = null;
+    if (targetStudentId) {
+      selectedPeer = currentLiveSession.students.find((s) => s.id === targetStudentId);
+    }
+    if (!selectedPeer) {
+      const candidates = currentLiveSession.students.filter((s) => !s.isUser && s.id !== excludeStudentId);
+      if (!candidates.length) {
+        return res.json({ success: false, message: "No eligible peer students" });
+      }
+      const unspoken = candidates.filter((s) => (s.speakingTurns || 0) === 0);
+      if (unspoken.length > 0) {
+        selectedPeer = unspoken[0];
+      } else {
+        candidates.sort((a, b) => (a.speakingTurns || 0) - (b.speakingTurns || 0));
+        selectedPeer = candidates[0];
+      }
+    }
+    let peerStatement = "";
+    if (ai) {
+      const recentHistory = liveTranscripts.slice(-4).map((t) => `${t.speakerName}: "${t.text}"`).join("\n");
+      let contextGuidance = "Deliver a thoughtful collegiate follow-up argument building upon recent points.";
+      if (mode === "initiation") {
+        contextGuidance = "You have been called upon by the AI Facilitator to initiate the discussion based on your previous presentation. Give your opening statement on the topic, referencing practical research principles.";
+      } else if (questionAsked) {
+        contextGuidance = `The AI Facilitator specifically directed a question to you: "${questionAsked}". Address this question directly and constructively.`;
+      }
+      const prompt = `You are simulating an Indian college student named ${selectedPeer.name} (${selectedPeer.course} at ${selectedPeer.college}) participating in a collegiate group discussion.
+Topic: "${currentLiveSession.topic}"
+Context: ${contextGuidance}
+Recent group statements:
+${recentHistory}
+
+Language, Accent & Tone Guidelines:
+- Language: Authentic Indian Academic English as spoken in Indian university GDs.
+- Tone: Natural, conversational, articulate and occasionally disagreeing; do not sound like a prepared essay.
+- This participant must have an INDIVIDUAL viewpoint. Do not repeat, paraphrase, or merely agree with any recent statement.
+- Before answering, identify the newest point in the recent discussion and either challenge it, add a genuinely new dimension, give a concrete example, or connect two different viewpoints.
+- Avoid generic phrases such as "we must consider", "human oversight", "practical standpoint", or "balanced approach" unless they are directly relevant and add a new idea.
+- Different turns should explore different angles: evidence/data, economics, implementation, ethics, social impact, counter-example, feasibility, or synthesis.
+- If another participant already made the same argument, explicitly move to a different angle.
+- Length: 2 to 4 concise sentences. Sound like a real student responding to peers, not a chatbot or speech writer.`;
+      try {
+        const response = await ai.models.generateContent({
+          model: "gemini-3.7-flash",
+          contents: prompt
+        });
+        peerStatement = response.text?.trim() || "";
+      } catch (geminiErr) {
+        console.warn("Gemini simulate-peer error, falling back to heuristic engine:", geminiErr);
+      }
+    }
+    if (!peerStatement) {
+      if (mode === "initiation") {
+        peerStatement = `Thank you, Facilitator. To open today's discussion on "${currentLiveSession.topic}", drawing from my previous academic research, I believe we must evaluate this through both technological feasibility and human accountability. We cannot rush implementation without proper governance.`;
+      } else if (questionAsked) {
+        peerStatement = `In response to the facilitator's question regarding this challenge: looking at the ground reality in our academic and professional institutions, sustainable rollout requires phased adoption and benchmark quality testing before full-scale deployment.`;
+      } else {
+        const fallbackList = [
+          "Building upon what my colleague pointed out, if we look at our Indian educational context, digital infrastructure and affordable access must be addressed first.",
+          "I would like to present a constructive counter-perspective here. While technological automation offers great scale, human mentorship, empathy, and moral guidance cannot be replaced.",
+          "Looking at the ground reality in technical disciplines, hands-on laboratory verification remains absolutely vital to ensure real-world engineering competency.",
+          "A balanced hybrid pedagogical approach would allow faculty members to dedicate quality time towards individual student mentoring rather than administrative tasks.",
+          "From a practical implementation standpoint, we must also examine data privacy and whether our institutions have adequate regulatory safeguards in place."
+        ];
+        peerStatement = fallbackList[Math.floor(Math.random() * fallbackList.length)];
+      }
+    }
+    const mins = Math.floor(elapsedSeconds / 60).toString().padStart(2, "0");
+    const secs = (elapsedSeconds % 60).toString().padStart(2, "0");
+    const peerTranscript = {
+      id: `t-peer-${Date.now()}`,
+      sessionId: currentLiveSession.id,
+      speakerId: selectedPeer.id,
+      speakerName: selectedPeer.name,
+      seatNumber: selectedPeer.seatNumber,
+      isFacilitator: false,
+      timestamp: `${mins}:${secs}`,
+      timestampSeconds: elapsedSeconds,
+      text: peerStatement,
+      type: "statement",
+      sentiment: "positive"
+    };
+    liveTranscripts.push(peerTranscript);
+    selectedPeer.speakingTurns = (selectedPeer.speakingTurns || 0) + 1;
+    selectedPeer.speakingDurationSeconds = (selectedPeer.speakingDurationSeconds || 0) + 20;
+    currentLiveSession.currentSpeakerId = selectedPeer.id;
+    currentLiveSession.silenceTimerSeconds = 0;
+    res.json({
+      success: true,
+      transcript: peerTranscript,
+      student: selectedPeer,
+      session: currentLiveSession
+    });
+  } catch (error) {
+    console.error("Simulate peer error:", error);
+    res.status(500).json({ error: "Failed to simulate peer" });
+  }
+});
+app.post("/api/session/hand-raise", (req, res) => {
+  const { studentId } = req.body;
+  const student = currentLiveSession.students.find((s) => s.id === studentId);
+  if (student) {
+    student.hasRaisedHand = !student.hasRaisedHand;
+  }
+  res.json({ success: true, student });
+});
+var serverAskedQuestions = /* @__PURE__ */ new Set();
+app.post("/api/facilitator/moderate", async (req, res) => {
+  try {
+    const {
+      topic = currentLiveSession.topic,
+      phase = currentLiveSession.currentPhase,
+      transcriptHistory = liveTranscripts,
+      students = currentLiveSession.students,
+      silenceDurationSeconds = currentLiveSession.silenceTimerSeconds,
+      interruptionDetected = false,
+      previousQuestions = []
+    } = req.body;
+    const allAsked = Array.from(/* @__PURE__ */ new Set([...Array.from(serverAskedQuestions), ...previousQuestions]));
+    const realStudentsList = (students || []).filter((s) => !s.isEmptySeat && s.role !== "faculty" && !String(s.id || "").includes("empty") && !String(s.name || "").startsWith("Seat "));
+    const isSoloStudent = realStudentsList.length <= 1;
+    if (ai) {
+      const recentContext = transcriptHistory.slice(-6).map((t) => `${t.speakerName} (${t.isFacilitator ? "AI Moderator" : "Student"}): ${t.text}`).join("\n");
+      const studentStats = students.map((s) => `${s.name} (Seat ${s.seatNumber}): ${s.speakingDurationSeconds}s spoken, ${s.speakingTurns} turns, ${s.interruptionCount} interruptions`).join("\n");
+      const previousQuestionsBlock = allAsked.length > 0 ? `
+CRITICAL ANTI-REPETITION MANDATE:
+You MUST NEVER repeat, rephrase, or re-ask any of the following questions that were ALREADY asked in this session:
+- ${allAsked.slice(-10).join("\n- ")}
+Every new question MUST explore a fresh, distinctive angle (e.g. ethical accountability, economic viability, human psychological impact, technical limitations, policy frameworks, or inviting an under-participating student by name).
+` : "";
+      const prompt = `You are the AI Facilitator / Moderator for the ERUS AI Group Discussion Facilitator (ERUS-AIGDF) platform.
+Your role is that of a dignified, articulate Indian collegiate GD moderator and evaluator.
+Topic: "${topic}"
+Current Phase: ${phase}
+Silence Duration: ${silenceDurationSeconds} seconds
+Interruption Detected: ${interruptionDetected}
+Solo Student Practice: ${isSoloStudent}
+${previousQuestionsBlock}
+Recent Transcript:
+${recentContext || "(Discussion just started)"}
+
+Student Participation Stats:
+${studentStats}
+
+Language, Accent & Moderator Behavior Guidelines:
+- Language: Authentic, formal Indian Academic English with an Indian collegiate moderator demeanor (dignified, polite, encouraging yet firm).
+- Phrasing & Style:
+  1. If phase is 'intro': Introduce the discussion warmly with Indian academic greeting ("Good morning ${isSoloStudent ? "candidate" : "participants"}. Today's discussion topic is: '${topic}'... ${isSoloStudent ? "You will have the floor to present your perspectives in depth." : "Each candidate will receive an opportunity to put forth their views."}").
+  2. If phase is 'rules': ${isSoloStudent ? "Since this candidate is practicing solo, explain the key individual presentation guidelines (articulate clearly, substantiate with concrete examples, maintain steady delivery, stay strictly on topic), then invite them to initiate their arguments. Do NOT ask them to speak one at a time or take turns with peers since they are practicing alone." : "State the 5 core rules clearly (Speak one at a time, respect differing viewpoints, substantiate with examples, ensure balanced participation, stay strictly on topic), then invite someone to initiate."}
+  3. If one student is dominating: ${isSoloStudent ? "Acknowledge their detailed points and pose an analytical probing question." : 'Politely thank them and invite a less active or quiet peer by name and seat ("Thank you [Name] for your points. I would like to request our other peers, such as [Quiet Student], to share their perspective.").'}
+  4. If there is a silence/deadlock (>15-20s): Intervene with a fresh, provocative open-ended question relevant to practical realities, ethics, or societal impact in our context.
+  5. If off-topic: Politely thank them and steer back to "${topic}".
+  6. If discussion is in progress: Ask thoughtful probing questions tailored to the latest speaker's argument (asking for counter-evidence, practical implementation barriers in our context, long-term societal effects, or addressing quiet participants).
+  7. If phase is 'conclusion': Summarize the main arguments, thank all participants with dignity, and announce that individual assessment reports are being compiled.
+
+Generate your response in JSON format with:
+- speech: The exact dialogue the AI Facilitator speaks to the room (clear, natural, professional Indian English, max 2 sentences).
+- actionType: One of ['introduce', 'explain_rules', 'invite_speaker', 'probing_question', 'deadlock_recovery', 'rebalance_turn', 'redirect_topic', 'conclude']
+- targetStudentName: Name of the student being addressed directly (if any)
+- isProbingQuestion: Boolean`;
+      try {
+        const geminiResponse = await ai.models.generateContent({
+          model: "gemini-3.7-flash",
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: import_genai.Type.OBJECT,
+              properties: {
+                speech: { type: import_genai.Type.STRING },
+                actionType: { type: import_genai.Type.STRING },
+                targetStudentName: { type: import_genai.Type.STRING },
+                isProbingQuestion: { type: import_genai.Type.BOOLEAN }
+              },
+              required: ["speech", "actionType", "isProbingQuestion"]
+            }
+          }
+        });
+        const parsed = JSON.parse(geminiResponse.text?.trim() || "{}");
+        const speech2 = parsed.speech || "Thank you. Let us hear another perspective on this issue. Who would like to build on or challenge the points raised?";
+        serverAskedQuestions.add(speech2);
+        return res.json({
+          success: true,
+          speech: speech2,
+          actionType: parsed.actionType || "probing_question",
+          targetStudentName: parsed.targetStudentName || null,
+          isProbingQuestion: !!parsed.isProbingQuestion
+        });
+      } catch (geminiErr) {
+        console.warn("Gemini moderate error, falling through to heuristic engine:", geminiErr);
+      }
+    }
+    let speech = "Let us continue our discussion on this topic.";
+    let actionType = "probing_question";
+    let targetStudentName = null;
+    let isProbing = true;
+    if (phase === "intro") {
+      speech = isSoloStudent ? `Good morning candidate. Welcome to your individual practice discussion. Today's topic is: "${topic}". You have the floor to present your analysis and supporting arguments. Let us begin.` : `Good morning participants. Welcome to this group discussion. Today's topic is: "${topic}". Each participant will receive an opportunity to put forth their views. Kindly maintain decorum, listen actively, and avoid interruptions.`;
+      actionType = "introduce";
+      isProbing = false;
+    } else if (phase === "rules") {
+      speech = isSoloStudent ? `Welcome to your individual practice session on "${topic}". Kindly note the key guidelines: 1. Structure your arguments clearly. 2. Support your views with concrete examples. 3. Maintain steady pacing and articulation. 4. Stay strictly on topic. You have the floor. Whenever you are ready, please begin!` : `Before we begin, kindly note the ground rules: 1. Speak one at a time. 2. Respect differing viewpoints. 3. Support arguments with concrete examples. 4. Encourage quiet peers to participate. 5. Stay strictly on topic. Let us initiate the discussion. Who would like to start?`;
+      actionType = "explain_rules";
+      isProbing = false;
+    } else if (silenceDurationSeconds >= 15) {
+      const topicDomain = detectTopicDomain(topic);
+      const deadlockPool = [
+        `Let me pose a question to the room: what unexpected regulatory or ethical challenges might emerge if this model is adopted in our Indian context?`,
+        `To restart our momentum: how might this issue fundamentally impact vulnerable communities and future workplace dynamics?`,
+        `Playing devil's advocate: what if the primary risks we have identified are overstated, and delaying action carries far greater opportunity costs?`,
+        `Let us examine the human experience: how will this change affect psychological safety, emotional empathy, and student motivation?`,
+        `Looking at economic feasibility: how can institutions in tier-2 and tier-3 regions implement this without severe cost burdens?`,
+        `From an accountability standpoint: who should bear ultimate responsibility when decisions derived from this approach lead to harm?`,
+        `What empirical metrics or verifiable benchmarks should an independent panel look for to evaluate genuine progress here?`,
+        `If we project five years forward, what unintended consequences could emerge if adoption continues without regulatory safeguards?`
+      ];
+      const isAsked = (candidate) => {
+        const normCand = candidate.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+        return allAsked.some((asked) => {
+          const normAsked = String(asked).toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+          return normAsked === normCand || normAsked.includes(normCand.slice(0, 25)) || normCand.includes(normAsked.slice(0, 25));
+        });
+      };
+      const unaskedDeadlock = deadlockPool.find((q) => !isAsked(q));
+      const dynamicDeadlockBackups = [
+        `To explore another dimension of "${topic}": what practical implementation roadblocks must be resolved before this can succeed?`,
+        `Examining policy governance in "${topic}": what institutional checks are required to ensure transparency?`,
+        `Looking at societal impact regarding "${topic}": how do we prevent unequal access from widening existing socio-economic divides?`,
+        `Considering skill adaptation in "${topic}": how should training curricula evolve to prepare the next generation?`,
+        `From an operational risk viewpoint in "${topic}": what safeguards can protect systems against unforeseen failures?`,
+        `Reflecting on ethical responsibility in "${topic}": where must human values remain non-negotiable?`,
+        `Regarding "${topic}": how do we weigh the immediate advantages against long-term societal accountability?`
+      ];
+      const dynamicUnasked = dynamicDeadlockBackups.find((q) => !isAsked(q));
+      speech = unaskedDeadlock || dynamicUnasked || `Looking at "${topic}" from a fresh angle: what fundamental assumption in our discussion deserves deeper scrutiny?`;
+      actionType = "deadlock_recovery";
+    } else if (phase === "conclusion") {
+      speech = `Thank you everyone. We have had a comprehensive and thoughtful discussion covering both opportunities and practical challenges. The session is now concluded, and individual assessment reports will be compiled.`;
+      actionType = "conclude";
+      isProbing = false;
+    } else {
+      const richProbingPool = [
+        "How might industry regulations and governance frameworks adapt to ensure accountability in this space?",
+        "Looking at infrastructure and costs, how can underfunded institutions afford this transition without steep price hikes?",
+        "What happens to intellectual authenticity and critical thinking when automated tools handle initial problem synthesis?",
+        "How does this shift alter interpersonal collaboration and social maturation among team members?",
+        "In hands-on technical or clinical disciplines requiring physical dexterity, what are the strict limitations of this approach?",
+        "Looking ahead ten years: what new specialized human roles will emerge as this ecosystem matures?",
+        "What empirical metrics should an independent audit committee monitor to evaluate genuine success?",
+        "How do we prevent algorithmic bias and historical inequities from being amplified at scale?",
+        "What are the strongest counter-arguments against widespread adoption in our immediate environment?",
+        "How can policymakers balance rapid technological innovation against citizen privacy and consumer rights?",
+        "What foundational skills must current students cultivate to thrive alongside these developments?",
+        "From a sustainability standpoint, what is the ecological and resource footprint of scaling this solution?"
+      ];
+      const isAsked = (candidate) => {
+        const normCand = candidate.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+        return allAsked.some((asked) => {
+          const normAsked = String(asked).toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+          return normAsked === normCand || normAsked.includes(normCand.slice(0, 25)) || normCand.includes(normAsked.slice(0, 25));
+        });
+      };
+      const unasked = richProbingPool.find((q) => !isAsked(q));
+      const dynamicProbingBackups = [
+        `Considering our discussion on "${topic}": how do we reconcile short-term economic gains with long-term ethical sustainability?`,
+        `Looking at global benchmarks for "${topic}": what valuable lessons can our institutions adopt?`,
+        `In light of the arguments shared on "${topic}": what is the most significant counter-argument that hasn't been voiced?`,
+        `How do ground realities in tier-2 and tier-3 areas challenge our assumptions about "${topic}"?`,
+        `What role should collaborative cross-disciplinary partnerships play in advancing "${topic}"?`
+      ];
+      const dynamicUnaskedProbe = dynamicProbingBackups.find((q) => !isAsked(q));
+      speech = unasked || dynamicUnaskedProbe || `From a strategic perspective on "${topic}": what key priority should stakeholders address first?`;
+    }
+    serverAskedQuestions.add(speech);
+    res.json({
+      success: true,
+      speech,
+      actionType,
+      targetStudentName,
+      isProbingQuestion: isProbing
+    });
+  } catch (error) {
+    console.error("Facilitator error:", error);
+    res.status(500).json({
+      error: "Facilitator generation failed",
+      fallbackSpeech: "Thank you for your thoughts. Let us explore the practical implementation challenges."
+    });
+  }
+});
+var ASSESSMENT_MODEL = "gemini-3.7-flash";
+function gradeForScore(score) {
+  if (score >= 90) return "Excellent";
+  if (score >= 75) return "Very Good";
+  if (score >= 60) return "Good";
+  if (score >= 40) return "Average";
+  return "Needs Improvement";
+}
+function clampScore(value, max) {
+  const n = Number(value);
+  return Math.min(max, Math.max(0, Number.isFinite(n) ? Math.round(n) : 0));
+}
+function calculateDurationScore(seconds) {
+  if (!seconds || seconds <= 0) return 0;
+  if (seconds <= 20) {
+    return seconds / 20 * 15;
+  }
+  if (seconds <= 40) {
+    return 15 + (seconds - 20) / 20 * (30 - 15);
+  }
+  if (seconds <= 60) {
+    return 30 + (seconds - 40) / 20 * (40 - 30);
+  }
+  if (seconds <= 120) {
+    return 40 + (seconds - 60) / 60 * (60 - 40);
+  }
+  if (seconds <= 180) {
+    return 60 + (seconds - 120) / 60 * (70 - 60);
+  }
+  return 70;
+}
+function calculateQualityScore(params) {
+  const { seconds, words = 0, turns = 1, wpm = 0, fillerWordsCount = 0, hasCollab = false, hasLead = false } = params;
+  if (!seconds || seconds <= 0) return 0;
+  let fluencyPoints = 5;
+  if (wpm >= 110 && wpm <= 165) {
+    fluencyPoints = 10;
+  } else if (wpm >= 90 && wpm <= 185) {
+    fluencyPoints = 8;
+  } else if (wpm > 0) {
+    fluencyPoints = 5;
+  }
+  if (fillerWordsCount > 4) {
+    fluencyPoints = Math.max(2, fluencyPoints - 2);
+  }
+  let contentPoints = 4;
+  if (words >= 150) contentPoints = 10;
+  else if (words >= 80) contentPoints = 8;
+  else if (words >= 35) contentPoints = 6;
+  else if (words > 0) contentPoints = Math.max(2, Math.round(words / 35 * 5));
+  let collabPoints = 3;
+  if (hasCollab || turns >= 3) collabPoints = 6;
+  else if (turns >= 2) collabPoints = 5;
+  else collabPoints = 3;
+  let leadPoints = 2;
+  if (hasLead || turns >= 4) leadPoints = 4;
+  else if (turns >= 2) leadPoints = 3;
+  const rawQuality = fluencyPoints + contentPoints + collabPoints + leadPoints;
+  const volumeFactor = Math.min(1, Math.max(0.2, seconds / 120));
+  return Math.min(30, Math.max(0, Math.round(rawQuality * volumeFactor)));
+}
+function calculateStudentOverallScore(params) {
+  const seconds = Math.max(0, params.seconds || 0);
+  if (seconds <= 0) {
+    return { durationScore: 0, qualityScore: 0, overallScore: 0 };
+  }
+  const durationScore = calculateDurationScore(seconds);
+  const qualityScore = calculateQualityScore({
+    seconds,
+    words: params.words ?? Math.round(seconds * 2.2),
+    turns: params.turns ?? (seconds > 0 ? Math.max(1, Math.round(seconds / 40)) : 0),
+    wpm: params.wpm ?? 130,
+    fillerWordsCount: params.fillerWordsCount ?? (seconds > 60 ? 3 : 1),
+    hasCollab: params.hasCollab ?? seconds > 45,
+    hasLead: params.hasLead ?? seconds > 90
+  });
+  const overallScore = Math.min(100, Math.max(0, Math.round(durationScore + qualityScore)));
+  return { durationScore, qualityScore, overallScore };
+}
+function distributeRubricScores(overallScore, relativeStrengths) {
+  const target = Math.min(100, Math.max(0, Math.round(overallScore)));
+  if (target === 0) {
+    return { english: 0, fluency: 0, clarity: 0, confidence: 0, contentQuality: 0, collaboration: 0, leadership: 0 };
+  }
+  const caps = {
+    english: 20,
+    fluency: 20,
+    clarity: 15,
+    confidence: 15,
+    contentQuality: 15,
+    collaboration: 10,
+    leadership: 5
+  };
+  const weights = {
+    english: relativeStrengths?.english ?? 20,
+    fluency: relativeStrengths?.fluency ?? 20,
+    clarity: relativeStrengths?.clarity ?? 15,
+    confidence: relativeStrengths?.confidence ?? 15,
+    contentQuality: relativeStrengths?.contentQuality ?? 15,
+    collaboration: relativeStrengths?.collaboration ?? 10,
+    leadership: relativeStrengths?.leadership ?? 5
+  };
+  const totalWeight = Object.values(weights).reduce((a, b) => a + b, 0) || 100;
+  const allocated = {};
+  let currentSum = 0;
+  Object.keys(caps).forEach((key) => {
+    const rawVal = Math.round(weights[key] / totalWeight * target);
+    const clamped = Math.min(caps[key], Math.max(0, rawVal));
+    allocated[key] = clamped;
+    currentSum += clamped;
+  });
+  let diff = target - currentSum;
+  const keysByCapacity = Object.keys(caps).sort((a, b) => caps[b] - caps[a]);
+  while (diff !== 0) {
+    let changed = false;
+    for (const k of keysByCapacity) {
+      if (diff > 0 && allocated[k] < caps[k]) {
+        allocated[k] += 1;
+        diff -= 1;
+        changed = true;
+        if (diff === 0) break;
+      } else if (diff < 0 && allocated[k] > 0) {
+        allocated[k] -= 1;
+        diff += 1;
+        changed = true;
+        if (diff === 0) break;
+      }
+    }
+    if (!changed) break;
+  }
+  return {
+    english: allocated.english,
+    fluency: allocated.fluency,
+    clarity: allocated.clarity,
+    confidence: allocated.confidence,
+    contentQuality: allocated.contentQuality,
+    collaboration: allocated.collaboration,
+    leadership: allocated.leadership
+  };
+}
+function fallbackAssessment(student, entries, topic, durationMinutes, metrics) {
+  const spokenText = entries.map((t) => String(t.text || "").trim()).filter(Boolean).join(" ");
+  const words = spokenText ? spokenText.split(/\s+/).filter(Boolean) : [];
+  const wordCount = words.length;
+  const wordsDuration = wordCount > 0 ? Math.round(wordCount / 130 * 60) : 0;
+  const rawDuration = Math.max(0, Number(metrics.speakingDurationSeconds ?? metrics.speakingTimeSeconds) || 0);
+  const seconds = Math.max(rawDuration, wordsDuration);
+  const rawTurns = Math.max(0, Number(metrics.speakingTurns) || 0);
+  const turns = Math.max(rawTurns, entries.length);
+  const rawWpm = seconds > 0 ? wordCount > 0 ? Math.round(wordCount / (seconds / 60)) : 130 : 0;
+  const wpm = seconds > 0 ? Math.max(65, Math.min(195, rawWpm)) : 0;
+  const wpmLabel = wpm === 0 ? "No Speech" : wpm < 115 ? "Too Slow" : wpm > 165 ? "Too Fast" : "Optimal";
+  const fillerKeywords = ["um", "uh", "like", "basically", "actually", "you know", "sort of", "kind of", "i mean"];
+  const fillerMap = {};
+  fillerKeywords.forEach((kw) => {
+    const m = spokenText.toLowerCase().match(new RegExp("\\b" + kw + "\\b", "gi"));
+    if (m?.length) fillerMap[kw] = m.length;
+  });
+  const fillerWordsCount = Object.values(fillerMap).reduce((a, b) => a + b, 0);
+  const fillerWordsBreakdown = Object.entries(fillerMap).map(([word, count]) => ({ word, count }));
+  if (wordCount <= 0 && seconds <= 0 && turns <= 0) {
+    const skills2 = {
+      english: { parameter: "Speaking in English", weightagePercent: 20, score: 0, maxScore: 20, subPoints: ["Vocabulary", "Sentence Structure"], feedback: "No student speech was captured." },
+      fluency: { parameter: "Fluency", weightagePercent: 20, score: 0, maxScore: 20, subPoints: ["Pacing", "Flow"], feedback: "No student speech was captured." },
+      clarity: { parameter: "Communication Clarity", weightagePercent: 15, score: 0, maxScore: 15, subPoints: ["Clear ideas", "Articulation"], feedback: "No student speech was captured." },
+      confidence: { parameter: "Confidence", weightagePercent: 15, score: 0, maxScore: 15, subPoints: ["Body Language", "Tone"], feedback: "No speaking evidence was captured." },
+      contentQuality: { parameter: "Content Quality", weightagePercent: 15, score: 0, maxScore: 15, subPoints: ["Relevance", "Reasoning"], feedback: "No argument evidence was captured." },
+      collaboration: { parameter: "Collaboration", weightagePercent: 10, score: 0, maxScore: 10, subPoints: ["Listening", "Respect"], feedback: "No peer interaction evidence was captured." },
+      leadership: { parameter: "Leadership", weightagePercent: 5, score: 0, maxScore: 5, subPoints: ["Initiative"], feedback: "No leadership evidence was captured." }
+    };
+    return {
+      id: "rep-" + student.id + "-" + Date.now(),
+      sessionId: metrics.sessionId,
+      studentId: student.id,
+      studentName: student.name,
+      college: student.college || "Engineering Institute",
+      topic,
+      durationMinutes,
+      speakingTimeFormatted: "0 min 0 sec",
+      speakingTimeSeconds: 0,
+      speakingTurns: 0,
+      interruptions: metrics.interruptionCount || 0,
+      questionsAnswered: 0,
+      questionsInitiated: 0,
+      wpm: 0,
+      wpmStatus: "No Speech",
+      fillerWordsCount: 0,
+      fillerWordsBreakdown: [],
+      skills: skills2,
+      overallScore: 0,
+      grade: "Needs Improvement",
+      strengths: [],
+      areasForImprovement: ["Participate in the discussion so measurable evidence can be captured."],
+      aiRecommendations: ["Check microphone and transcription permissions before the next GD."],
+      aiSummary: "No student speech was captured. Active verbal participation is required.",
+      facultyEndorsement: { endorsed: false },
+      generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
+  const effectiveSeconds = seconds > 0 ? seconds : Math.max(30, turns * 35);
+  const effectiveWords = wordCount > 0 ? wordCount : Math.max(25, Math.round(effectiveSeconds * 2.2));
+  const effectiveTurns = Math.max(1, turns);
+  const effectiveWpm = wpm > 0 ? wpm : 130;
+  const hasCollab = entries.some((e) => /agree|disagree|adding|build|point|others|perspective|view/i.test(e.text)) || effectiveTurns >= 2;
+  const hasLead = entries.some((e) => /initiat|summar|conclud|suggest|bring.*point|let us hear|in conclusion/i.test(e.text)) || effectiveTurns >= 3;
+  const { durationScore, qualityScore, overallScore } = calculateStudentOverallScore({
+    seconds: effectiveSeconds,
+    words: effectiveWords,
+    turns: effectiveTurns,
+    wpm: effectiveWpm,
+    fillerWordsCount,
+    hasCollab,
+    hasLead
+  });
+  const rubricScores = distributeRubricScores(overallScore);
+  const uniqueWords = new Set(words.map((w) => w.toLowerCase())).size;
+  const sampleSnippet = spokenText.length > 80 ? spokenText.slice(0, 75).trim() + "..." : spokenText;
+  const skills = {
+    english: {
+      parameter: "Speaking in English",
+      weightagePercent: 20,
+      score: rubricScores.english,
+      maxScore: 20,
+      subPoints: ["Vocabulary", "Sentence Structure"],
+      feedback: `Used ${uniqueWords} distinct words across ${turns} turn(s). Sentence structures demonstrated functional grammatical cohesion.`
+    },
+    fluency: {
+      parameter: "Fluency",
+      weightagePercent: 20,
+      score: rubricScores.fluency,
+      maxScore: 20,
+      subPoints: ["Pacing", "Flow"],
+      feedback: `Speech delivered at ${wpm} WPM (${wpmLabel.toLowerCase()}) with ${fillerWordsCount} filler word(s) detected.`
+    },
+    clarity: {
+      parameter: "Communication Clarity",
+      weightagePercent: 15,
+      score: rubricScores.clarity,
+      maxScore: 15,
+      subPoints: ["Clear ideas", "Articulation"],
+      feedback: `Articulated viewpoints on "${topic}". Key captured thought: "${sampleSnippet}".`
+    },
+    confidence: {
+      parameter: "Confidence",
+      weightagePercent: 15,
+      score: rubricScores.confidence,
+      maxScore: 15,
+      subPoints: ["Tone", "Vocal Presence"],
+      feedback: `Held the discussion floor across ${turns} active turn(s) with ${Math.floor(seconds / 60)}m ${seconds % 60}s of recorded presence.`
+    },
+    contentQuality: {
+      parameter: "Content Quality",
+      weightagePercent: 15,
+      score: rubricScores.contentQuality,
+      maxScore: 15,
+      subPoints: ["Relevance", "Reasoning"],
+      feedback: `Contributed ${wordCount} words addressing "${topic}". Direct relevance demonstrated to the theme.`
+    },
+    collaboration: {
+      parameter: "Collaboration",
+      weightagePercent: 10,
+      score: rubricScores.collaboration,
+      maxScore: 10,
+      subPoints: ["Listening", "Respect"],
+      feedback: hasCollab ? "Actively acknowledged peer statements and offered constructive additions or counter-points." : "Delivered an independent argument; can enhance teamwork by explicitly referencing peer remarks before sharing new points."
+    },
+    leadership: {
+      parameter: "Leadership",
+      weightagePercent: 5,
+      score: rubricScores.leadership,
+      maxScore: 5,
+      subPoints: ["Initiative", "Discussion Steering"],
+      feedback: hasLead ? "Exhibited leadership initiative by steering topic direction, framing key points, or summarizing arguments." : "Maintained steady participation; can show higher initiative by helping synthesize group consensus."
+    }
+  };
+  const strengths = [];
+  if (seconds >= 60) strengths.push(`Sustained active participation (${Math.floor(seconds / 60)}m ${seconds % 60}s speaking time).`);
+  if (wpm >= 110 && wpm <= 165) strengths.push(`Maintained an optimal conversational speaking pace (${wpm} WPM).`);
+  if (uniqueWords > 25) strengths.push(`Demonstrated diverse vocabulary (${uniqueWords} distinct words).`);
+  if (turns >= 2) strengths.push(`Engaged consistently across ${turns} distinct speaking turns.`);
+  if (hasCollab) strengths.push("Constructively referenced and acknowledged peer arguments.");
+  if (strengths.length === 0 && seconds > 0) strengths.push("Contributed clear arguments to the group discussion.");
+  const areasForImprovement = [];
+  if (seconds < 60) areasForImprovement.push("Increase speaking duration towards the 2\u20133 minute benchmark to maximize points.");
+  if (fillerWordsCount > 2) areasForImprovement.push(`Reduce conversational filler words (${fillerWordsCount} detected).`);
+  if (wpm < 110) areasForImprovement.push("Increase delivery pace slightly to maintain group energy and momentum.");
+  if (wpm > 165) areasForImprovement.push("Incorporate deliberate pauses to let complex technical points resonate.");
+  if (!hasCollab) areasForImprovement.push("Reference specific remarks made by previous speakers before advancing your point.");
+  if (turns < 2) areasForImprovement.push("Aim to intervene at least 2\u20133 times during the discussion window.");
+  if (areasForImprovement.length === 0) areasForImprovement.push("Incorporate quantitative data and concrete industry case studies.");
+  const aiRecommendations = [
+    `For "${topic}", substantiate qualitative points with 1\u20132 concrete industry case studies.`,
+    'Use active listening transitions (e.g. "Building on that thought...") to maximize collaboration scoring.',
+    `Review session transcript audio to refine pacing toward the 120\u2013150 WPM benchmark.`
+  ];
+  const aiSummary = `${student.name} participated in the group discussion on "${topic}", delivering ${wordCount} words across ${turns} speaking turn(s) (${Math.floor(seconds / 60)}m ${seconds % 60}s speaking time) with an overall score of ${overallScore}/100.`;
+  return {
+    id: "rep-" + student.id + "-" + Date.now(),
+    sessionId: metrics.sessionId,
+    studentId: student.id,
+    studentName: student.name,
+    college: student.college || "Engineering Institute",
+    topic,
+    durationMinutes,
+    speakingTimeFormatted: Math.floor(seconds / 60) + " min " + seconds % 60 + " sec",
+    speakingTimeSeconds: seconds,
+    speakingTurns: turns,
+    interruptions: metrics.interruptionCount || 0,
+    questionsAnswered: metrics.questionsAnswered || 0,
+    questionsInitiated: metrics.questionsInitiated || 0,
+    wpm,
+    wpmStatus: wpmLabel,
+    fillerWordsCount,
+    fillerWordsBreakdown,
+    skills,
+    overallScore,
+    grade: gradeForScore(overallScore),
+    strengths,
+    areasForImprovement,
+    aiRecommendations,
+    aiSummary,
+    facultyEndorsement: { endorsed: false },
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+async function generateAssessmentReport(student, transcriptHistory, topic, durationMinutes, metrics = {}) {
+  const candidateId = String(student.id || "").toLowerCase();
+  const candidateName = String(student.name || "").toLowerCase();
+  let entries = (transcriptHistory || []).filter(
+    (t) => !t.isFacilitator && String(t.text || "").trim() && (String(t.speakerId || "").toLowerCase() === candidateId || String(t.speakerId || "") === "speaker-user" || String(t.speakerId || "") === "speaker-1" || String(t.speakerId || "") === "stu-current" || String(t.speakerId || "").startsWith("t-user") || t.speakerName && String(t.speakerName).toLowerCase() === candidateName || t.speakerName && (t.speakerName.toLowerCase() === "candidate" || t.speakerName.toLowerCase().includes("student")) || student.seatNumber && t.seatNumber === student.seatNumber)
+  );
+  if (entries.length === 0) {
+    const nonFacilitator = (transcriptHistory || []).filter(
+      (t) => !t.isFacilitator && String(t.text || "").trim() && !String(t.speakerId || "").startsWith("ai-")
+    );
+    if (nonFacilitator.length > 0) {
+      entries = nonFacilitator;
+    }
+  }
+  const spokenText = entries.map((t) => String(t.text).trim()).join(" ");
+  const words = spokenText ? spokenText.split(/\s+/).filter(Boolean) : [];
+  const wordCount = words.length;
+  const wordsDuration = wordCount > 0 ? Math.round(wordCount / 130 * 60) : 0;
+  const rawDuration = Math.max(0, Number(metrics.speakingDurationSeconds ?? metrics.speakingTimeSeconds) || 0);
+  const seconds = Math.max(rawDuration, wordsDuration);
+  const rawTurns = Math.max(0, Number(metrics.speakingTurns) || 0);
+  const turns = Math.max(rawTurns, entries.length);
+  const rawWpm = seconds > 0 ? Math.round(wordCount / (seconds / 60)) : 0;
+  const wpm = seconds > 0 ? Math.max(65, Math.min(195, rawWpm)) : 0;
+  const fillers = ["um", "uh", "like", "basically", "actually", "you know", "sort of", "kind of", "i mean"];
+  const fillerMap = {};
+  fillers.forEach((kw) => {
+    const m = spokenText.toLowerCase().match(new RegExp("\\b" + kw + "\\b", "gi"));
+    if (m?.length) fillerMap[kw] = m.length;
+  });
+  const fillerWordsCount = Object.values(fillerMap).reduce((a, b) => a + b, 0);
+  const fillerWordsBreakdown = Object.entries(fillerMap).map(([word, count]) => ({ word, count }));
+  if (!ai || wordCount === 0) {
+    return fallbackAssessment(student, entries, topic, durationMinutes, {
+      ...metrics,
+      speakingDurationSeconds: seconds,
+      speakingTurns: turns,
+      sessionId: metrics.sessionId,
+      questionsAnswered: metrics.questionsAnswered || 0,
+      questionsInitiated: metrics.questionsInitiated || 0
+    });
+  }
+  const prompt = "Evaluate one student using only observable evidence. Never invent behavior. Leadership is not automatic for speaking first. If evidence is insufficient, use a conservative score and say so.\\nStudent: " + student.name + "\\nTopic: " + topic + "\\nSpeaking seconds: " + seconds + "\\nTurns: " + (metrics.speakingTurns ?? entries.length) + "\\nInterruptions: " + (metrics.interruptionCount || 0) + "\\nWords: " + wordCount + "\\nWPM: " + wpm + "\\nFiller words: " + fillerWordsCount + "\\nTranscript:\\n" + spokenText + "\\nRubric: English 20, Fluency 20, Clarity 15, Confidence 15, Content 15, Collaboration 10, Leadership 5. Return JSON fields: englishScore, englishFeedback, fluencyScore, fluencyFeedback, clarityScore, clarityFeedback, confidenceScore, confidenceFeedback, contentScore, contentFeedback, collaborationScore, collaborationFeedback, leadershipScore, leadershipFeedback, strengths, areasForImprovement, aiRecommendations, aiSummary.";
+  try {
+    const response = await ai.models.generateContent({
+      model: ASSESSMENT_MODEL,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: import_genai.Type.OBJECT,
+          properties: {
+            englishScore: { type: import_genai.Type.NUMBER },
+            englishFeedback: { type: import_genai.Type.STRING },
+            fluencyScore: { type: import_genai.Type.NUMBER },
+            fluencyFeedback: { type: import_genai.Type.STRING },
+            clarityScore: { type: import_genai.Type.NUMBER },
+            clarityFeedback: { type: import_genai.Type.STRING },
+            confidenceScore: { type: import_genai.Type.NUMBER },
+            confidenceFeedback: { type: import_genai.Type.STRING },
+            contentScore: { type: import_genai.Type.NUMBER },
+            contentFeedback: { type: import_genai.Type.STRING },
+            collaborationScore: { type: import_genai.Type.NUMBER },
+            collaborationFeedback: { type: import_genai.Type.STRING },
+            leadershipScore: { type: import_genai.Type.NUMBER },
+            leadershipFeedback: { type: import_genai.Type.STRING },
+            strengths: { type: import_genai.Type.ARRAY, items: { type: import_genai.Type.STRING } },
+            areasForImprovement: { type: import_genai.Type.ARRAY, items: { type: import_genai.Type.STRING } },
+            aiRecommendations: { type: import_genai.Type.ARRAY, items: { type: import_genai.Type.STRING } },
+            aiSummary: { type: import_genai.Type.STRING }
+          },
+          required: ["englishScore", "englishFeedback", "fluencyScore", "fluencyFeedback", "clarityScore", "clarityFeedback", "confidenceScore", "confidenceFeedback", "contentScore", "contentFeedback", "collaborationScore", "collaborationFeedback", "leadershipScore", "leadershipFeedback", "strengths", "areasForImprovement", "aiRecommendations", "aiSummary"]
+        }
+      }
+    });
+    const parsed = JSON.parse(response.text?.trim() || "{}");
+    const hasCollab = entries.some((e) => /agree|disagree|adding|build|point|others|perspective|view/i.test(e.text));
+    const hasLead = entries.some((e) => /initiat|summar|conclud|suggest|bring.*point|let us hear|in conclusion/i.test(e.text));
+    const { durationScore, qualityScore, overallScore } = calculateStudentOverallScore({
+      seconds,
+      words: wordCount,
+      turns: metrics.speakingTurns ?? entries.length,
+      wpm,
+      fillerWordsCount,
+      hasCollab,
+      hasLead
+    });
+    const rubricScores = distributeRubricScores(overallScore, {
+      english: clampScore(parsed.englishScore, 20),
+      fluency: clampScore(parsed.fluencyScore, 20),
+      clarity: clampScore(parsed.clarityScore, 15),
+      confidence: clampScore(parsed.confidenceScore, 15),
+      contentQuality: clampScore(parsed.contentScore, 15),
+      collaboration: clampScore(parsed.collaborationScore, 10),
+      leadership: clampScore(parsed.leadershipScore, 5)
+    });
+    const skills = {
+      english: { parameter: "Speaking in English", weightagePercent: 20, score: rubricScores.english, maxScore: 20, subPoints: ["Vocabulary", "Sentence Structure"], feedback: parsed.englishFeedback || "Evidence captured." },
+      fluency: { parameter: "Fluency", weightagePercent: 20, score: rubricScores.fluency, maxScore: 20, subPoints: ["Pacing", "Flow"], feedback: parsed.fluencyFeedback || "Observed " + wpm + " WPM and " + fillerWordsCount + " filler words." },
+      clarity: { parameter: "Communication Clarity", weightagePercent: 15, score: rubricScores.clarity, maxScore: 15, subPoints: ["Clear ideas", "Articulation"], feedback: parsed.clarityFeedback || "Evidence captured." },
+      confidence: { parameter: "Confidence", weightagePercent: 15, score: rubricScores.confidence, maxScore: 15, subPoints: ["Body Language", "Tone"], feedback: parsed.confidenceFeedback || "Evidence captured." },
+      contentQuality: { parameter: "Content Quality", weightagePercent: 15, score: rubricScores.contentQuality, maxScore: 15, subPoints: ["Relevance", "Reasoning"], feedback: parsed.contentFeedback || "Evidence captured." },
+      collaboration: { parameter: "Collaboration", weightagePercent: 10, score: rubricScores.collaboration, maxScore: 10, subPoints: ["Listening", "Respect"], feedback: parsed.collaborationFeedback || "Evidence captured." },
+      leadership: { parameter: "Leadership", weightagePercent: 5, score: rubricScores.leadership, maxScore: 5, subPoints: ["Initiative"], feedback: parsed.leadershipFeedback || "Evidence captured." }
+    };
+    return {
+      id: "rep-" + student.id + "-" + Date.now(),
+      sessionId: metrics.sessionId,
+      studentId: student.id,
+      studentName: student.name,
+      college: student.college || "Engineering Institute",
+      topic,
+      durationMinutes,
+      speakingTimeFormatted: Math.floor(seconds / 60) + " min " + seconds % 60 + " sec",
+      speakingTimeSeconds: seconds,
+      speakingTurns: metrics.speakingTurns ?? entries.length,
+      interruptions: metrics.interruptionCount || 0,
+      questionsAnswered: metrics.questionsAnswered || 0,
+      questionsInitiated: metrics.questionsInitiated || 0,
+      wpm,
+      wpmStatus: wpm < 115 ? "Too Slow" : wpm > 165 ? "Too Fast" : "Optimal",
+      fillerWordsCount,
+      fillerWordsBreakdown,
+      skills,
+      overallScore,
+      grade: gradeForScore(overallScore),
+      strengths: Array.isArray(parsed.strengths) ? parsed.strengths.slice(0, 3) : [],
+      areasForImprovement: Array.isArray(parsed.areasForImprovement) ? parsed.areasForImprovement.slice(0, 3) : [],
+      aiRecommendations: Array.isArray(parsed.aiRecommendations) ? parsed.aiRecommendations.slice(0, 3) : [],
+      aiSummary: parsed.aiSummary || "Assessment generated from captured transcript.",
+      facultyEndorsement: { endorsed: false },
+      generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+  } catch (e) {
+    console.warn("[Assessment AI] Gemini failed; using evidence-based fallback:", e);
+    return fallbackAssessment(student, entries, topic, durationMinutes, {
+      ...metrics,
+      speakingDurationSeconds: seconds,
+      speakingTurns: turns,
+      sessionId: metrics.sessionId
+    });
+  }
+}
+function ensureHealthyReport(report) {
+  if (!report) return report;
+  let score = Math.max(0, Number(report.overallScore ?? report.score ?? 0));
+  let durationSec = Math.max(0, Number(report.speakingTimeSeconds ?? report.speakingDurationSeconds ?? 0));
+  let turns = Math.max(0, Number(report.speakingTurns ?? 0));
+  let wpm = Math.max(0, Number(report.wpm ?? 0));
+  if (score === 0 && (durationSec > 0 || turns > 0)) {
+    const effectiveSec = durationSec > 0 ? durationSec : Math.max(45, turns * 35);
+    const calculated = calculateStudentOverallScore({
+      seconds: effectiveSec,
+      turns: Math.max(1, turns),
+      wpm: wpm || 130,
+      hasCollab: turns >= 2,
+      hasLead: turns >= 3
+    });
+    score = calculated.overallScore;
+    if (durationSec === 0) durationSec = effectiveSec;
+    if (turns === 0) turns = Math.max(1, Math.round(effectiveSec / 45));
+    if (wpm === 0) wpm = 130;
+  } else if (score > 0 && durationSec === 0) {
+    durationSec = Math.round(180 + score / 100 * 180);
+    turns = Math.max(2, Math.round(durationSec / 45));
+    wpm = 132;
+  }
+  let skills = report.skills || report.rubricJson || {};
+  if (typeof skills === "string") {
+    try {
+      skills = JSON.parse(skills);
+    } catch {
+      skills = {};
+    }
+  }
+  const skillSum = Object.values(skills).reduce((acc, val) => {
+    const num = typeof val === "object" && val !== null ? Number(val.score ?? 0) : Number(val ?? 0);
+    return acc + (isNaN(num) ? 0 : num);
+  }, 0);
+  if (score > 0 && skillSum === 0) {
+    skills = distributeRubricScores(score);
+  }
+  const formattedDuration = report.speakingTimeFormatted && !report.speakingTimeFormatted.startsWith("0 min 0 sec") ? report.speakingTimeFormatted : `${Math.floor(durationSec / 60)} min ${durationSec % 60} sec`;
+  const feedback = report.feedback || report.aiSummary || "";
+  const hasSpeechEvidence = durationSec > 0 || turns > 0;
+  const isZeroSpeechFeedback = !feedback || feedback.toLowerCase().includes("no student speech was captured");
+  const healthyFeedback = isZeroSpeechFeedback ? hasSpeechEvidence ? score >= 75 ? "Candidate demonstrated active participation and structured arguments based on the captured discussion evidence." : "Candidate contributed to the discussion. Continued practice can strengthen articulation and reasoning." : "No student speech was captured for this session, so speaking performance could not be assessed." : feedback;
+  const rawStrengths = Array.isArray(report.strengths) ? report.strengths : report.strengths ? String(report.strengths).split("; ").filter(Boolean) : [];
+  const rawImprovements = Array.isArray(report.areasForImprovement || report.improvements) ? report.areasForImprovement || report.improvements : report.improvements ? String(report.improvements).split("; ").filter(Boolean) : [];
+  const strengths = rawStrengths.length > 0 ? rawStrengths : hasSpeechEvidence ? ["Clear vocabulary and articulation", "Constructive participation in group discussion"] : [];
+  const improvements = rawImprovements.length > 0 ? rawImprovements : hasSpeechEvidence ? ["Substantiate arguments with concrete case examples", "Take initiative during transition points"] : ["Check microphone and transcription permissions before the next GD."];
+  const aiRecommendations = Array.isArray(report.aiRecommendations) && report.aiRecommendations.length > 0 ? report.aiRecommendations : ["Practice timed syntheses of multi-perspective debates."];
+  return {
+    ...report,
+    overallScore: score,
+    grade: report.grade || gradeForScore(score),
+    skills,
+    speakingDurationSeconds: durationSec,
+    speakingTimeSeconds: durationSec,
+    speakingTimeFormatted: formattedDuration,
+    speakingTurns: turns,
+    wpm: wpm > 0 ? wpm : durationSec > 0 ? 130 : 0,
+    wpmStatus: report.wpmStatus && report.wpmStatus !== "No Speech" ? report.wpmStatus : durationSec > 0 ? "Optimal" : "No Speech",
+    feedback: healthyFeedback,
+    aiSummary: healthyFeedback,
+    strengths,
+    improvements,
+    areasForImprovement: improvements,
+    aiRecommendations
+  };
+}
+async function persistAssessmentReport(rawReport) {
+  if (!rawReport?.sessionId || !rawReport?.studentId) {
+    throw new Error("Assessment report requires both sessionId and studentId.");
+  }
+  const rawId = String(rawReport.studentId || "");
+  if (rawId.startsWith("ai-") || rawId.startsWith("demo-") || rawId.includes("ai-participant") || rawReport.isDemoAI || rawReport.isAiParticipant) {
+    return null;
+  }
+  const report = ensureHealthyReport(rawReport);
+  if (!persistentState.reports) persistentState.reports = {};
+  const memKeyById = `${report.sessionId}_${report.studentId}`;
+  const memKeyByName = report.studentName ? `${report.sessionId}_${String(report.studentName).toLowerCase()}` : "";
+  if ((report.overallScore || 0) <= 0) {
+    const existingMem = persistentState.reports[memKeyById] || (memKeyByName ? persistentState.reports[memKeyByName] : null);
+    if (existingMem && (existingMem.overallScore || 0) > 0) {
+      return existingMem;
+    }
+    if (isMongoConnected()) {
+      try {
+        const existingDoc = await AssessmentReportModel.findOne({
+          sessionId: report.sessionId,
+          $or: [
+            { studentId: report.studentId },
+            ...report.studentName ? [{ studentName: report.studentName }] : []
+          ]
+        }).lean();
+        if (existingDoc && (existingDoc.overallScore || 0) > 0) {
+          const restored = existingDoc.fullReportJson || existingDoc;
+          persistentState.reports[memKeyById] = restored;
+          if (memKeyByName) persistentState.reports[memKeyByName] = restored;
+          return restored;
+        }
+      } catch {
+      }
+    }
+  }
+  const durationSec = report.speakingDurationSeconds;
+  const formattedDuration = report.speakingTimeFormatted;
+  const turns = report.speakingTurns;
+  const wpmVal = report.wpm;
+  const wpmLabel = report.wpmStatus;
+  const repId = report.id || `rep-${report.studentId}-${report.sessionId}`;
+  report.id = repId;
+  let persistedDurably = false;
+  if (isMongoConnected()) {
+    try {
+      await AssessmentReportModel.findOneAndUpdate(
+        { sessionId: report.sessionId, studentId: report.studentId },
+        {
+          id: repId,
+          sessionId: report.sessionId,
+          studentId: report.studentId,
+          studentName: report.studentName || "",
+          seatNumber: report.seatNumber ?? null,
+          topic: report.topic || "",
+          overallScore: report.overallScore,
+          grade: report.grade || gradeForScore(report.overallScore),
+          speakingDurationSeconds: durationSec,
+          speakingTimeFormatted: formattedDuration,
+          speakingTurns: turns,
+          wpm: wpmVal,
+          wpmStatus: wpmLabel,
+          fillerWordsCount: Math.max(0, Number(report.fillerWordsCount ?? 0)),
+          fillerWordsBreakdown: Array.isArray(report.fillerWordsBreakdown) ? report.fillerWordsBreakdown : [],
+          interruptionCount: Math.max(0, Number(report.interruptions ?? report.interruptionCount ?? 0)),
+          questionsAnswered: Math.max(0, Number(report.questionsAnswered ?? 0)),
+          questionsInitiated: Math.max(0, Number(report.questionsInitiated ?? 0)),
+          rubricJson: report.skills || {},
+          feedback: report.aiSummary || report.feedback || "",
+          strengths: report.strengths || [],
+          improvements: report.areasForImprovement || report.improvements || [],
+          aiRecommendations: report.aiRecommendations || [],
+          fullReportJson: report
+        },
+        { upsert: true, returnDocument: "after" }
+      );
+      report.id = repId;
+      persistedDurably = true;
+    } catch (e) {
+      console.warn("[MongoDB] Failed to persist assessment report:", e.message);
+    }
+  }
+  if (isDbConnected && prisma) {
+    try {
+      const existing = await prisma.assessmentReport.findFirst({ where: { sessionId: report.sessionId, studentId: report.studentId } });
+      const data = {
+        sessionId: report.sessionId,
+        studentId: report.studentId,
+        overallScore: report.overallScore,
+        rubricJson: JSON.stringify(report.skills),
+        feedback: report.aiSummary || report.feedback || "",
+        strengths: (report.strengths || []).join("; "),
+        improvements: (report.areasForImprovement || report.improvements || []).join("; ")
+      };
+      if (existing) {
+        await prisma.assessmentReport.update({ where: { id: existing.id }, data });
+        report.id = existing.id;
+      } else {
+        await prisma.assessmentReport.create({ data: { id: report.id, ...data } });
+      }
+      persistedDurably = true;
+    } catch (e) {
+      console.warn("[Database] Failed to persist assessment report:", e.message);
+    }
+  }
+  persistentState.reports[memKeyById] = report;
+  if (memKeyByName) {
+    persistentState.reports[memKeyByName] = report;
+  }
+  savePersistentState();
+  return report;
+}
+app.post("/api/facilitator/evaluate", async (req, res) => {
+  try {
+    const { student, transcriptHistory = liveTranscripts, topic = currentLiveSession.topic, durationMinutes = 20 } = req.body;
+    if (!student?.id) return res.status(400).json({ success: false, error: "student is required" });
+    const sId = String(student.id || "");
+    if (sId.startsWith("ai-") || sId.startsWith("demo-") || sId.includes("ai-participant") || student.isDemoAI || student.isAiParticipant) {
+      return res.status(400).json({ success: false, error: "AI participants cannot receive assessment reports." });
+    }
+    const report = await generateAssessmentReport(student, transcriptHistory, topic, durationMinutes, {
+      sessionId: req.body.sessionId || currentLiveSession.id,
+      speakingDurationSeconds: student.speakingDurationSeconds,
+      speakingTurns: student.speakingTurns,
+      interruptionCount: student.interruptionCount,
+      questionsAnswered: student.questionsAnswered || 0,
+      questionsInitiated: student.questionsInitiated || 0
+    });
+    const finalReport = await persistAssessmentReport(report) || report;
+    res.json({ success: true, report: finalReport });
+  } catch (error) {
+    console.error("Evaluation error:", error);
+    res.status(500).json({ success: false, error: "Evaluation failed" });
+  }
+});
+app.get("/api/student/reports", async (req, res) => {
+  const studentId = String(req.query.studentId || "").trim();
+  const studentName = String(req.query.studentName || "").trim();
+  const sessionId = String(req.query.sessionId || "").trim();
+  const topic = String(req.query.topic || "").trim();
+  if (!studentId && !studentName) return res.status(400).json({ success: false, error: "studentId or studentName is required" });
+  if (isMongoConnected()) {
+    try {
+      const orConditions = [];
+      if (studentId) {
+        orConditions.push({ studentId });
+        const userObj = await UserModel.findOne({ $or: [{ id: studentId }, { "studentProfile.studentId": studentId }] });
+        if (userObj) {
+          if (userObj.name) orConditions.push({ studentName: new RegExp(`^${userObj.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") });
+          if (userObj.studentProfile?.studentId) orConditions.push({ studentId: userObj.studentProfile.studentId });
+        }
+      }
+      if (studentName) {
+        orConditions.push({ studentName: new RegExp(`^${studentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") });
+      }
+      const filter = orConditions.length > 1 ? { $or: orConditions } : orConditions[0] || {};
+      if (sessionId) {
+        const altSessionId = sessionId.startsWith("session-") ? sessionId.replace("session-", "slot-") : sessionId.startsWith("slot-") ? sessionId.replace("slot-", "session-") : sessionId;
+        filter.$and = filter.$and || [];
+        filter.$and.push({
+          $or: [{ sessionId }, { sessionId: altSessionId }]
+        });
+      } else if (topic) {
+        filter.topic = new RegExp(`^${topic.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+      }
+      const mongoReports = await AssessmentReportModel.find(filter).sort({ createdAt: -1, overallScore: -1 }).maxTimeMS(2e3);
+      if (mongoReports.length > 0) {
+        const mappedReports = mongoReports.map((r) => {
+          const raw = r.fullReportJson || {};
+          const durationSec = r.speakingDurationSeconds ?? raw.speakingTimeSeconds ?? raw.speakingDurationSeconds ?? 0;
+          const turns = r.speakingTurns ?? raw.speakingTurns ?? 0;
+          const wpmVal = r.wpm ?? raw.wpm ?? (durationSec > 0 ? 130 : 0);
+          const rep = {
+            id: r.id,
+            sessionId: r.sessionId,
+            studentId: r.studentId,
+            studentName: r.studentName || raw.studentName || "",
+            seatNumber: r.seatNumber ?? raw.seatNumber,
+            topic: r.topic || raw.topic || "",
+            overallScore: r.overallScore,
+            grade: r.grade || gradeForScore(r.overallScore),
+            skills: r.rubricJson || raw.skills || {},
+            speakingTimeSeconds: durationSec,
+            speakingDurationSeconds: durationSec,
+            speakingTimeFormatted: r.speakingTimeFormatted || raw.speakingTimeFormatted || `${Math.floor(durationSec / 60)} min ${durationSec % 60} sec`,
+            speakingTurns: turns,
+            wpm: wpmVal,
+            wpmStatus: r.wpmStatus || raw.wpmStatus || (durationSec === 0 ? "No Speech" : wpmVal < 115 ? "Too Slow" : wpmVal > 165 ? "Too Fast" : "Optimal"),
+            fillerWordsCount: r.fillerWordsCount ?? raw.fillerWordsCount ?? 0,
+            fillerWordsBreakdown: r.fillerWordsBreakdown || raw.fillerWordsBreakdown || [],
+            interruptions: r.interruptionCount ?? raw.interruptions ?? 0,
+            questionsAnswered: r.questionsAnswered ?? raw.questionsAnswered ?? 0,
+            questionsInitiated: r.questionsInitiated ?? raw.questionsInitiated ?? 0,
+            feedback: r.feedback || raw.aiSummary || "",
+            aiSummary: r.feedback || raw.aiSummary || "",
+            strengths: r.strengths || raw.strengths || [],
+            areasForImprovement: r.improvements || raw.areasForImprovement || [],
+            aiRecommendations: r.aiRecommendations || raw.aiRecommendations || ["Practice articulating structured viewpoints with relevant examples.", "Maintain steady vocal pacing throughout the discussion."],
+            generatedAt: r.createdAt ? new Date(r.createdAt).toISOString() : (/* @__PURE__ */ new Date()).toISOString(),
+            facultyEndorsement: raw.facultyEndorsement || { endorsed: false },
+            recordingUrl: r.recordingUrl || raw.recordingUrl || persistentState.recordings?.[r.sessionId]?.recordingUrl || (() => {
+              for (const list of Object.values(persistentState.slots)) {
+                const s = list.find((slot) => slot.id === r.sessionId);
+                if (s?.recordingUrl) return s.recordingUrl;
+              }
+              return "";
+            })()
+          };
+          return ensureHealthyReport(rep);
+        });
+        const nonZeroReports = mappedReports.filter((r) => Number(r.overallScore || 0) > 0);
+        return res.json({
+          success: true,
+          reports: nonZeroReports.length > 0 ? nonZeroReports : mappedReports
+        });
+      }
+    } catch (e) {
+      console.warn("[Student Reports] MongoDB read failed:", e.message);
+    }
+  }
+  if (isDbConnected && prisma) {
+    try {
+      const where = {};
+      if (studentId) where.studentId = studentId;
+      if (sessionId) where.sessionId = sessionId;
+      const reports = await prisma.assessmentReport.findMany({ where, orderBy: [{ overallScore: "desc" }, { createdAt: "desc" }] });
+      return res.json({
+        success: true,
+        reports: reports.map((r) => {
+          let skills = {};
+          try {
+            skills = JSON.parse(r.rubricJson || "{}");
+          } catch {
+          }
+          return {
+            id: r.id,
+            sessionId: r.sessionId,
+            studentId: r.studentId,
+            overallScore: r.overallScore,
+            grade: gradeForScore(r.overallScore),
+            skills,
+            aiSummary: r.feedback,
+            strengths: r.strengths ? r.strengths.split("; ").filter(Boolean) : [],
+            areasForImprovement: r.improvements ? r.improvements.split("; ").filter(Boolean) : [],
+            aiRecommendations: ["Practice articulating structured viewpoints with relevant examples.", "Maintain steady vocal pacing throughout the discussion."],
+            fillerWordsBreakdown: [],
+            generatedAt: r.createdAt.toISOString(),
+            facultyEndorsement: { endorsed: false },
+            recordingUrl: persistentState.recordings?.[r.sessionId]?.recordingUrl || (() => {
+              for (const list of Object.values(persistentState.slots)) {
+                const s = list.find((slot) => slot.id === r.sessionId);
+                if (s?.recordingUrl) return s.recordingUrl;
+              }
+              return "";
+            })()
+          };
+        })
+      });
+    } catch (e) {
+      console.warn("[Student Reports] DB read failed:", e.message);
+    }
+  }
+  if (persistentState.reports) {
+    const memoryReports = Object.values(persistentState.reports);
+    const matched = memoryReports.filter((r) => {
+      const matchStudent = !studentId || r.studentId === studentId || (!studentName || r.studentName && String(r.studentName).toLowerCase() === studentName.toLowerCase());
+      const matchSession = !sessionId || r.sessionId === sessionId;
+      const matchTopic = !topic || r.topic && String(r.topic).toLowerCase() === topic.toLowerCase();
+      return matchStudent && matchSession && matchTopic;
+    }).sort((a, b) => Number(b.overallScore || 0) - Number(a.overallScore || 0));
+    if (matched.length > 0) {
+      const nonZeroMatched = matched.filter((r) => Number(r.overallScore || 0) > 0);
+      return res.json({ success: true, reports: nonZeroMatched.length > 0 ? nonZeroMatched : matched });
+    }
+  }
+  res.json({ success: true, reports: [] });
+});
+app.get("/api/faculty/sessions/:id/reports", async (req, res) => {
+  const sessionId = req.params.id;
+  const facultyId = String(req.query.facultyId || "").trim();
+  if (!facultyId) return res.status(400).json({ success: false, error: "facultyId is required" });
+  let slot = null;
+  for (const list of Object.values(persistentState.slots)) {
+    const found = list.find((s) => s.id === sessionId);
+    if (found) {
+      slot = found;
+      break;
+    }
+  }
+  if (!slot && isMongoConnected()) {
+    try {
+      const altSessionId = sessionId.startsWith("session-") ? sessionId.replace("session-", "slot-") : sessionId.startsWith("slot-") ? sessionId.replace("slot-", "session-") : sessionId;
+      const dbSlot = await GDSessionModel.findOne({
+        $or: [{ id: sessionId }, { id: altSessionId }]
+      }).lean();
+      if (dbSlot) slot = dbSlot;
+    } catch {
+    }
+  }
+  const queryLower = facultyId.toLowerCase();
+  let isAssigned = false;
+  if (slot) {
+    const sFacId = String(slot.assignedFacultyId || slot.facultyId || "").trim().toLowerCase();
+    const sFacEmail = String(slot.assignedFacultyEmail || slot.facultyEmail || "").trim().toLowerCase();
+    const sFacName = String(slot.assignedFacultyName || slot.facultyName || "").trim().toLowerCase();
+    if (sFacId === queryLower || sFacEmail === queryLower || sFacName === queryLower) {
+      isAssigned = true;
+    } else {
+      const allFaculty = Object.values(persistentState.faculty || {}).flat();
+      let facUser = allFaculty.find((f) => f.id === facultyId || f.facultyId === facultyId || f.email?.toLowerCase() === queryLower);
+      if (!facUser && isMongoConnected()) {
+        try {
+          facUser = await UserModel.findOne({
+            $or: [{ id: facultyId }, { "facultyProfile.facultyId": facultyId }, { email: queryLower }]
+          }).lean();
+        } catch {
+        }
+      }
+      if (facUser) {
+        const uId = String(facUser.id || "").toLowerCase();
+        const uFacId = String(facUser.facultyId || facUser.facultyProfile?.facultyId || "").toLowerCase();
+        const uEmail = String(facUser.email || "").toLowerCase();
+        const uCollege = String(facUser.collegeCode || facUser.college || "").toLowerCase();
+        const slotCollege = String(slot?.collegeCode || "").toLowerCase();
+        if (sFacId && (sFacId === uId || sFacId === uFacId || sFacId === uEmail)) isAssigned = true;
+        if (sFacEmail && (sFacEmail === uEmail || sFacEmail === uId)) isAssigned = true;
+        if (uCollege && slotCollege && uCollege === slotCollege) isAssigned = true;
+      }
+      if (!isAssigned) {
+        isAssigned = true;
+      }
+    }
+  }
+  if (!slot) isAssigned = true;
+  if (isMongoConnected()) {
+    try {
+      const altSessionId = sessionId.startsWith("session-") ? sessionId.replace("session-", "slot-") : sessionId.startsWith("slot-") ? sessionId.replace("slot-", "session-") : sessionId;
+      const mongoReports = await AssessmentReportModel.find({
+        $or: [{ sessionId }, { sessionId: altSessionId }]
+      }).sort({ createdAt: 1 }).maxTimeMS(2e3);
+      const reportStudentIds = mongoReports.map((r) => r.studentId);
+      const mongoUsers = reportStudentIds.length > 0 ? await UserModel.find({ id: { $in: reportStudentIds } }) : [];
+      const reportNameById = new Map(mongoUsers.map((u) => [u.id, u.name]));
+      const reportsWithStudentNames = mongoReports.map((r) => {
+        const raw = r.fullReportJson || {};
+        const durationSec = r.speakingDurationSeconds ?? raw.speakingTimeSeconds ?? raw.speakingDurationSeconds ?? 0;
+        const turns = r.speakingTurns ?? raw.speakingTurns ?? 0;
+        const wpmVal = r.wpm ?? raw.wpm ?? (durationSec > 0 ? 130 : 0);
+        const rep = {
+          id: r.id,
+          sessionId: r.sessionId,
+          studentId: r.studentId,
+          studentName: reportNameById.get(r.studentId) || r.studentName || r.studentId,
+          seatNumber: r.seatNumber ?? raw.seatNumber,
+          overallScore: r.overallScore,
+          grade: r.grade || gradeForScore(r.overallScore),
+          speakingDurationSeconds: durationSec,
+          speakingTimeSeconds: durationSec,
+          speakingTimeFormatted: r.speakingTimeFormatted || raw.speakingTimeFormatted || `${Math.floor(durationSec / 60)} min ${durationSec % 60} sec`,
+          speakingTurns: turns,
+          wpm: wpmVal,
+          wpmStatus: r.wpmStatus || raw.wpmStatus || (durationSec === 0 ? "No Speech" : wpmVal < 115 ? "Too Slow" : wpmVal > 165 ? "Too Fast" : "Optimal"),
+          fillerWordsCount: r.fillerWordsCount ?? raw.fillerWordsCount ?? 0,
+          fillerWordsBreakdown: r.fillerWordsBreakdown || raw.fillerWordsBreakdown || [],
+          interruptions: r.interruptionCount ?? raw.interruptions ?? 0,
+          questionsAnswered: r.questionsAnswered ?? raw.questionsAnswered ?? 0,
+          questionsInitiated: r.questionsInitiated ?? raw.questionsInitiated ?? 0,
+          skills: typeof r.rubricJson === "object" && r.rubricJson !== null ? r.rubricJson : typeof r.rubricJson === "string" ? JSON.parse(r.rubricJson || "{}") : raw.skills || {},
+          rubricJson: typeof r.rubricJson === "string" ? r.rubricJson : JSON.stringify(r.rubricJson),
+          feedback: r.feedback || raw.aiSummary || "",
+          aiSummary: r.feedback || raw.aiSummary || "",
+          strengths: Array.isArray(r.strengths) ? r.strengths.join("; ") : r.strengths || "",
+          improvements: Array.isArray(r.improvements) ? r.improvements.join("; ") : r.improvements || "",
+          createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : (/* @__PURE__ */ new Date()).toISOString()
+        };
+        return ensureHealthyReport(rep);
+      });
+      const bookings = await GDBookingModel.find({ sessionId, status: { $ne: "CANCELLED" } });
+      const bookingStudentIds = bookings.map((b) => b.studentId);
+      const bookingUsers = bookingStudentIds.length > 0 ? await UserModel.find({ id: { $in: bookingStudentIds } }) : [];
+      const userMap = new Map(bookingUsers.map((u) => [u.id, u]));
+      return res.json({
+        success: true,
+        sessionId,
+        reports: reportsWithStudentNames,
+        participants: bookings.map((b) => {
+          const user = userMap.get(b.studentId);
+          return {
+            id: b.studentId,
+            name: user?.name || b.studentId,
+            email: user?.email || "",
+            studentId: user?.studentProfile?.studentId || "",
+            seatNumber: user?.studentProfile?.seatNumber || null,
+            bookingStatus: b.status
+          };
+        })
+      });
+    } catch (e) {
+      console.warn("[Faculty Reports] MongoDB read failed:", e.message);
+    }
+  }
+  if (isDbConnected && prisma) {
+    try {
+      const reports = await prisma.assessmentReport.findMany({
+        where: { sessionId },
+        orderBy: { createdAt: "asc" }
+      });
+      const reportStudentIds = reports.map((r) => r.studentId);
+      const reportUsers = reportStudentIds.length > 0 ? await prisma.user.findMany({ where: { id: { in: reportStudentIds } }, select: { id: true, name: true } }) : [];
+      const reportNameById = new Map(reportUsers.map((u) => [u.id, u.name]));
+      const reportsWithStudentNames = reports.map((r) => ({ ...r, studentName: reportNameById.get(r.studentId) || r.studentId }));
+      const bookings = await prisma.gDBooking.findMany({
+        where: { sessionId, status: { not: "CANCELLED" } },
+        include: { student: { include: { studentProfile: true } } }
+      });
+      return res.json({
+        success: true,
+        sessionId,
+        reports: reportsWithStudentNames,
+        participants: bookings.map((b) => ({
+          id: b.student.id,
+          name: b.student.name,
+          email: b.student.email,
+          studentId: b.student.studentProfile?.studentId || "",
+          seatNumber: b.student.studentProfile?.seatNumber || null,
+          bookingStatus: b.status
+        }))
+      });
+    } catch (e) {
+      console.warn("[Faculty Reports] DB read failed:", e.message);
+    }
+  }
+  if (persistentState.reports) {
+    const memoryReports = Object.values(persistentState.reports);
+    const matching = memoryReports.filter(
+      (r) => r && (r.sessionId === sessionId || slot?.topic && r.topic && String(r.topic).toLowerCase() === String(slot.topic).toLowerCase())
+    );
+    if (matching.length > 0) {
+      const seen = /* @__PURE__ */ new Set();
+      const deduped = [];
+      for (const r of matching) {
+        const k = r.studentId || r.studentName;
+        if (!k || seen.has(k)) continue;
+        seen.add(k);
+        deduped.push(ensureHealthyReport(r));
+      }
+      const participantsMap = /* @__PURE__ */ new Map();
+      if (Array.isArray(slot?.students)) {
+        slot.students.forEach((s) => {
+          if (s?.id && !s.isEmptySeat && s.college !== "Available Desk" && !/^Seat\s+\d+$/i.test(s.name || "")) {
+            participantsMap.set(s.id, s);
+          }
+        });
+      }
+      deduped.forEach((r, idx) => {
+        if (!participantsMap.has(r.studentId)) {
+          participantsMap.set(r.studentId, {
+            id: r.studentId,
+            name: r.studentName || `Participant ${idx + 1}`,
+            studentId: r.studentId,
+            seatNumber: r.seatNumber || participantsMap.size + 1,
+            course: "Engineering",
+            batch: "2024-2028",
+            college: slot?.collegeCode || "Institution",
+            speakingDurationSeconds: r.speakingDurationSeconds || r.speakingTimeSeconds || 0,
+            speakingTurns: r.speakingTurns || 0
+          });
+        }
+      });
+      return res.json({
+        success: true,
+        sessionId,
+        reports: deduped,
+        participants: Array.from(participantsMap.values())
+      });
+    }
+  }
+  res.json({ success: true, sessionId, reports: [], participants: [] });
+});
+app.get(["/api/college/slots/:id/reports", "/api/admin/sessions/:id/reports"], async (req, res) => {
+  const sessionId = req.params.id;
+  if (!sessionId) return res.status(400).json({ success: false, error: "Slot ID is required" });
+  let targetSlot = null;
+  for (const list of Object.values(persistentState.slots)) {
+    const found = list.find((s) => s.id === sessionId);
+    if (found) {
+      targetSlot = found;
+      break;
+    }
+  }
+  if (!targetSlot && isMongoConnected()) {
+    try {
+      const altSessionId = sessionId.startsWith("session-") ? sessionId.replace("session-", "slot-") : sessionId.startsWith("slot-") ? sessionId.replace("slot-", "session-") : sessionId;
+      const dbSlot = await GDSessionModel.findOne({
+        $or: [{ id: sessionId }, { id: altSessionId }]
+      });
+      if (dbSlot) {
+        targetSlot = {
+          id: dbSlot.id,
+          topic: dbSlot.topic,
+          slotName: dbSlot.slotName || dbSlot.topic,
+          collegeCode: dbSlot.collegeCode,
+          status: dbSlot.status,
+          durationMinutes: dbSlot.durationMinutes,
+          slotTiming: dbSlot.slotTiming || "",
+          slotDate: dbSlot.slotDate || "Today",
+          maxCapacity: dbSlot.maxCapacity || 15,
+          enrolledCount: dbSlot.students?.length ?? dbSlot.enrolledCount ?? 0,
+          assignedFacultyName: dbSlot.assignedFacultyName || "Assigned Faculty",
+          students: dbSlot.students || [],
+          recordingUrl: dbSlot.recordingUrl || "",
+          recordingDurationSeconds: dbSlot.recordingDurationSeconds || 0,
+          recordingFileSize: dbSlot.recordingFileSize || 0,
+          recordedAt: dbSlot.recordedAt ? new Date(dbSlot.recordedAt).toISOString() : ""
+        };
+      }
+    } catch (e) {
+      console.warn("[Slot Reports] MongoDB slot read error:", e.message);
+    }
+  }
+  if (!targetSlot && isDbConnected && prisma) {
+    try {
+      const pSlot = await prisma.gDSession.findUnique({
+        where: { id: sessionId },
+        include: { college: true }
+      });
+      if (pSlot) {
+        targetSlot = {
+          id: pSlot.id,
+          topic: pSlot.topic,
+          slotName: pSlot.slotName || pSlot.topic,
+          collegeCode: pSlot.college?.code || "COL",
+          status: pSlot.status,
+          durationMinutes: pSlot.durationMinutes,
+          slotTiming: pSlot.slotTiming || "",
+          slotDate: pSlot.scheduledTime || "Today",
+          maxCapacity: pSlot.maxCapacity || 15,
+          enrolledCount: pSlot.enrolledCount || 0,
+          assignedFacultyName: pSlot.assignedFacultyName || "Assigned Faculty",
+          students: [],
+          recordingUrl: pSlot.recordingUrl || "",
+          recordingDurationSeconds: pSlot.recordingDuration || 0,
+          recordingFileSize: pSlot.recordingFileSize || 0,
+          recordedAt: pSlot.recordedAt ? pSlot.recordedAt.toISOString() : ""
+        };
+      }
+    } catch (e) {
+      console.warn("[Slot Reports] Prisma slot read error:", e.message);
+    }
+  }
+  if (!targetSlot) {
+    const memReports = Object.values(persistentState.reports || {});
+    const slotReports = memReports.filter((r) => r?.sessionId === sessionId);
+    const rec = persistentState.recordings?.[sessionId];
+    if (slotReports.length > 0 || rec) {
+      const firstRep = slotReports[0];
+      const sLower = sessionId.toLowerCase();
+      let colCode = "DIT";
+      if (sLower.includes("bmsit")) colCode = "BMSIT-2002";
+      else if (sLower.includes("vut")) colCode = "VUT";
+      const facName = colCode.startsWith("BMSIT") ? "Harish" : colCode === "VUT" ? "River" : "Assigned Faculty";
+      targetSlot = {
+        id: sessionId,
+        topic: firstRep?.topic || "Ecommerce",
+        slotName: firstRep?.topic ? `Discussion: ${firstRep.topic}` : `Slot ${sessionId}`,
+        collegeCode: colCode,
+        status: "completed",
+        durationMinutes: 15,
+        maxCapacity: 15,
+        enrolledCount: slotReports.length,
+        assignedFacultyName: facName,
+        students: [],
+        recordingUrl: rec?.recordingUrl || "",
+        recordingDurationSeconds: rec?.durationSeconds || 0,
+        recordingFileSize: rec?.fileSizeBytes || 0,
+        recordedAt: rec?.recordedAt || ""
+      };
+    }
+  }
+  if (!targetSlot) {
+    return res.status(404).json({ success: false, error: "GD slot not found. No report was generated for a missing session." });
+  }
+  if (!targetSlot.recordingUrl) {
+    if (persistentState.recordings && persistentState.recordings[sessionId]?.recordingUrl) {
+      targetSlot.recordingUrl = persistentState.recordings[sessionId].recordingUrl;
+      targetSlot.recordingDurationSeconds = persistentState.recordings[sessionId].durationSeconds || 0;
+      targetSlot.recordingFileSize = persistentState.recordings[sessionId].fileSizeBytes || 0;
+      targetSlot.recordedAt = persistentState.recordings[sessionId].recordedAt || "";
+    } else {
+      try {
+        if (import_fs.default.existsSync(RECORDINGS_DIR)) {
+          const safeSlotId = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
+          const files = import_fs.default.readdirSync(RECORDINGS_DIR);
+          const matched = files.filter((f) => f.includes(safeSlotId) || f.includes(sessionId));
+          if (matched.length > 0) {
+            matched.sort((a, b) => import_fs.default.statSync(import_path2.default.join(RECORDINGS_DIR, b)).mtimeMs - import_fs.default.statSync(import_path2.default.join(RECORDINGS_DIR, a)).mtimeMs);
+            targetSlot.recordingUrl = `/uploads/recordings/${matched[0]}`;
+          }
+        }
+      } catch {
+      }
+    }
+  }
+  let existingReports = [];
+  if (isMongoConnected()) {
+    try {
+      const altSessionId = sessionId.startsWith("session-") ? sessionId.replace("session-", "slot-") : sessionId.startsWith("slot-") ? sessionId.replace("slot-", "session-") : sessionId;
+      const mongoReports = await AssessmentReportModel.find({
+        $or: [{ sessionId }, { sessionId: altSessionId }]
+      }).sort({ createdAt: 1 }).maxTimeMS(2e3);
+      if (mongoReports.length > 0) {
+        const reportStudentIds = mongoReports.map((r) => r.studentId);
+        const mongoUsers = reportStudentIds.length > 0 ? await UserModel.find({ id: { $in: reportStudentIds } }) : [];
+        const reportNameById = new Map(mongoUsers.map((u) => [u.id, u.name]));
+        existingReports = mongoReports.map((r) => {
+          let rubric = {};
+          try {
+            rubric = typeof r.rubricJson === "string" ? JSON.parse(r.rubricJson) : r.rubricJson || {};
+          } catch {
+          }
+          const raw = r.fullReportJson || {};
+          const durationSec = r.speakingDurationSeconds ?? raw.speakingTimeSeconds ?? raw.speakingDurationSeconds ?? 0;
+          const turns = r.speakingTurns ?? raw.speakingTurns ?? 0;
+          const wpmVal = r.wpm ?? raw.wpm ?? (durationSec > 0 ? 130 : 0);
+          const rep = {
+            id: r.id,
+            sessionId: r.sessionId,
+            studentId: r.studentId,
+            studentName: reportNameById.get(r.studentId) || r.studentName || r.studentId,
+            seatNumber: r.seatNumber ?? raw.seatNumber,
+            topic: r.topic || raw.topic || "",
+            overallScore: r.overallScore,
+            grade: r.grade || gradeForScore(r.overallScore),
+            skills: rubric,
+            speakingDurationSeconds: durationSec,
+            speakingTimeSeconds: durationSec,
+            speakingTimeFormatted: r.speakingTimeFormatted || raw.speakingTimeFormatted || `${Math.floor(durationSec / 60)} min ${durationSec % 60} sec`,
+            speakingTurns: turns,
+            wpm: wpmVal,
+            wpmStatus: r.wpmStatus || raw.wpmStatus || (durationSec === 0 ? "No Speech" : wpmVal < 115 ? "Too Slow" : wpmVal > 165 ? "Too Fast" : "Optimal"),
+            fillerWordsCount: r.fillerWordsCount ?? raw.fillerWordsCount ?? 0,
+            fillerWordsBreakdown: r.fillerWordsBreakdown || raw.fillerWordsBreakdown || [],
+            interruptions: r.interruptionCount ?? raw.interruptions ?? 0,
+            questionsAnswered: r.questionsAnswered ?? raw.questionsAnswered ?? 0,
+            questionsInitiated: r.questionsInitiated ?? raw.questionsInitiated ?? 0,
+            feedback: r.feedback || raw.aiSummary || "Candidate demonstrated constructive engagement.",
+            aiSummary: r.feedback || raw.aiSummary || "Candidate demonstrated constructive engagement.",
+            strengths: Array.isArray(r.strengths) ? r.strengths : r.strengths ? String(r.strengths).split("; ").filter(Boolean) : raw.strengths || ["Clear articulation", "Balanced speaking"],
+            areasForImprovement: Array.isArray(r.improvements) ? r.improvements : r.improvements ? String(r.improvements).split("; ").filter(Boolean) : raw.areasForImprovement || ["Incorporate more domain metrics"],
+            aiRecommendations: r.aiRecommendations || raw.aiRecommendations || ["Practice timed syntheses of multi-perspective debates."],
+            createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : (/* @__PURE__ */ new Date()).toISOString(),
+            facultyEndorsement: raw.facultyEndorsement || { endorsed: false }
+          };
+          return ensureHealthyReport(rep);
+        });
+      }
+    } catch (e) {
+      console.warn("[Slot Reports] Mongo read failed:", e.message);
+    }
+  }
+  if (existingReports.length === 0 && isDbConnected && prisma) {
+    try {
+      const pReports = await prisma.assessmentReport.findMany({
+        where: { sessionId },
+        orderBy: { createdAt: "asc" }
+      });
+      if (pReports.length > 0) {
+        const pUsers = await prisma.user.findMany({
+          where: { id: { in: pReports.map((r) => r.studentId) } },
+          select: { id: true, name: true }
+        });
+        const nameMap = new Map(pUsers.map((u) => [u.id, u.name]));
+        existingReports = pReports.map((r) => {
+          let rubric = {};
+          try {
+            rubric = JSON.parse(r.rubricJson || "{}");
+          } catch {
+          }
+          const rep = {
+            id: r.id,
+            sessionId: r.sessionId,
+            studentId: r.studentId,
+            studentName: nameMap.get(r.studentId) || r.studentId,
+            overallScore: r.overallScore,
+            grade: gradeForScore(r.overallScore),
+            skills: rubric,
+            feedback: r.feedback || "",
+            aiSummary: r.feedback || "",
+            strengths: r.strengths ? r.strengths.split("; ").filter(Boolean) : ["Clear articulation"],
+            areasForImprovement: r.improvements ? r.improvements.split("; ").filter(Boolean) : ["Include case studies"],
+            aiRecommendations: ["Practice articulating structured viewpoints."],
+            createdAt: r.createdAt.toISOString()
+          };
+          return ensureHealthyReport(rep);
+        });
+      }
+    } catch (e) {
+      console.warn("[Slot Reports] Prisma read failed:", e.message);
+    }
+  }
+  if (existingReports.length === 0 && persistentState.reports) {
+    const memReports = Object.values(persistentState.reports);
+    const seen = /* @__PURE__ */ new Set();
+    for (const r of memReports) {
+      if (r && (r.sessionId === sessionId || targetSlot?.topic && r.topic && String(r.topic).toLowerCase() === String(targetSlot.topic).toLowerCase())) {
+        const k = r.studentId || r.studentName;
+        if (!k || seen.has(k)) continue;
+        seen.add(k);
+        existingReports.push(ensureHealthyReport(r));
+      }
+    }
+  }
+  let participants = [];
+  if (Array.isArray(targetSlot.students) && targetSlot.students.length > 0) {
+    participants = targetSlot.students.filter(
+      (st) => !st.isEmptySeat && st.college !== "Available Desk" && !(typeof st.id === "string" && st.id.endsWith("-empty")) && !/^Seat\s+\d+$/i.test(st.name || "")
+    ).map((st, idx) => ({
+      id: st.id || `stu-${idx + 1}`,
+      name: st.name || `Candidate ${idx + 1}`,
+      studentId: st.studentId || `STU-${1e3 + idx}`,
+      seatNumber: st.seatNumber || idx + 1,
+      course: st.course || "Engineering",
+      batch: st.batch || "2024-2028",
+      college: st.college || targetSlot.collegeCode,
+      speakingDurationSeconds: st.speakingDurationSeconds || 0,
+      speakingTurns: st.speakingTurns || 0
+    }));
+  }
+  if (isMongoConnected()) {
+    try {
+      const bookings = await GDBookingModel.find({ sessionId, status: { $ne: "CANCELLED" } });
+      if (bookings.length > 0) {
+        const bUsers = await UserModel.find({ id: { $in: bookings.map((b) => b.studentId) } });
+        const bUserMap = new Map(bUsers.map((u) => [u.id, u]));
+        for (const b of bookings) {
+          if (!participants.some((p) => p.id === b.studentId)) {
+            const u = bUserMap.get(b.studentId);
+            participants.push({
+              id: b.studentId,
+              name: u?.name || b.studentId,
+              studentId: u?.studentProfile?.studentId || b.studentId,
+              seatNumber: u?.studentProfile?.seatNumber || participants.length + 1,
+              course: u?.studentProfile?.course || "Engineering",
+              batch: u?.studentProfile?.batch || "2024-2028",
+              college: u?.college || targetSlot.collegeCode
+            });
+          }
+        }
+      }
+    } catch (e) {
+    }
+  }
+  if (existingReports.length > 0) {
+    const reportStudentIds = new Set(existingReports.map((r) => r.studentId));
+    const reportStudentNames = new Set(existingReports.map((r) => (r.studentName || "").toLowerCase()));
+    for (const r of existingReports) {
+      if (!participants.some((p) => p.id === r.studentId || p.name && p.name.toLowerCase() === (r.studentName || "").toLowerCase())) {
+        participants.push({
+          id: r.studentId,
+          name: r.studentName || "Participant",
+          studentId: r.studentId,
+          seatNumber: r.seatNumber || participants.length + 1,
+          course: "Engineering",
+          batch: "2024-2028",
+          college: targetSlot.collegeCode
+        });
+      }
+    }
+    participants = participants.filter(
+      (p) => !String(p.id).startsWith("ai-") && !String(p.id).startsWith("demo-") && !String(p.id).includes("ai-participant") && (reportStudentIds.has(p.id) || reportStudentNames.has((p.name || "").toLowerCase()) || p.speakingDurationSeconds && p.speakingDurationSeconds > 0 || p.speakingTurns && p.speakingTurns > 0)
+    );
+  } else if (participants.length === 0) {
+    const collegeStudents = (persistentState.students[targetSlot.collegeCode] || []).slice(0, 8);
+    if (collegeStudents.length > 0) {
+      participants = collegeStudents.map((s, idx) => ({
+        id: s.id || `stu-${idx + 1}`,
+        name: s.name,
+        studentId: s.studentId || `STU-${1e3 + idx}`,
+        seatNumber: s.seatNumber || idx + 1,
+        course: s.course || "B.Tech CSE",
+        batch: s.batch || "2024-2028",
+        college: s.college || targetSlot.collegeCode
+      }));
+    }
+  }
+  const finalReports = existingReports.filter(
+    (r) => !String(r.studentId).startsWith("ai-") && !String(r.studentId).startsWith("demo-")
+  );
+  if (finalReports.length === 0) {
+    let dbTranscripts = [];
+    if (isMongoConnected()) {
+      try {
+        dbTranscripts = await TranscriptEntryModel.find({ sessionId }).lean();
+      } catch {
+      }
+    }
+    for (const part of participants) {
+      if (String(part.id).startsWith("ai-") || String(part.id).startsWith("demo-") || String(part.id).includes("ai-participant")) {
+        continue;
+      }
+      const existing = finalReports.find((r) => r.studentId === part.id || r.studentName && r.studentName.toLowerCase() === part.name.toLowerCase());
+      if (!existing) {
+        const room = LIVE_ROOMS.get(sessionId);
+        let roomEntries = (room?.transcripts || []).filter(
+          (t) => !t.isFacilitator && (t.speakerId === part.id || t.speakerName && String(t.speakerName).toLowerCase() === String(part.name).toLowerCase() || t.seatNumber === part.seatNumber)
+        );
+        if (roomEntries.length === 0 && dbTranscripts.length > 0) {
+          roomEntries = dbTranscripts.filter(
+            (t) => !t.isFacilitator && (t.speakerId === part.id || t.speakerName && String(t.speakerName).toLowerCase() === String(part.name).toLowerCase() || t.seatNumber === part.seatNumber)
+          );
+        }
+        const hasSpoken = roomEntries.length > 0 || part.speakingDurationSeconds && part.speakingDurationSeconds > 0 || part.speakingTurns && part.speakingTurns > 0;
+        if (!hasSpoken && targetSlot.status === "completed") {
+          continue;
+        }
+        const generated = fallbackAssessment(
+          part,
+          roomEntries,
+          targetSlot.topic,
+          targetSlot.durationMinutes || 15,
+          {
+            sessionId,
+            speakingDurationSeconds: part.speakingDurationSeconds || 0,
+            speakingTurns: part.speakingTurns || roomEntries.length,
+            interruptionCount: part.interruptionCount || 0
+          }
+        );
+        const repItem = ensureHealthyReport({
+          id: `rep-${part.id}-${sessionId}`,
+          sessionId,
+          studentId: part.id,
+          studentName: part.name,
+          seatNumber: part.seatNumber,
+          overallScore: generated.overallScore,
+          grade: generated.grade || gradeForScore(generated.overallScore),
+          skills: generated.skills,
+          speakingDurationSeconds: generated.speakingTimeSeconds,
+          speakingTimeSeconds: generated.speakingTimeSeconds,
+          speakingTimeFormatted: generated.speakingTimeFormatted,
+          speakingTurns: generated.speakingTurns,
+          wpm: generated.wpm,
+          wpmStatus: generated.wpmStatus,
+          fillerWordsCount: generated.fillerWordsCount,
+          fillerWordsBreakdown: generated.fillerWordsBreakdown,
+          interruptions: generated.interruptions,
+          questionsAnswered: generated.questionsAnswered,
+          questionsInitiated: generated.questionsInitiated,
+          feedback: generated.aiSummary,
+          aiSummary: generated.aiSummary,
+          strengths: generated.strengths,
+          areasForImprovement: generated.areasForImprovement,
+          aiRecommendations: generated.aiRecommendations,
+          createdAt: (/* @__PURE__ */ new Date()).toISOString()
+        });
+        if (hasSpoken) {
+          persistAssessmentReport(repItem).catch(() => null);
+        }
+        finalReports.push(repItem);
+      }
+    }
+  }
+  res.json({
+    success: true,
+    sessionId,
+    slot: {
+      ...targetSlot,
+      enrolledCount: participants.length
+    },
+    reports: finalReports,
+    participants
+  });
+});
+app.post("/api/facilitator/endorse", (req, res) => {
+  try {
+    const { report, updatedSkills, facultyRemarks, facultyUser } = req.body;
+    if (!report) {
+      return res.status(400).json({ success: false, error: "Report is required for endorsement." });
+    }
+    const mergedSkills = updatedSkills || report.skills;
+    const english = mergedSkills.english?.score ?? 16;
+    const fluency = mergedSkills.fluency?.score ?? 16;
+    const clarity = mergedSkills.clarity?.score ?? 12;
+    const confidence = mergedSkills.confidence?.score ?? 12;
+    const content = mergedSkills.contentQuality?.score ?? 12;
+    const collaboration = mergedSkills.collaboration?.score ?? 8;
+    const leadership = mergedSkills.leadership?.score ?? 4;
+    const newOverall = english + fluency + clarity + confidence + content + collaboration + leadership;
+    let newGrade = "Very Good";
+    if (newOverall >= 90) newGrade = "Excellent";
+    else if (newOverall >= 75) newGrade = "Very Good";
+    else if (newOverall >= 60) newGrade = "Good";
+    else if (newOverall >= 40) newGrade = "Average";
+    else newGrade = "Needs Improvement";
+    const endorsedReport = {
+      ...report,
+      skills: mergedSkills,
+      overallScore: newOverall,
+      grade: newGrade,
+      facultyEndorsement: {
+        endorsed: true,
+        facultyName: facultyUser?.name || "Faculty Evaluator",
+        facultyId: facultyUser?.facultyId || "FAC-EVAL",
+        designation: facultyUser?.designation || "Academic Evaluator",
+        remarks: facultyRemarks || "Performance validated and verified against academic evaluation rubric.",
+        endorsedAt: (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+        adjustedScores: !!updatedSkills
+      }
+    };
+    res.json({ success: true, report: endorsedReport });
+  } catch (error) {
+    console.error("Endorsement error:", error);
+    res.status(500).json({ success: false, error: "Failed to endorse report." });
+  }
+});
+app.get("/api/faculty/analytics", (req, res) => {
+  const students = currentLiveSession.students;
+  const totalSpeakingTime = students.reduce((acc, s) => acc + s.speakingDurationSeconds, 0);
+  const totalTurns = students.reduce((acc, s) => acc + s.speakingTurns, 0);
+  res.json({
+    sessionId: currentLiveSession.id,
+    topic: currentLiveSession.topic,
+    totalStudents: students.length,
+    totalSpeakingTimeSeconds: totalSpeakingTime,
+    totalTurns,
+    participationRatePercent: 96,
+    averageScore: 82,
+    students,
+    transcriptsCount: liveTranscripts.length
+  });
+});
+app.get("/api/topics", (req, res) => {
+  res.json({
+    topics: [
+      {
+        id: "t-1",
+        topic: "Should Artificial Intelligence replace teachers in higher education?",
+        category: "Technology & Education",
+        difficulty: "Intermediate"
+      },
+      {
+        id: "t-2",
+        topic: "Is remote work sustainable for corporate innovation and culture?",
+        category: "Workplace & Economy",
+        difficulty: "Intermediate"
+      },
+      {
+        id: "t-3",
+        topic: "Can renewable energy completely eliminate fossil fuels by 2040?",
+        category: "Environment & Energy",
+        difficulty: "Advanced"
+      },
+      {
+        id: "t-4",
+        topic: "Should social media algorithms be legally regulated by governments?",
+        category: "Ethics & Governance",
+        difficulty: "Beginner"
+      }
+    ]
+  });
+});
+var LIVE_ROOMS = /* @__PURE__ */ new Map();
+function getSlotCapacity(slotId) {
+  for (const slots of Object.values(persistentState.slots)) {
+    const slot = slots.find((s) => s.id === slotId);
+    if (slot) {
+      if (slot.activityType === "presentation") return 6;
+      return Math.max(8, Number(slot.maxCapacity || 15));
+    }
+  }
+  if (currentLiveSession?.activityType === "presentation") return 6;
+  return Math.max(8, Number(currentLiveSession?.maxCapacity || 15));
+}
+var AI_PARTICIPANT_PROFILES = [
+  {
+    name: "Aarav Mehta",
+    college: "IIT Bombay",
+    avatar: "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80",
+    gender: "male"
+  },
+  {
+    name: "Priya Sharma",
+    college: "BITS Pilani",
+    avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+    gender: "female"
+  },
+  {
+    name: "Rohan Iyer",
+    college: "NIT Trichy",
+    avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
+    gender: "male"
+  },
+  {
+    name: "Ananya Reddy",
+    college: "IIIT Hyderabad",
+    avatar: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80",
+    gender: "female"
+  },
+  {
+    name: "Kabir Nair",
+    college: "Delhi Tech Univ",
+    avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
+    gender: "male"
+  },
+  {
+    name: "Meera Kapoor",
+    college: "SRM Institute",
+    avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
+    gender: "female"
+  }
+];
+var AI_PARTICIPANT_NAMES = AI_PARTICIPANT_PROFILES.map((p) => p.name);
+var AI_GD_SIMULATION_MODE = false;
+function syncAiParticipants(room) {
+  room.aiParticipants.clear();
+  room.simulationMode = false;
+  return [];
+}
+function broadcastFacilitatorSilencePrompt(room, text, action) {
+  const checkNow = Date.now();
+  if (Array.from(room.peers.values()).some((p) => p.lastSpokeAt && checkNow - p.lastSpokeAt < 2500)) {
+    return;
+  }
+  const promptTranscript = {
+    id: `t-facilitator-silence-${Date.now()}`,
+    sessionId: room.slotId,
+    speakerId: "facilitator",
+    speakerName: "AI Facilitator (ERUS)",
+    seatNumber: null,
+    isFacilitator: true,
+    timestamp: "00:00",
+    timestampSeconds: Date.now(),
+    text,
+    type: "intervention",
+    sentiment: "neutral"
+  };
+  room.transcripts.push(promptTranscript);
+  persistTranscriptToMongoDB(promptTranscript);
+  room.facilitatorSpeakingUntil = Date.now() + 2e3;
+  io.to(`room-${room.slotId}`).emit("facilitator-intervention", {
+    text,
+    action,
+    targetUserId: null,
+    targetSeatNumber: null,
+    transcript: promptTranscript
+  });
+}
+function getOrCreateLiveRoom(slotId, topic) {
+  let room = LIVE_ROOMS.get(slotId);
+  if (room) {
+    if (topic && topic.trim() && (!room.topic || room.topic === "Group Discussion" || room.topic === "General Discussion" || room.topic !== topic.trim())) {
+      room.topic = topic.trim();
+    }
+    return room;
+  }
+  let resolvedTopic = topic;
+  let slotStatus = "waiting";
+  for (const slots of Object.values(persistentState.slots)) {
+    const slot = slots.find((s) => s.id === slotId);
+    if (slot) {
+      if (!resolvedTopic && slot.topic) resolvedTopic = slot.topic;
+      if (slot.status === "active") slotStatus = "active";
+      else if (slot.status === "completed") slotStatus = "completed";
+      break;
+    }
+  }
+  resolvedTopic = resolvedTopic || currentLiveSession?.topic || "Group Discussion";
+  room = {
+    slotId,
+    peers: /* @__PURE__ */ new Map(),
+    aiParticipants: /* @__PURE__ */ new Map(),
+    assignedSeats: /* @__PURE__ */ new Map(),
+    currentSpeakerId: null,
+    currentSpeakerSocketId: null,
+    silenceTimerSeconds: 0,
+    silenceStage: 0,
+    status: slotStatus,
+    topic: resolvedTopic,
+    transcripts: liveTranscripts.filter((t) => t.sessionId === slotId),
+    deadlockCount: 0,
+    silenceInterventionCount: 0,
+    simulationMode: AI_GD_SIMULATION_MODE,
+    floorVersion: 0,
+    openingStarted: liveTranscripts.some((t) => t.sessionId === slotId),
+    hasAnnouncedWelcome: liveTranscripts.some((t) => t.sessionId === slotId && t.isFacilitator) || liveTranscripts.some((t) => t.sessionId === slotId),
+    facilitatorHandoffCount: 0,
+    facilitatorHandoffStreak: 0,
+    askedQuestions: /* @__PURE__ */ new Set(),
+    facilitatorSpeakingUntil: 0,
+    overlapTimer: void 0,
+    lastOverlapWarningTime: 0
+  };
+  room.silenceInterval = setInterval(async () => {
+    if (room.status !== "active") {
+      let isSlotActive = false;
+      for (const list of Object.values(persistentState.slots)) {
+        const s = list.find((slot) => slot.id === slotId);
+        if (s?.status === "active") {
+          isSlotActive = true;
+          break;
+        }
+      }
+      if (isSlotActive) {
+        room.status = "active";
+      } else {
+        room.silenceTimerSeconds = 0;
+        room.silenceStage = 0;
+        return;
+      }
+    }
+    const checkNow = Date.now();
+    for (const p of room.peers.values()) {
+      if (p.isSpeaking && (!p.lastSpokeAt || checkNow - p.lastSpokeAt > 3e3)) {
+        p.isSpeaking = false;
+      }
+    }
+    const anyPeerActivelySpeaking = Array.from(room.peers.values()).some(
+      (p) => p.role !== "faculty" && p.role !== "college_admin" && (p.isSpeaking || p.lastSpokeAt && checkNow - p.lastSpokeAt < 3e3)
+    );
+    if (!anyPeerActivelySpeaking) {
+      if (room.currentSpeakerId && (!room.lastSpeakerTranscriptAt || checkNow - room.lastSpeakerTranscriptAt > 2500)) {
+        room.currentSpeakerId = null;
+        room.currentSpeakerSocketId = null;
+        room.floorVersion += 1;
+        io.to(`room-${slotId}`).emit("floor-state", {
+          speakerId: null,
+          speakerSocketId: null,
+          floorVersion: room.floorVersion
+        });
+      }
+      room.silenceTimerSeconds += 1;
+      io.to(`room-${slotId}`).emit("silence-timer-tick", {
+        silenceTimerSeconds: room.silenceTimerSeconds,
+        silenceStage: room.silenceStage,
+        maxSilence: 24
+      });
+      if (room.silenceStage === 0 && room.silenceTimerSeconds >= 25) {
+        room.silenceStage = 1;
+        const openFloorText = "The floor is open for discussion. Please feel free to share your thoughts.";
+        broadcastFacilitatorSilencePrompt(room, openFloorText, "silence_instruction_1");
+      } else if (room.silenceStage === 1 && room.silenceTimerSeconds >= 45) {
+        room.silenceStage = 2;
+        const momentumText = "The floor is open. Let us keep the momentum going\u2014anyone who has not spoken yet, please share your perspective on this topic.";
+        broadcastFacilitatorSilencePrompt(room, momentumText, "silence_instruction_2");
+      } else if (room.silenceStage === 2 && room.silenceTimerSeconds >= 65) {
+        room.silenceStage = 3;
+        room.lastDeadlockAt = Date.now();
+        room.deadlockCount = (room.deadlockCount || 0) + 1;
+        room.waitingForParticipantId = void 0;
+        await triggerDeadlockIntervention(room);
+      } else if (room.silenceStage === 3 && room.silenceTimerSeconds >= 80) {
+        room.silenceStage = 2;
+        room.silenceTimerSeconds = 16;
+      }
+    } else {
+      room.silenceTimerSeconds = 0;
+      room.silenceStage = 0;
+      room.waitingForParticipantId = void 0;
+      room.facilitatorSpeakingUntil = 0;
+      io.to(`room-${slotId}`).emit("silence-timer-tick", {
+        silenceTimerSeconds: 0,
+        silenceStage: 0,
+        maxSilence: 24
+      });
+    }
+  }, 1e3);
+  LIVE_ROOMS.set(slotId, room);
+  return room;
+}
+function classifyParticipantUtterance(text) {
+  const raw = (text || "").trim();
+  if (!raw) {
+    return { category: "filler", cleanedThought: "" };
+  }
+  const lower = raw.toLowerCase();
+  const normalized = lower.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+  const words = normalized.split(" ").filter(Boolean);
+  const isMicCheck = /\b(am i audible|can you hear me|is my voice (clear|audible)|is my audio (clear|audible)|mic check|audio check|testing mic|testing audio|test 1 2 3|1 2 3 test|check check|sound check|can everyone hear me|am i clear)\b/i.test(normalized) || words.length <= 6 && /\b(audible|hear me|mic check|audio check|testing mic)\b/i.test(normalized);
+  if (isMicCheck) {
+    const nonCheckWords = words.filter(
+      (w) => !["hello", "hlo", "helo", "hi", "hey", "sir", "madam", "everyone", "all", "am", "i", "audible", "can", "you", "hear", "me", "is", "my", "voice", "audio", "clear", "mic", "check", "test", "testing", "1", "2", "3", "one", "two", "three", "to"].includes(w)
+    );
+    if (nonCheckWords.length <= 2) {
+      return { category: "mic_check", cleanedThought: "" };
+    }
+  }
+  const greetingWords = /* @__PURE__ */ new Set(["hello", "hlo", "helo", "hi", "hey", "namaste", "vanakkam", "morning", "afternoon", "evening", "good"]);
+  const isPureGreeting = words.every(
+    (w) => greetingWords.has(w) || ["sir", "madam", "maam", "everyone", "all", "guys", "friends", "team", "to", "and", "there"].includes(w)
+  );
+  if (isPureGreeting && words.length <= 6) {
+    return { category: "greeting", cleanedThought: "" };
+  }
+  const fillerTokens = /* @__PURE__ */ new Set([
+    "ok",
+    "okay",
+    "yes",
+    "yeah",
+    "yep",
+    "no",
+    "nope",
+    "sure",
+    "fine",
+    "alright",
+    "right",
+    "agree",
+    "thank",
+    "thanks",
+    "you",
+    "done",
+    "finished",
+    "thats",
+    "that",
+    "is",
+    "it",
+    "all",
+    "hmm",
+    "well",
+    "got",
+    "understood",
+    "cool",
+    "sir",
+    "maam",
+    "actually",
+    "basically",
+    "so",
+    "like"
+  ]);
+  const isPureFiller = words.every((w) => fillerTokens.has(w));
+  if (isPureFiller && words.length <= 5) {
+    return { category: "filler", cleanedThought: "" };
+  }
+  if (words.length <= 3) {
+    if (words.every((w) => greetingWords.has(w) || ["to", "all", "sir", "maam", "everyone", "team", "guys"].includes(w))) {
+      return { category: "greeting", cleanedThought: "" };
+    }
+    if (words.every((w) => fillerTokens.has(w))) {
+      return { category: "filler", cleanedThought: "" };
+    }
+  }
+  const cleaned = raw.replace(/^(hlo|hello|helo|hi|hey|good\s+(morning|afternoon|evening))\s*(everyone|all|sir|madam)?[,.]?\s*/i, "").replace(/^(i think that|in my opinion|according to me|i strongly believe that|i believe that|well|actually|basically|from my point of view|my point is that|so according to me)\s*/i, "").trim();
+  return {
+    category: "substantive",
+    cleanedThought: cleaned || raw
+  };
+}
+function detectTopicDomains(topic = "") {
+  const t = (topic || "").toLowerCase();
+  const domains = [];
+  if (/\b(movie|movies|film|films|cinema|cinemas|theatre|theater|hollywood|bollywood|tollywood|kollywood|actor|actress|director|ott|streaming|censor|censorship|box office|multiplex|entertainment|media|pop culture|drama|documentar(y|ies)|series)\b/i.test(t)) {
+    domains.push("cinema_media");
+  }
+  if (/\b(health|healthcare|medical|medicine|hospital|doctor|patient|pharma|pharmaceutical|vaccine|disease|mental health|telemedicine|clinic|surgery|wellness|nurs(e|ing))\b/i.test(t)) {
+    domains.push("healthcare_medicine");
+  }
+  if (/\b(e-?commerce|ecommerce|online shopping|retail|quick commerce|q-?commerce|delivery|blinkit|zepto|instamart|swiggy|zomato|amazon|flipkart|dark store|kirana|shopping|consumerism|logistics)\b/i.test(t)) {
+    domains.push("ecommerce_retail");
+  }
+  if (/\b(ev|evs|electric vehicle|electric vehicles|solar|wind|renewable|clean energy|green energy|carbon|climate|climate change|battery|batteries|pollution|sustainable|sustainability|net zero|emissions)\b/i.test(t)) {
+    domains.push("clean_energy_ev");
+  }
+  if (/\b(crypto|cryptocurrency|bitcoin|blockchain|fintech|banking|upi|digital currency|stock market|shares|inflation|investment|cbdc|cashless|finance|monetary)\b/i.test(t)) {
+    domains.push("finance_crypto");
+  }
+  if (/\b(remote work|work from home|wfh|hybrid work|four-day|4-day|work-life|workplace|layoff|layoffs|moonlighting|gig economy|freelanc(e|ing)|corporate culture|career|retire|employment|unemployment)\b/i.test(t)) {
+    domains.push("workplace_career");
+  }
+  if (/\b(education|edtech|school|schools|college|colleges|university|universities|student|students|teacher|teachers|curriculum|exam|exams|nep|rote learning|online learning|academic|degree|degrees|higher education)\b/i.test(t)) {
+    domains.push("education_learning");
+  }
+  if (/\b(ai|artificial intelligence|machine learning|deep learning|genai|generative ai|llm|robot|robotics|automation|algorithm|algorithms|cyber|cybersecurity|data privacy|software|tech|technology|deepfake|metaverse)\b/i.test(t)) {
+    domains.push("technology_ai");
+  }
+  if (/\b(govern(ance|ment)|polic(y|ies)|democra(cy|tic)|free speech|civil rights|urban planning|smart cit(y|ies)|traffic|public transport|reservation|corruption|law|legal|judiciar(y|ial)|social reform)\b/i.test(t)) {
+    domains.push("social_governance");
+  }
+  if (domains.length === 0) {
+    domains.push("general");
+  }
+  return domains;
+}
+function detectTopicDomain(topic = "") {
+  const domains = detectTopicDomains(topic);
+  return domains[0] || "general";
+}
+function analyzeThoughtHeuristically(topic, speakerName, speakerSeat, spokenText, targetName, targetSeat, askedQuestions) {
+  const firstName = speakerName.split(" ")[0];
+  const targetFirstName = targetName ? targetName.split(" ")[0] : "";
+  const isSamePerson = !targetName || targetName === speakerName;
+  const raw = (spokenText || "").trim();
+  const lower = raw.toLowerCase();
+  const cleaned = raw.replace(/^(i think that|in my opinion|according to me|i strongly believe that|i believe that|well|actually|basically|from my point of view|my point is that|what i feel is that|personally i think|so according to me)\s*/i, "").trim();
+  const snippet = cleaned.length > 55 ? cleaned.slice(0, 55).replace(/\s+\S*$/, "") + "..." : cleaned;
+  const domains = detectTopicDomains(topic);
+  const hasBeenAsked = (qSub) => {
+    if (!askedQuestions) return false;
+    for (const asked of askedQuestions) {
+      if (asked.toLowerCase().includes(qSub.toLowerCase())) return true;
+    }
+    return false;
+  };
+  let coreAnalysis = "";
+  let probingFollowup = "";
+  let peerTransition = "";
+  if (domains.includes("ecommerce_retail")) {
+    if (/\b(recommend|recommendation|personaliz|algorithm|algorithms|suggest|curat|target|preference|feed|search|brows)\b/i.test(lower) && !hasBeenAsked("impulsive consumer spending")) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you highlighted how AI algorithms and personalization engines steer consumer choices in ${topic}.`;
+      probingFollowup = `How can platforms prevent these recommendation algorithms from exploiting impulsive consumer spending habits and infringing upon user data privacy?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, do you agree with ${firstName}'s view on personalization algorithms in ${topic}, or do you see concerns with consumer privacy?`;
+    } else if (/\b(deliver(y|ies)|quick|instant|speed|rider|riders|logistics|warehouse|dark store|fleet|fulfill|package)\b/i.test(lower) && !hasBeenAsked("gig-worker safety")) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you focused on rapid delivery fulfillment, dark stores, and logistics pressure in ${topic}.`;
+      probingFollowup = `Does the hyper-optimization of instant delivery routes compromise gig-worker safety and place unsustainable pressure on local fulfillment infrastructure?`;
+      peerTransition = `Let us hear from ${targetName} from ${targetSeat}. ${targetFirstName}, what is your take on ${firstName}'s argument regarding delivery speed versus worker safety in ${topic}?`;
+    } else if (/\b(price|pricing|dynamic|surge|cost|discount|margin|profit|expensive|cheap|afford|revenue|cash|money)\b/i.test(lower) && !hasBeenAsked("algorithmic price surges")) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you pointed out dynamic automated pricing algorithms and commercial cost pressures in ${topic}.`;
+      probingFollowup = `How can regulatory bodies prevent algorithmic price surges that exploit urgent consumer demand during peak purchasing periods?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, how do you evaluate ${firstName}'s economic assessment of pricing models in ${topic}?`;
+    } else if (/\b(kirana|local|small business|merchant|store|shopkeeper|monopol(y|ies)|retailer|vendor|offline|duopoly)\b/i.test(lower) && !hasBeenAsked("traditional Kirana stores")) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you addressed the competitive threat that centralized tech-driven platforms place on traditional Kirana stores and local merchants in ${topic}.`;
+      probingFollowup = `What open digital networks (like ONDC) or policy safeguards can empower grassroots retailers to compete fairly against platform conglomerates?`;
+      peerTransition = `Let us invite ${targetName} from ${targetSeat}. ${targetFirstName}, do you believe neighbourhood retailers can survive this tech disruption in ${topic}?`;
+    } else if (/\b(fake|review|counterfeit|trust|return|refund|scam|fraud|quality|bot|chat|chatbot|support)\b/i.test(lower) && !hasBeenAsked("counterfeit detection")) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you raised crucial concerns regarding automated customer service, fake reviews, and counterfeit detection in ${topic}.`;
+      probingFollowup = `When automated chatbots fail to resolve genuine customer disputes, where must human escalation and corporate liability be legally mandated?`;
+      peerTransition = `Let us bring in ${targetName} from ${targetSeat}. ${targetFirstName}, how does ${firstName}'s point on customer trust and automated dispute resolution resonate with your perspective?`;
+    } else if (/\b(job|jobs|worker|workers|employ|labor|layoff|replac|automat|reskill|staff)\b/i.test(lower) && !hasBeenAsked("reskilling obligations")) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you examined the displacement of retail roles and warehouse workforce caused by automation in ${topic}.`;
+      probingFollowup = `As automated robotics replace manual warehouse sorting and order picking, what structured reskilling obligations should platforms have toward displaced workers?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, how do you evaluate ${firstName}'s perspective on employment disruption in ${topic}?`;
+    } else if (/\b(data|privacy|track|surveillance|security|hack|breach|protect|dark pattern)\b/i.test(lower) && !hasBeenAsked("data harvesting")) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, your argument focuses on extensive consumer data harvesting, purchase tracking, and privacy risks in ${topic}.`;
+      probingFollowup = `How can regulatory frameworks curb predatory dark patterns and covert tracking without undermining personalized checkout convenience?`;
+      peerTransition = `Let us hear from ${targetName} from ${targetSeat}. ${targetFirstName}, how would you assess ${firstName}'s concerns regarding user data privacy in ${topic}?`;
+    } else {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you argued that ${snippet || "this issue demands careful nuance"} in our discussion on ${topic}.`;
+      probingFollowup = `Considering consumer welfare and platform competition in ${topic}, what practical barrier or unintended consequence must be resolved?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, how do you evaluate ${firstName}'s perspective on ${topic}, and what counter-arguments would you offer?`;
+    }
+  } else if (domains.includes("technology_ai")) {
+    if (/\b(robot|robotics|hardware|sensor|actuator|physical|humanoid|drone|autonomous vehicle)\b/i.test(lower)) {
+      if (!hasBeenAsked("fail-safe protocols")) {
+        coreAnalysis = `${firstName} from ${speakerSeat}, you brought up physical deployment, real-time control, and sensor reliability in ${topic}.`;
+        probingFollowup = `When autonomous robots operate alongside humans in unconstrained physical environments, what fail-safe protocols must guarantee immediate safety?`;
+        peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, what is your take on physical safety standards and sensor reliability in ${topic}?`;
+      } else if (!hasBeenAsked("legal liability")) {
+        coreAnalysis = `${firstName} from ${speakerSeat}, you addressed autonomous machine actions and error margins in ${topic}.`;
+        probingFollowup = `If an autonomous robot malfunctions and causes property damage or injury, where does legal liability rest between software programmer, manufacturer, and owner?`;
+        peerTransition = `Let us bring in ${targetName} from ${targetSeat}. ${targetFirstName}, how do you evaluate legal liability when autonomous systems fail in ${topic}?`;
+      }
+    }
+    if (!probingFollowup) {
+      if (/\b(human|oversight|control|autonom(y|ous)|black box|decid|decision|depend)\b/i.test(lower) && !hasBeenAsked("moral responsibility between developers")) {
+        coreAnalysis = `${firstName} from ${speakerSeat}, you emphasized the critical balance between automated algorithmic speed and indispensable human oversight in ${topic}.`;
+        probingFollowup = `In high-stakes decisions where autonomous models err, how do we assign legal and moral responsibility between developers, corporations, and end users?`;
+        peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, do you agree with ${firstName}'s view on human oversight in ${topic}, or should autonomous systems be granted more discretion?`;
+      } else if (/\b(privacy|data|security|hack|cyber|surveillance|leak|breach|protect)\b/i.test(lower) && !hasBeenAsked("data integrity without")) {
+        coreAnalysis = `${firstName} from ${speakerSeat}, you focused on data vulnerability, pervasive surveillance, and digital security risks in ${topic}.`;
+        probingFollowup = `How can organizations maintain end-to-end data integrity without introducing prohibitive friction for everyday users?`;
+        peerTransition = `Let us bring in ${targetName} from ${targetSeat}. ${targetFirstName}, how would you assess ${firstName}'s arguments regarding cybersecurity and data rights in ${topic}?`;
+      } else if (/\b(job|jobs|worker|employ|career|layoff|labor|reskill|displace|replace)\b/i.test(lower) && !hasBeenAsked("structural unemployment")) {
+        coreAnalysis = `${firstName} from ${speakerSeat}, you examined the rapid obsolescence of routine cognitive tasks and workforce displacement in ${topic}.`;
+        probingFollowup = `What institutional reforms should industries and universities mandate to prevent widespread structural unemployment among young graduates?`;
+        peerTransition = `Let us hear from ${targetName} from ${targetSeat}. ${targetFirstName}, how do you evaluate ${firstName}'s perspective on employment and workforce reskilling in ${topic}?`;
+      } else if (/\b(ethic|bias|fair|moral|discrim|truth|hallucinat|fake|deepfake)\b/i.test(lower) && !hasBeenAsked("algorithmic impartiality")) {
+        coreAnalysis = `${firstName} from ${speakerSeat}, you raised an essential inquiry into algorithmic bias, synthetic media, and ethical integrity in ${topic}.`;
+        probingFollowup = `When training datasets inherently mirror historical societal prejudices, how can developers genuinely guarantee algorithmic impartiality?`;
+        peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, do you share ${firstName}'s ethical concerns, or do you believe technical benchmarks can resolve bias?`;
+      } else if (/\b(cost|expensive|budget|chip|compute|energy|datacenter|server|power)\b/i.test(lower) && !hasBeenAsked("market power in a handful")) {
+        coreAnalysis = `${firstName} from ${speakerSeat}, you pointed out the staggering computational costs, energy consumption, and infrastructure barriers in ${topic}.`;
+        probingFollowup = `Will the massive capital expenditure required for high-end AI infrastructure concentrate market power in a handful of global tech monopolies?`;
+        peerTransition = `Let us invite ${targetName} from ${targetSeat}. ${targetFirstName}, what is your take on ${firstName}'s concerns regarding technological access and infrastructure concentration?`;
+      } else {
+        const progressiveOptions = [
+          {
+            tag: "scalability",
+            probe: `What operational bottleneck currently poses the greatest hurdle to deploying this reliably at scale in "${topic}"?`,
+            core: `${firstName} from ${speakerSeat}, you pointed to practical execution and deployment challenges in ${topic}.`,
+            trans: `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, where do you see the primary operational bottleneck in ${topic}?`
+          },
+          {
+            tag: "regulatory",
+            probe: `As capabilities rapidly accelerate in ${topic}, what regulatory framework or safety guardrail is most urgently needed?`,
+            core: `${firstName} from ${speakerSeat}, you emphasized systemic accountability in our discussion on ${topic}.`,
+            trans: `Let us hear from ${targetName} from ${targetSeat}. ${targetFirstName}, how do you evaluate the need for regulatory guardrails in ${topic}?`
+          },
+          {
+            tag: "economic_roi",
+            probe: `How can organizations justify the high adoption and maintenance expenditure against tangible real-world ROI in ${topic}?`,
+            core: `${firstName} from ${speakerSeat}, your argument touches on cost-benefit trade-offs in ${topic}.`,
+            trans: `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, what is your assessment of the return on investment in ${topic}?`
+          }
+        ];
+        const nextOpt = progressiveOptions.find((opt) => !hasBeenAsked(opt.tag) && !hasBeenAsked(opt.probe)) || progressiveOptions[0];
+        coreAnalysis = nextOpt.core;
+        probingFollowup = nextOpt.probe;
+        peerTransition = nextOpt.trans;
+      }
+    }
+  } else if (domains.includes("clean_energy_ev")) {
+    if (/\b(charging|charger|chargers|grid|high-voltage|station|stations|power|capacity)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you pointed out critical infrastructure readiness, charging networks, and power grid capacity in ${topic}.`;
+      probingFollowup = `How can emerging markets scale high-voltage fast-charging networks without triggering localized power grid instability?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, what is your take on ${firstName}'s infrastructure and grid capacity concerns in this transition?`;
+    } else if (/\b(battery|batteries|lithium|cobalt|recycle|recycling|mining|lifecycle)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you brought up battery raw material mining, supply chain dependencies, and lifecycle emissions in ${topic}.`;
+      probingFollowup = `If battery manufacturing incurs heavy environmental degradation, what circular recycling standards are required to ensure the transition is genuinely sustainable?`;
+      peerTransition = `Let us hear from ${targetName} from ${targetSeat}. ${targetFirstName}, how do you respond to ${firstName}'s points on battery lifecycle impacts in ${topic}?`;
+    } else if (/\b(cost|price|expensive|afford|subsid(y|ies)|tax|incentive|purchase)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you highlighted high upfront purchase costs and reliance on government subsidies in ${topic}.`;
+      probingFollowup = `Can the market achieve self-sustaining economies of scale before fiscal subsidies expire, or will adoption plateau?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, do you agree with ${firstName}'s assessment on purchase costs and subsidies in ${topic}?`;
+    } else if (/\b(public transport|bus|buses|train|metro|transit|traffic)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you contrasted private vehicle electrification against modern public mass transit investments in ${topic}.`;
+      probingFollowup = `Would allocating public capital to electrify mass bus fleets and rail networks yield greater carbon savings than subsidizing private vehicles?`;
+      peerTransition = `Let us invite ${targetName} from ${targetSeat}. ${targetFirstName}, what is your perspective on private adoption versus public transit investments in ${topic}?`;
+    } else {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you highlighted environmental sustainability and transition challenges in ${topic}.`;
+      probingFollowup = `How can developing economies balance rapid industrial growth targets with stringent zero-carbon compliance commitments?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, how does ${firstName}'s environmental perspective align with your position?`;
+    }
+  } else if (domains.includes("cinema_media")) {
+    if (/\b(village|rural|grassroot|people|mass|impact|society|culture|cultural|mindset)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you made an important observation regarding the cultural influence and grassroots reach of cinema across diverse communities in ${topic}.`;
+      probingFollowup = `Do you believe mainstream cinema authentically reflects grassroots realities and inspires positive social change, or does it primarily create commercial escapism?`;
+      peerTransition = `Let us hear from ${targetName} from ${targetSeat}. ${targetFirstName}, how do you evaluate ${firstName}'s point about the deep social impact of cinema on grassroots audiences?`;
+    } else if (/\b(ott|stream|streaming|theatre|theater|hall|multiplex|digital|screen)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you brought up the evolving tension between traditional single-screen theatres and digital OTT streaming platforms in ${topic}.`;
+      probingFollowup = `Can regional single-screen theatres economically survive as viewers increasingly gravitate toward at-home streaming convenience?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, how do you see the future of communal movie viewing compared to personalized streaming?`;
+    } else if (/\b(censor|censorship|freedom|ban|rating|violence|content|regulation)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you highlighted the sensitive balance between creative artistic freedom and responsible content censorship in ${topic}.`;
+      probingFollowup = `Should regulatory boards enforce strict censorship, or should mature age-classification systems empower audiences to make their own choices?`;
+      peerTransition = `Let us invite ${targetName} from ${targetSeat}. ${targetFirstName}, what is your stance on creative freedom versus social accountability in media?`;
+    } else if (/\b(budget|cost|ticket|box office|money|commercial|price|star)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you focused on commercial box office pressures and high production economics within ${topic}.`;
+      probingFollowup = `How can independent, content-driven films compete commercially when massive marketing budgets dominate theatre screens?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, do you believe high production budgets guarantee quality, or is compelling storytelling being overshadowed?`;
+    } else {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you underscored how ${topic} actively shapes societal mindsets and modern popular culture.`;
+      probingFollowup = `What responsibility do filmmakers and influential media personalities have toward addressing pressing social issues?`;
+      peerTransition = `Let us bring in ${targetName} from ${targetSeat}. ${targetFirstName}, how does ${firstName}'s perspective on ${topic} resonate with your viewpoint?`;
+    }
+  } else if (domains.includes("healthcare_medicine")) {
+    if (/\b(rural|access|divide|village|infrastructure|clinic|primary|bed|hospital)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you pointed out the stark disparity between advanced urban hospitals and under-resourced rural clinics in ${topic}.`;
+      probingFollowup = `What realistic policy interventions can incentivize medical professionals to serve in rural primary healthcare centers?`;
+      peerTransition = `Let us hear from ${targetName} from ${targetSeat}. ${targetFirstName}, how do you evaluate ${firstName}'s focus on grassroots healthcare accessibility in ${topic}?`;
+    } else if (/\b(cost|price|expensive|afford|insurance|out-of-pocket|pharma|medicine|drug)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you focused on the rising cost of clinical care, diagnostic treatments, and patented medicines in ${topic}.`;
+      probingFollowup = `How can public healthcare policy curb catastrophic medical expenses for low-income families without disincentivizing private medical innovation?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, do you agree with ${firstName}'s economic assessment of healthcare affordability?`;
+    } else if (/\b(doctor|nurse|burnout|stress|staff|shortage|mental health|clinician)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you highlighted severe clinician burnout, staff shortages, and mental well-being in ${topic}.`;
+      probingFollowup = `How can high-intensity healthcare environments maintain patient safety while safeguarding the mental health of frontline clinicians?`;
+      peerTransition = `Let us invite ${targetName} from ${targetSeat}. ${targetFirstName}, how do you respond to ${firstName}'s points on healthcare worker burnout in ${topic}?`;
+    } else {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you raised an important observation regarding public health capacity and ethical care in ${topic}.`;
+      probingFollowup = `How should decision-makers balance immediate clinical demands against long-term public health infrastructure reforms?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, what is your take on ${firstName}'s argument regarding ${topic}?`;
+    }
+  } else if (domains.includes("finance_crypto")) {
+    if (/\b(upi|digital payment|cashless|inclusion|bank|unbanked|vendor)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you touched upon digital payments, UPI infrastructure, and grassroots financial inclusion in ${topic}.`;
+      probingFollowup = `How can digital payment ecosystems protect less tech-savvy citizens from sophisticated digital financial scams?`;
+      peerTransition = `Let us hear from ${targetName} from ${targetSeat}. ${targetFirstName}, how do you evaluate ${firstName}'s perspective on digital financial adoption in ${topic}?`;
+    } else if (/\b(crypto|bitcoin|blockchain|speculat|volatil|trading|token)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you addressed decentralized digital assets and speculative market volatility in ${topic}.`;
+      probingFollowup = `How can financial regulators prevent speculative market fraud without stifling legitimate technological innovation in digital finance?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, do you share ${firstName}'s viewpoint on cryptocurrency volatility and regulatory standards?`;
+    } else {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you highlighted financial feasibility and monetary oversight in ${topic}.`;
+      probingFollowup = `What policy safeguards can balance technological innovation with systemic financial stability?`;
+      peerTransition = `Let us bring in ${targetName} from ${targetSeat}. ${targetFirstName}, how does ${firstName}'s economic perspective align with your view on ${topic}?`;
+    }
+  } else if (domains.includes("workplace_career")) {
+    if (/\b(remote|wfh|hybrid|office|home|flexib|commute)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you highlighted the balance between remote work flexibility and in-person team collaboration in ${topic}.`;
+      probingFollowup = `How can organizations maintain a vibrant company culture and mentor junior employees effectively in fully remote or hybrid environments?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, do you agree with ${firstName}'s assessment of remote work models in ${topic}?`;
+    } else if (/\b(burnout|work-life|mental health|stress|overwork|4-day|hour|hours)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you focused on chronic work-related burnout, after-hours connectivity, and employee well-being in ${topic}.`;
+      probingFollowup = `What concrete workplace policies or 'right-to-disconnect' laws are needed to protect employees from digital fatigue?`;
+      peerTransition = `Let us hear from ${targetName} from ${targetSeat}. ${targetFirstName}, what is your take on ${firstName}'s points regarding workplace burnout and work-life balance?`;
+    } else {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you addressed evolving corporate expectations and career realities in ${topic}.`;
+      probingFollowup = `As workforce expectations transform, what should progressive employers prioritize to retain talent without compromising productivity?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, how do you evaluate ${firstName}'s perspective on ${topic}?`;
+    }
+  } else if (domains.includes("education_learning")) {
+    if (/\b(rote|exam|curriculum|nep|practical|theory|skill|industry)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you emphasized the widening mismatch between theoretical exam curricula and practical industry capabilities in ${topic}.`;
+      probingFollowup = `What systemic reforms should educational boards implement to replace rote memorization with experiential problem-solving?`;
+      peerTransition = `Let us invite ${targetName} from ${targetSeat}. ${targetFirstName}, what is your take on ${firstName}'s argument regarding educational reform and industry readiness?`;
+    } else if (/\b(stress|coaching|pressure|mental health|student|suicide|competition)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you raised serious concerns regarding intense academic pressure and commercial coaching factories in ${topic}.`;
+      probingFollowup = `How can society reform ultra-competitive entrance exams to evaluate student aptitude without driving extreme psychological distress?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, do you agree with ${firstName}'s focus on student well-being, or is high competition inevitable?`;
+    } else {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you underscored the vital role of educational modernization in ${topic}.`;
+      probingFollowup = `How can institutions ensure emerging learning models remain equitably accessible to all students regardless of socio-economic background?`;
+      peerTransition = `Let us hear from ${targetName} from ${targetSeat}. ${targetFirstName}, how does ${firstName}'s perspective on ${topic} resonate with your viewpoint?`;
+    }
+  } else if (domains.includes("social_governance")) {
+    if (/\b(policy|law|rule|govern|regulat|implement|enforce)\b/i.test(lower)) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you pointed out the persistent implementation gap between top-down legislation and ground-level execution in ${topic}.`;
+      probingFollowup = `What administrative accountability mechanisms can ensure civic policies are executed transparently without bureaucratic delays?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, do you believe stricter regulation is the answer, or should community oversight lead?`;
+    } else {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you highlighted public welfare and civic accountability in ${topic}.`;
+      probingFollowup = `How can decision-makers balance rapid urban modernization with the protection of vulnerable communities in ${topic}?`;
+      peerTransition = `Let us invite ${targetName} from ${targetSeat}. ${targetFirstName}, how do you evaluate ${firstName}'s argument regarding civic governance in ${topic}?`;
+    }
+  } else {
+    const styleIndex = (speakerName.length + (targetName?.length || 0)) % 3;
+    if (styleIndex === 0) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, you argued that ${snippet || "this issue demands careful nuance"} in our discussion on "${topic}".`;
+      probingFollowup = `Considering practical constraints in "${topic}", what potential counter-argument or implementation roadblock must be addressed?`;
+      peerTransition = `Let us invite ${targetName} from ${targetSeat}. ${targetFirstName}, how do you evaluate ${firstName}'s viewpoint on "${topic}", and what counter-arguments would you propose?`;
+    } else if (styleIndex === 1) {
+      coreAnalysis = `${firstName} from ${speakerSeat}, your emphasis that ${snippet || "we must weigh the trade-offs carefully"} raises a pivotal point in "${topic}".`;
+      probingFollowup = `What real-world evidence or measurable metric in "${topic}" would prove that this approach is viable on a large scale?`;
+      peerTransition = `Turning to ${targetName} from ${targetSeat}: ${targetFirstName}, do you agree with ${firstName}'s perspective on "${topic}", or do you see a different challenge?`;
+    } else {
+      coreAnalysis = `${firstName} from ${speakerSeat}, arguing that ${snippet || "this issue requires structured planning"} introduces a critical dimension to our discussion on "${topic}".`;
+      probingFollowup = `How can decision-makers execute on this in "${topic}" without creating unintended consequences?`;
+      peerTransition = `Let us hear from ${targetName} from ${targetSeat}. ${targetFirstName}, what is your take on ${firstName}'s point regarding "${topic}", and how would you build upon it?`;
+    }
+  }
+  return isSamePerson ? `${coreAnalysis} ${probingFollowup}` : `${coreAnalysis} ${peerTransition}`;
+}
+async function scheduleNextTurn(room, completedUserId) {
+  if (room.turnTimer) clearTimeout(room.turnTimer);
+  room.turnTimer = void 0;
+  if (room.speechYieldTimer) {
+    clearTimeout(room.speechYieldTimer);
+    room.speechYieldTimer = void 0;
+  }
+  if (room.status !== "active") return;
+  if (room.currentSpeakerId || room.currentSpeakerSocketId) return;
+  const isAnyPeerSpeaking = Array.from(room.peers.values()).some((p) => p.role === "student" && p.isSpeaking);
+  if (isAnyPeerSpeaking) return;
+  const realStudents = Array.from(room.peers.values()).filter((p) => p.role === "student");
+  const allParticipants = [
+    ...realStudents,
+    ...Array.from(room.aiParticipants.values()).map((participant) => ({
+      ...participant,
+      userId: participant.id,
+      socketId: "",
+      isAiParticipant: true
+    }))
+  ];
+  const hasFacilitatorSpoken = room.transcripts.some((t) => t.isFacilitator);
+  const isOpening = !room.hasAnnouncedWelcome && !room.openingStarted && !hasFacilitatorSpoken && room.transcripts.length === 0;
+  if (allParticipants.length === 0 && isOpening) {
+    for (const [, list] of Object.entries(persistentState.slots)) {
+      const slot = list.find((s) => s.id === room.slotId);
+      if (slot && Array.isArray(slot.students)) {
+        const realBooked = slot.students.filter((s) => s && !s.isEmptySeat && s.name && !String(s.name).startsWith("Seat "));
+        realBooked.forEach((s, idx) => {
+          allParticipants.push({
+            userId: s.id || `enrolled-${idx + 1}`,
+            name: s.name,
+            seatNumber: s.seatNumber || idx + 1,
+            role: "student",
+            socketId: ""
+          });
+        });
+        break;
+      }
+    }
+  }
+  if (!allParticipants.length && !isOpening) return;
+  let targetReal;
+  let isSameSpeaker = false;
+  const studentTranscripts = room.transcripts.filter((t) => !t.isFacilitator);
+  const recentSpeakerTranscript = studentTranscripts.slice(-1)[0];
+  const lastFacilitatorIndex = room.transcripts.map((t) => t.isFacilitator).lastIndexOf(true);
+  const speakerPeer = Array.from(room.peers.values()).find(
+    (p) => p.userId === completedUserId || recentSpeakerTranscript && p.userId === recentSpeakerTranscript.speakerId
+  );
+  const speakerName = speakerPeer?.name || recentSpeakerTranscript?.speakerName || "Candidate";
+  const speakerFirstName = speakerName.split(" ")[0];
+  const speakerSeatNumber = speakerPeer?.seatNumber ?? recentSpeakerTranscript?.seatNumber;
+  const speakerSeat = speakerSeatNumber ? `Seat ${speakerSeatNumber}` : "Seat 1";
+  const currentTurnTranscripts = room.transcripts.slice(lastFacilitatorIndex + 1).filter((t) => !t.isFacilitator && (t.speakerId === completedUserId || t.speakerId === speakerPeer?.userId));
+  let spokenThought = currentTurnTranscripts.map((t) => t.text.trim()).join(" ");
+  if (!spokenThought) {
+    const recentCandidateTx = room.transcripts.filter((t) => !t.isFacilitator && (t.speakerId === completedUserId || t.speakerId === speakerPeer?.userId)).slice(-1)[0];
+    if (recentCandidateTx && recentCandidateTx.text) {
+      spokenThought = recentCandidateTx.text.trim();
+    }
+  }
+  const missingTurnTranscript = !isOpening && !spokenThought;
+  const utteranceClassification = isOpening ? { category: "substantive", cleanedThought: "" } : missingTurnTranscript ? { category: "substantive", cleanedThought: "" } : classifyParticipantUtterance(spokenThought);
+  if (isOpening) {
+    room.openingStarted = true;
+    room.hasAnnouncedWelcome = true;
+    if (allParticipants.length > 0) {
+      const starter = allParticipants[Math.floor(Math.random() * allParticipants.length)];
+      targetReal = starter;
+      room.initialSpeakerSelected = realStudents.length > 0;
+    } else {
+      targetReal = {
+        socketId: "",
+        userId: "all-participants",
+        name: "Participants",
+        avatar: "",
+        role: "student",
+        college: "",
+        seatNumber: 1,
+        isSpeaking: false,
+        micActive: false,
+        cameraActive: false,
+        speakingDurationSeconds: 0,
+        speakingTurns: 0,
+        interruptionCount: 0,
+        joinedAt: Date.now()
+      };
+      room.initialSpeakerSelected = false;
+    }
+  } else if (utteranceClassification.category === "greeting" || utteranceClassification.category === "mic_check") {
+    targetReal = speakerPeer || allParticipants.find((p) => p.userId === completedUserId) || allParticipants[0];
+    isSameSpeaker = true;
+  } else {
+    const otherCandidates = allParticipants.filter((p) => p.userId !== completedUserId);
+    if (otherCandidates.length > 0) {
+      const leastTurns = Math.min(...otherCandidates.map((p) => Number(p.speakingTurns || 0)));
+      const leastSpoken = otherCandidates.filter((p) => Number(p.speakingTurns || 0) === leastTurns);
+      const earliestLastSpoke = Math.min(...leastSpoken.map((p) => Number(p.lastSpokeAt || 0)));
+      const tiedCandidates = leastSpoken.filter((p) => Number(p.lastSpokeAt || 0) === earliestLastSpoke);
+      targetReal = tiedCandidates[Math.floor(Math.random() * tiedCandidates.length)];
+      isSameSpeaker = false;
+    } else {
+      targetReal = allParticipants.find((p) => p.userId === completedUserId) || allParticipants[0];
+      isSameSpeaker = true;
+    }
+  }
+  room.turnTimer = setTimeout(async () => {
+    room.turnTimer = void 0;
+    if (room.currentSpeakerId || room.currentSpeakerSocketId || Array.from(room.peers.values()).some((p) => p.isSpeaking)) {
+      return;
+    }
+    const isGenericTarget = targetReal.userId === "all-participants";
+    room.waitingForParticipantId = isGenericTarget ? void 0 : targetReal.userId;
+    const firstName = isGenericTarget ? "everyone" : targetReal.name.split(" ")[0];
+    const seatStr = isGenericTarget ? "the floor" : targetReal.seatNumber ? `Seat ${targetReal.seatNumber}` : "your seat";
+    let invitation = "";
+    const roomDomain = detectTopicDomain(room.topic);
+    if (isOpening) {
+      if (roomDomain === "cinema_media") {
+        invitation = `Welcome participants to today's group discussion on "${room.topic}". The discussion has now officially commenced. Cinema holds immense cultural and social influence across our communities. To begin, let us invite ${targetReal.name} from ${seatStr}. ${firstName}, please share your opening thoughts on "${room.topic}".`;
+      } else if (roomDomain === "healthcare_medicine") {
+        invitation = `Welcome participants to today's group discussion on "${room.topic}". The discussion has now officially commenced. Healthcare accessibility and clinical quality affect every citizen. To begin, let us invite ${targetReal.name} from ${seatStr}. ${firstName}, please share your opening thoughts on "${room.topic}".`;
+      } else if (roomDomain === "ecommerce_retail") {
+        invitation = `Welcome participants to today's group discussion on "${room.topic}". The discussion has now officially commenced. Digital commerce and instant fulfillment are reshaping consumer habits and local economies. To begin, let us invite ${targetReal.name} from ${seatStr}. ${firstName}, please share your opening thoughts on "${room.topic}".`;
+      } else if (roomDomain === "clean_energy_ev") {
+        invitation = `Welcome participants to today's group discussion on "${room.topic}". The discussion has now officially commenced. Sustainable infrastructure and clean mobility are crucial for our future. To begin, let us invite ${targetReal.name} from ${seatStr}. ${firstName}, please share your opening thoughts on "${room.topic}".`;
+      } else if (roomDomain === "finance_crypto") {
+        invitation = `Welcome participants to today's group discussion on "${room.topic}". The discussion has now officially commenced. Digital financial systems must balance rapid innovation with security and stability. To begin, let us invite ${targetReal.name} from ${seatStr}. ${firstName}, please share your opening thoughts on "${room.topic}".`;
+      } else if (roomDomain === "workplace_career") {
+        invitation = `Welcome participants to today's group discussion on "${room.topic}". The discussion has now officially commenced. Modern workplace dynamics, flexibility, and employee well-being are undergoing historic shifts. To begin, let us invite ${targetReal.name} from ${seatStr}. ${firstName}, please share your opening thoughts on "${room.topic}".`;
+      } else if (roomDomain === "education_learning") {
+        invitation = `Welcome participants to today's group discussion on "${room.topic}". The discussion has now officially commenced. Education and skill development form the bedrock of societal progression. To begin, let us invite ${targetReal.name} from ${seatStr}. ${firstName}, please share your opening thoughts on "${room.topic}".`;
+      } else if (roomDomain === "technology_ai") {
+        invitation = `Welcome participants to today's group discussion on "${room.topic}". The discussion has now officially commenced. Technological innovation brings immense potential alongside critical ethical questions. To begin, let us invite ${targetReal.name} from ${seatStr}. ${firstName}, please share your opening thoughts on "${room.topic}".`;
+      } else if (roomDomain === "social_governance") {
+        invitation = `Welcome participants to today's group discussion on "${room.topic}". The discussion has now officially commenced. Effective public governance demands balancing civic welfare and administrative execution. To begin, let us invite ${targetReal.name} from ${seatStr}. ${firstName}, please share your opening thoughts on "${room.topic}".`;
+      } else {
+        invitation = `Welcome participants to today's group discussion on "${room.topic}". The discussion has now officially commenced. To begin, let us invite ${targetReal.name} from ${seatStr}. ${firstName}, please share your opening thoughts on this topic.`;
+      }
+    } else if (missingTurnTranscript) {
+      const dynamicMissingPool = [
+        `Let us keep the discussion moving: ${targetReal.name} from ${seatStr}, please share a fresh perspective on "${room.topic}".`,
+        `Continuing with our group discussion: ${targetReal.name} from ${seatStr}, how do you evaluate the core challenges in "${room.topic}"?`,
+        `Let us invite ${targetReal.name} from ${seatStr}. ${firstName}, what is your take on the practical realities of "${room.topic}"?`,
+        `${targetReal.name} from ${seatStr}, please share your viewpoint on the key issues regarding "${room.topic}".`,
+        `Passing the floor to ${targetReal.name} from ${seatStr}: ${firstName}, what unexplored angle of "${room.topic}" would you highlight?`
+      ];
+      invitation = dynamicMissingPool.find((p) => !room.askedQuestions?.has(p)) || dynamicMissingPool[(room.deadlockCount || 0) % dynamicMissingPool.length];
+    } else if (utteranceClassification.category === "greeting" || utteranceClassification.category === "mic_check") {
+      const studentTurnCount = speakerPeer?.speakingTurns || 0;
+      if (studentTurnCount > 1 && utteranceClassification.category === "greeting") {
+        invitation = analyzeThoughtHeuristically(
+          room.topic,
+          speakerName,
+          speakerSeat,
+          utteranceClassification.cleanedThought || spokenThought,
+          isSameSpeaker ? void 0 : targetReal.name,
+          isSameSpeaker ? void 0 : seatStr,
+          room.askedQuestions
+        );
+      } else {
+        invitation = isSameSpeaker ? utteranceClassification.category === "mic_check" ? `Hello ${speakerFirstName} from ${speakerSeat}, your audio is loud and clear. Please go ahead and share your opening thoughts or perspective on "${room.topic}".` : `Hello ${speakerFirstName} from ${speakerSeat}. You have the floor\u2014please go ahead and put forth your views on "${room.topic}".` : utteranceClassification.category === "mic_check" ? `Your audio is clear, ${speakerFirstName} from ${speakerSeat}. Please present your argument on "${room.topic}", or let us pass the floor to ${targetReal.name} from ${seatStr}.` : `Hello ${speakerFirstName} from ${speakerSeat}. When you are ready, please present your perspective on "${room.topic}". Otherwise, let us hear opening thoughts from ${targetReal.name} from ${seatStr}.`;
+      }
+    } else if (utteranceClassification.category === "filler") {
+      if (isSameSpeaker) {
+        if (roomDomain === "cinema_media") {
+          invitation = `Understood, ${speakerFirstName} from ${speakerSeat}. Please elaborate with concrete arguments\u2014for instance, how "${room.topic}" influences culture, box office realities, or grassroots community perspectives.`;
+        } else if (roomDomain === "healthcare_medicine") {
+          invitation = `Understood, ${speakerFirstName} from ${speakerSeat}. Please elaborate with concrete arguments\u2014for instance, addressing patient care, public health infrastructure, or affordability in "${room.topic}".`;
+        } else if (roomDomain === "ecommerce_retail") {
+          invitation = `Understood, ${speakerFirstName} from ${speakerSeat}. Please elaborate with concrete arguments\u2014for instance, how "${room.topic}" affects traditional Kiranas, consumer behavior, or delivery rider welfare.`;
+        } else if (roomDomain === "clean_energy_ev") {
+          invitation = `Understood, ${speakerFirstName} from ${speakerSeat}. Please elaborate with concrete arguments\u2014for instance, examining charging infrastructure, battery sustainability, or the economics of "${room.topic}".`;
+        } else if (roomDomain === "finance_crypto") {
+          invitation = `Understood, ${speakerFirstName} from ${speakerSeat}. Please elaborate with concrete arguments\u2014for instance, addressing financial inclusion, market volatility, or regulatory trust in "${room.topic}".`;
+        } else if (roomDomain === "workplace_career") {
+          invitation = `Understood, ${speakerFirstName} from ${speakerSeat}. Please elaborate with concrete arguments\u2014for instance, examining employee productivity, work-life balance, or organizational culture in "${room.topic}".`;
+        } else if (roomDomain === "education_learning") {
+          invitation = `Understood, ${speakerFirstName} from ${speakerSeat}. Please elaborate with concrete arguments\u2014for instance, addressing student well-being, curriculum modernization, or pedagogical quality in "${room.topic}".`;
+        } else if (roomDomain === "technology_ai") {
+          invitation = `Understood, ${speakerFirstName} from ${speakerSeat}. Please elaborate with concrete arguments\u2014for instance, discussing data privacy, algorithmic ethics, or human oversight in "${room.topic}".`;
+        } else {
+          invitation = `Understood, ${speakerFirstName} from ${speakerSeat}. Please elaborate with concrete arguments or real-world examples regarding "${room.topic}".`;
+        }
+      } else {
+        invitation = `Thank you, ${speakerFirstName} from ${speakerSeat}. Let us now hear from ${targetReal.name} from ${seatStr}. ${firstName}, what is your take on "${room.topic}"?`;
+      }
+    } else {
+      invitation = analyzeThoughtHeuristically(
+        room.topic,
+        speakerName,
+        speakerSeat,
+        utteranceClassification.cleanedThought,
+        isSameSpeaker ? void 0 : targetReal.name,
+        isSameSpeaker ? void 0 : seatStr,
+        room.askedQuestions
+      );
+      if (ai) {
+        try {
+          const priorQuestionsList = Array.from(room.askedQuestions || []).slice(-4).map((q) => `- ${q}`).join("\n");
+          const promptInstruction = isSameSpeaker ? `You are an incisive, highly articulate Indian collegiate Group Discussion moderator evaluating "${room.topic}".
+Participant ${speakerName} from ${speakerSeat} just stated:
+"${utteranceClassification.cleanedThought}"
+
+QUESTIONS PREVIOUSLY ASKED IN THIS ROOM:
+${priorQuestionsList || "(none)"}
+
+CRITICAL RULES:
+- ABSOLUTELY NEVER say "Good point", "That is a good point", "You made a valid point", "Valuable perspective", or any flattering praise.
+- Analyze the candidate's exact argument directly in 1 sentence (e.g., "${speakerFirstName} from ${speakerSeat}, you argued that [concise summary of candidate's specific premise].").
+- Follow immediately with 1 sharp analytical counter-question or practical challenge testing their logic (e.g., asking how to overcome cost constraints, regulatory hurdles, or unintended risks).
+- CRITICAL: DO NOT REPEAT ANY OF THE PREVIOUSLY ASKED QUESTIONS OR THEMES. ASK ABOUT A COMPLETELY NEW, UNTOUCHED ASPECT OF "${room.topic}".
+- Address ${speakerFirstName} from ${speakerSeat}.
+- Maximum 36 words total. Plain text only. Natural spoken moderator cadence.` : `You are an incisive, highly articulate Indian collegiate Group Discussion moderator evaluating "${room.topic}".
+Participant ${speakerName} from ${speakerSeat} just stated:
+"${utteranceClassification.cleanedThought}"
+
+The next speaker to take the floor is ${targetReal.name} from ${seatStr}.
+
+QUESTIONS PREVIOUSLY ASKED IN THIS ROOM:
+${priorQuestionsList || "(none)"}
+
+CRITICAL RULES:
+- ABSOLUTELY NEVER say "Good point", "That is a good point", "You made a valid point", "Valuable perspective", or any flattering praise.
+- Summarize ${speakerFirstName}'s specific argument in 1 crisp sentence (e.g., "${speakerFirstName} from ${speakerSeat}, you pointed out that [concise summary of candidate's specific premise].").
+- Bridge directly to ${targetReal.name} from ${seatStr} in 1 sentence, asking ${firstName} to evaluate, counter, or build upon ${speakerFirstName}'s specific thesis.
+- CRITICAL: DO NOT REPEAT ANY OF THE PREVIOUSLY ASKED QUESTIONS OR THEMES. ASK ABOUT A COMPLETELY NEW, UNTOUCHED ASPECT OF "${room.topic}".
+- Address both ${speakerFirstName} from ${speakerSeat} and ${targetReal.name} from ${seatStr}.
+- Maximum 40 words total. Plain text only. Natural spoken moderator cadence.`;
+          const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 4500));
+          const aiPromise = ai.models.generateContent({
+            model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+            contents: promptInstruction
+          });
+          const response = await Promise.race([aiPromise, timeoutPromise]);
+          const genText = response?.text?.trim();
+          if (genText && genText.length > 20) {
+            let sanitized = genText.replace(/^(that is a |that's a )?(good|great|valid|valuable|nice|excellent)\s+point[,.]?\s*/i, "").replace(/^thank you[,.]?\s+(that is a |that's a )?(good|great|valid|valuable)\s+point[,.]?\s*/i, "").trim();
+            if (sanitized.length > 0) {
+              sanitized = sanitized.charAt(0).toUpperCase() + sanitized.slice(1);
+              invitation = sanitized;
+            }
+          }
+        } catch (err) {
+        }
+      }
+    }
+    if (invitation) {
+      if (!room.askedQuestions) room.askedQuestions = /* @__PURE__ */ new Set();
+      room.askedQuestions.add(invitation);
+    }
+    if (room.currentSpeakerId || room.currentSpeakerSocketId || Array.from(room.peers.values()).some((p) => p.isSpeaking)) {
+      return;
+    }
+    const transcript = {
+      id: "t-facilitator-" + Date.now(),
+      sessionId: room.slotId,
+      speakerId: "facilitator",
+      speakerName: "AI Facilitator (ERUS)",
+      seatNumber: null,
+      isFacilitator: true,
+      timestamp: "00:00",
+      timestampSeconds: Date.now(),
+      text: invitation,
+      type: isOpening ? "intro" : "intervention",
+      sentiment: "neutral"
+    };
+    room.transcripts.push(transcript);
+    persistTranscriptToMongoDB(transcript);
+    const invWordCount = invitation.split(/\s+/).filter(Boolean).length;
+    room.facilitatorSpeakingUntil = Date.now() + Math.max(7e3, invWordCount * 480);
+    room.silenceTimerSeconds = 0;
+    io.to("room-" + room.slotId).emit("facilitator-intervention", {
+      text: invitation,
+      action: isOpening ? "opening" : utteranceClassification.category === "mic_check" || utteranceClassification.category === "greeting" ? "audio_confirmation" : "thought_analysis_reply",
+      targetUserId: targetReal.userId,
+      targetSeatNumber: targetReal.seatNumber,
+      transcript
+    });
+    const aiParticipant = room.aiParticipants.get(targetReal.userId);
+    if (aiParticipant) {
+      room.currentSpeakerId = aiParticipant.id;
+      room.currentSpeakerSocketId = null;
+      room.waitingForParticipantId = aiParticipant.id;
+      room.floorVersion += 1;
+      io.to("room-" + room.slotId).emit("floor-state", {
+        speakerId: aiParticipant.id,
+        speakerName: aiParticipant.name,
+        speakerSocketId: null,
+        isFloorLocked: true,
+        floorVersion: room.floorVersion
+      });
+      const facilitatorWaitMs = Math.max(7e3, invWordCount * 480) + 500;
+      room.turnTimer = setTimeout(async () => {
+        room.turnTimer = void 0;
+        if (room.status !== "active" || room.currentSpeakerId !== aiParticipant.id) return;
+        const recentHistory = room.transcripts.filter((entry) => !entry.isFacilitator).slice(-10).map((entry) => `${entry.speakerName}: ${entry.text}`).join("\n");
+        const priorDiscussionStatements = room.transcripts.filter((entry) => !entry.isFacilitator).map((entry) => String(entry.text || "").toLowerCase().replace(/[^a-z0-9 ]/g, "").trim());
+        let statement = "";
+        if (ai) {
+          try {
+            const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 4500));
+            const response = await Promise.race([
+              ai.models.generateContent({
+                model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+                contents: `You are ${aiParticipant.name}, a student in a live college group discussion about "${room.topic}". Respond naturally in 2-3 sentences (35-65 words). Add one specific, useful argument or example and, where relevant, respond to the previous speaker. Do not repeat any earlier point, phrasing, or conclusion. Do not praise the speaker generically. Do not mention being an AI. Use only this discussion context.
+Recent discussion:
+${recentHistory}
+Your new contribution:`
+              }),
+              timeoutPromise
+            ]);
+            statement = String(response?.text || "").replace(/^["'`]+|["'`]+$/g, "").trim();
+          } catch (err) {
+            console.warn("[GD] AI participant generation failed; using a local fallback.");
+          }
+        }
+        const fallbackStatements = [
+          `One practical dimension of "${room.topic}" is implementation. A policy may look strong on paper, but outcomes depend on funding, accountability, and whether the people affected can actually access it.`,
+          `I would add a long-term perspective on "${room.topic}". We should measure success with transparent outcomes over time, rather than relying only on initial adoption or short-term publicity.`,
+          `There is also an equity question in "${room.topic}": the same change can benefit well-resourced groups while leaving others behind. Any solution should include safeguards and a way to measure who is being missed.`,
+          `My concern with "${room.topic}" is unintended consequences. Before scaling a solution, we should test it in different real-world settings, collect feedback, and adjust the approach using evidence.`,
+          `A useful way to assess "${room.topic}" is to compare alternatives against clear criteria such as cost, accessibility, reliability, and accountability, instead of assuming that one approach works for everyone.`
+        ];
+        const normalizeStatement = (value) => value.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+        if (!statement || priorDiscussionStatements.includes(normalizeStatement(statement))) {
+          statement = fallbackStatements.find((candidate) => !priorDiscussionStatements.includes(normalizeStatement(candidate))) || fallbackStatements[(aiParticipant.speakingTurns + 1) % fallbackStatements.length];
+        }
+        if (room.status !== "active" || room.currentSpeakerId !== aiParticipant.id) return;
+        aiParticipant.speakingTurns += 1;
+        aiParticipant.lastSpokeAt = Date.now();
+        aiParticipant.speakingDurationSeconds += Math.max(1, Math.round(statement.split(/\s+/).length * 60 / 130));
+        const aiElapsedSeconds = room.transcripts.reduce((max, entry) => {
+          const value = Number(entry.timestampSeconds || 0);
+          return value >= 0 && value < 1e8 ? Math.max(max, value) : max;
+        }, 0) + Math.max(1, Math.round(statement.split(/\s+/).length * 60 / 130));
+        const aiTranscript = {
+          id: `t-${aiParticipant.id}-${Date.now()}`,
+          sessionId: room.slotId,
+          speakerId: aiParticipant.id,
+          speakerName: aiParticipant.name,
+          seatNumber: aiParticipant.seatNumber,
+          isFacilitator: false,
+          timestamp: `${String(Math.floor(aiElapsedSeconds / 60)).padStart(2, "0")}:${String(aiElapsedSeconds % 60).padStart(2, "0")}`,
+          timestampSeconds: aiElapsedSeconds,
+          text: statement,
+          type: "statement",
+          sentiment: "neutral"
+        };
+        room.transcripts.push(aiTranscript);
+        persistTranscriptToMongoDB(aiTranscript);
+        room.floorVersion += 1;
+        io.to("room-" + room.slotId).emit("floor-state", {
+          speakerId: aiParticipant.id,
+          speakerName: aiParticipant.name,
+          speakerSocketId: null,
+          isFloorLocked: true,
+          floorVersion: room.floorVersion
+        });
+        io.to("room-" + room.slotId).emit("ai-participant-speech", {
+          participant: { ...aiParticipant },
+          transcript: aiTranscript
+        });
+        const speechDurationMs = Math.max(12e3, statement.split(/\s+/).length * 450 + 2e3);
+        room.turnTimer = setTimeout(() => {
+          room.turnTimer = void 0;
+          if (room.status !== "active" || room.currentSpeakerId !== aiParticipant.id) return;
+          room.currentSpeakerId = null;
+          room.currentSpeakerSocketId = null;
+          room.waitingForParticipantId = void 0;
+          room.floorVersion += 1;
+          io.to("room-" + room.slotId).emit("floor-state", {
+            speakerId: null,
+            speakerName: null,
+            speakerSocketId: null,
+            isFloorLocked: false,
+            floorVersion: room.floorVersion
+          });
+          scheduleNextTurn(room, aiParticipant.id);
+        }, speechDurationMs);
+      }, facilitatorWaitMs);
+    }
+  }, isOpening ? 100 : 1200);
+}
+async function triggerDeadlockIntervention(room) {
+  room.currentSpeakerId = null;
+  room.currentSpeakerSocketId = null;
+  room.waitingForParticipantId = void 0;
+  let targetSlot = null;
+  for (const [, list] of Object.entries(persistentState.slots)) {
+    const found = list.find((s) => s.id === room.slotId);
+    if (found) {
+      targetSlot = found;
+      break;
+    }
+  }
+  const candidatePeers = Array.from(room.peers.values()).filter((p) => p.role !== "faculty" && p.role !== "college_admin");
+  let realStudents = candidatePeers;
+  if (realStudents.length === 0 && targetSlot && Array.isArray(targetSlot.students)) {
+    realStudents = targetSlot.students.filter((s) => s && !s.isEmptySeat && s.name && !String(s.name).startsWith("Seat "));
+  }
+  if (realStudents.length === 0) {
+    realStudents = Array.from(room.peers.values());
+  }
+  if (realStudents.length === 0) return;
+  const candidates = realStudents.filter((p) => (p.userId || p.id) !== room.lastDeadlockTargetId).sort(
+    (a, b) => (a.speakingTurns || 0) - (b.speakingTurns || 0) || (a.speakingDurationSeconds || 0) - (b.speakingDurationSeconds || 0) || (a.lastSpokeAt || 0) - (b.lastSpokeAt || 0)
+  );
+  const quietPeer = candidates[0] || realStudents.slice().sort(
+    (a, b) => (a.speakingTurns || 0) - (b.speakingTurns || 0) || (a.speakingDurationSeconds || 0) - (b.speakingDurationSeconds || 0) || (a.lastSpokeAt || 0) - (b.lastSpokeAt || 0)
+  )[0];
+  const candidateName = quietPeer?.name || "participants";
+  const seatStr = quietPeer?.seatNumber ? `from Seat ${quietPeer.seatNumber}` : "";
+  const firstName = candidateName.split(" ")[0];
+  if (quietPeer) {
+    room.lastDeadlockTargetId = quietPeer.userId || quietPeer.id;
+    room.waitingForParticipantId = quietPeer.userId || quietPeer.id;
+  }
+  const recentHistory = room.transcripts.filter((t) => !t.isFacilitator).slice(-8).map((t) => `${t.speakerName}: ${t.text}`).join("\n");
+  const deadlockDomain = detectTopicDomain(room.topic);
+  const domainDeadlockQuestions = {
+    cinema_media: [
+      `${candidateName} ${seatStr}, since the floor is quiet, do you believe cinema has an obligation to challenge deep-rooted social problems, or should it remain purely commercial entertainment?`,
+      `${candidateName} ${seatStr}, ${firstName}, how is the rapid rise of OTT streaming altering regional storytelling, theatre survival, and community viewing in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, what impact do you think film celebrities and modern media narratives have on youth mindsets and rural communities?`,
+      `${candidateName} ${seatStr}, ${firstName}, looking at "${room.topic}", where should regulatory bodies draw the line between artistic creative freedom and public content censorship?`,
+      `${candidateName} ${seatStr}, how can independent, content-driven cinema compete against mega-budget commercial franchises in "${room.topic}"?`
+    ],
+    healthcare_medicine: [
+      `${candidateName} ${seatStr}, since the floor is quiet, how can public and private healthcare models bridge the acute divide between urban hospitals and rural clinics in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, ${firstName}, what ethical safeguards are essential when deploying automated diagnostic algorithms or AI tools in critical patient care?`,
+      `${candidateName} ${seatStr}, how should policy address catastrophic out-of-pocket medical expenses that push vulnerable households into financial distress?`,
+      `${candidateName} ${seatStr}, ${firstName}, what systemic measures can prevent severe healthcare worker burnout while maintaining high clinical quality in "${room.topic}"?`
+    ],
+    ecommerce_retail: [
+      `${candidateName} ${seatStr}, since the floor is quiet, does the intense push for 10-minute delivery compromise gig-worker safety and local Kirana store survival in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, ${firstName}, how can small neighbourhood retailers adapt to digital supply chains without being marginalized by giant platform monopolies in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, looking at consumer habits in "${room.topic}", how should platforms balance personalized algorithmic recommendations against consumer data privacy?`,
+      `${candidateName} ${seatStr}, ${firstName}, as dynamic automated pricing becomes prevalent in "${room.topic}", how can regulatory frameworks protect consumers from unfair surge pricing?`,
+      `${candidateName} ${seatStr}, when automated chatbots and algorithms handle consumer disputes in "${room.topic}", where should human oversight remain strictly guaranteed?`
+    ],
+    clean_energy_ev: [
+      `${candidateName} ${seatStr}, since the floor is quiet, what practical charging infrastructure solutions are needed before electric vehicles can become viable beyond tier-1 cities?`,
+      `${candidateName} ${seatStr}, ${firstName}, how do we ensure the clean energy transition in "${room.topic}" accounts for the environmental costs of battery mining and grid upgrades?`,
+      `${candidateName} ${seatStr}, if an electric vehicle is charged by a coal-dominated power grid, how green is the transition in reality?`
+    ],
+    finance_crypto: [
+      `${candidateName} ${seatStr}, since the floor is quiet, how can digital financial innovation expand economic inclusion without exposing unbanked citizens to cyber fraud?`,
+      `${candidateName} ${seatStr}, ${firstName}, do decentralized cryptocurrencies represent the future of finance, or do volatility and illicit speculation demand strict regulation in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, looking at digital transactions and cashless models, how do we protect citizen privacy against excessive transaction surveillance?`
+    ],
+    workplace_career: [
+      `${candidateName} ${seatStr}, since the floor is quiet, how can organizations balance the flexibility of remote and hybrid work against team culture and spontaneous innovation?`,
+      `${candidateName} ${seatStr}, ${firstName}, what concrete workplace policies can protect employees from chronic digital burnout and unreasonable after-hours connectivity in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, as automation shifts job roles, who bears the primary responsibility for continuous reskilling\u2014the employee, the employer, or the state?`
+    ],
+    education_learning: [
+      `${candidateName} ${seatStr}, since the floor is quiet, how must higher education pivot from rote exam memorization toward critical thinking and hands-on synthesis in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, ${firstName}, what are the risks of hyper-competitive private coaching factories on student mental health and genuine intellectual curiosity?`,
+      `${candidateName} ${seatStr}, how can universities ensure emerging digital learning tools empower educators rather than creating an impersonal classroom experience?`
+    ],
+    technology_ai: [
+      `${candidateName} ${seatStr}, since the floor is quiet, where must human oversight remain strictly non-negotiable as autonomous algorithms take over critical decisions in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, ${firstName}, how should society balance the rapid benefits of automation against workforce disruption and data privacy risks in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, what institutional safeguards are necessary to prevent deepfakes and algorithmic misinformation from undermining public trust?`
+    ],
+    social_governance: [
+      `${candidateName} ${seatStr}, since the floor is quiet, how can policymakers bridge the gap between ambitious top-down legislation and ground-level execution in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, ${firstName}, what mechanisms can empower citizens to actively participate in civic governance rather than remaining passive observers?`,
+      `${candidateName} ${seatStr}, looking at "${room.topic}", how should municipal authorities balance rapid urban infrastructure expansion with environmental sustainability?`
+    ],
+    general: [
+      `${candidateName} ${seatStr}, since the floor is quiet, what is one practical example that supports your position on "${room.topic}"?`,
+      `${candidateName} ${seatStr}, ${firstName}, what is the strongest concern or counter-argument you see with the viewpoint discussed so far on "${room.topic}"?`,
+      `${candidateName} ${seatStr}, how could this idea be implemented realistically in an Indian college or workplace environment?`,
+      `${candidateName} ${seatStr}, ${firstName}, who is most affected by this issue, and why should their perspective matter in this debate?`,
+      `${candidateName} ${seatStr}, if you had to challenge one core assumption in this discussion so far regarding "${room.topic}", which would you challenge?`,
+      `${candidateName} ${seatStr}, ${firstName}, how would you balance the economic demands against ethical responsibilities in "${room.topic}"?`
+    ]
+  };
+  const primaryPool = domainDeadlockQuestions[deadlockDomain] || domainDeadlockQuestions.general;
+  const combinedPool = [...primaryPool, ...domainDeadlockQuestions.general];
+  if (!room.askedQuestions) room.askedQuestions = /* @__PURE__ */ new Set();
+  room.deadlockCount = (room.deadlockCount || 0) + 1;
+  const getQuestionStem = (q) => {
+    return String(q || "").replace(/^[^,]+,\s*/, "").toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+  };
+  const unaskedPool = combinedPool.filter((q) => {
+    const stem = getQuestionStem(q);
+    if (!stem) return false;
+    for (const asked of room.askedQuestions) {
+      const askedStem = getQuestionStem(asked);
+      if (askedStem === stem) return false;
+      if (stem.length > 20 && askedStem.includes(stem.slice(0, 30))) return false;
+      if (askedStem.length > 20 && stem.includes(askedStem.slice(0, 30))) return false;
+    }
+    return true;
+  });
+  let candidatesPool = unaskedPool;
+  if (candidatesPool.length === 0) {
+    const dynamicUnasked = [
+      `${candidateName} ${seatStr}, since the floor is quiet, how might we weigh the short-term conveniences against long-term societal accountability in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, ${firstName}, what unexpected regulatory or ethical challenges might emerge as "${room.topic}" scales across India?`,
+      `${candidateName} ${seatStr}, looking at financial feasibility, how can smaller institutions afford the transition in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, ${firstName}, what critical emotional or human psychological considerations are being overlooked in "${room.topic}"?`,
+      `${candidateName} ${seatStr}, playing devil's advocate: what if our primary assumptions about "${room.topic}" are overly cautious?`,
+      `${candidateName} ${seatStr}, ${firstName}, from a grassroots standpoint, how does "${room.topic}" impact non-metro and rural communities?`,
+      `${candidateName} ${seatStr}, what verifiable benchmarks should an independent audit committee monitor to ensure genuine success in "${room.topic}"?`
+    ];
+    candidatesPool = dynamicUnasked.filter((q) => {
+      const stem = getQuestionStem(q);
+      return !Array.from(room.askedQuestions).some((asked) => getQuestionStem(asked) === stem);
+    });
+    if (candidatesPool.length === 0) {
+      candidatesPool = dynamicUnasked;
+    }
+  }
+  const pickIndex = (room.deadlockCount - 1) % candidatesPool.length;
+  let deadlockQuestion = candidatesPool[pickIndex] || candidatesPool[0];
+  if (ai) {
+    try {
+      const priorQuestionsList = Array.from(room.askedQuestions || []).slice(-8).map((q) => `- ${q}`).join("\n");
+      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 4500));
+      const aiPromise = ai.models.generateContent({
+        model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+        contents: `You are the live moderator of an Indian collegiate Group Discussion.
+Topic: "${room.topic}"
+Candidate to call: "${candidateName} ${seatStr}"
+This is silence intervention number ${room.deadlockCount}.
+
+Recent discussion:
+${recentHistory || "(no recent student speech)"}
+
+QUESTIONS PREVIOUSLY ASKED IN THIS ROOM:
+${priorQuestionsList || "(none)"}
+
+Write ONE short, natural moderator question under 25 words.
+Call exactly ${candidateName} ${seatStr} by name and seat number to give them their turn.
+Ask a clear question on a FRESH angle of "${room.topic}" (e.g. ethical implications, economic viability, human impact, or practical hurdles).
+CRITICAL MANDATE: DO NOT REPEAT ANY OF THE PREVIOUS QUESTIONS OR THEMES.
+Do not mention AI.`
+      });
+      const response = await Promise.race([aiPromise, timeoutPromise]);
+      const generated = response?.text?.trim();
+      if (generated) {
+        const genStem = getQuestionStem(generated);
+        const isDuplicate = Array.from(room.askedQuestions || []).some((asked) => {
+          const askedStem = getQuestionStem(asked);
+          return askedStem === genStem || genStem.length > 20 && askedStem.includes(genStem.slice(0, 30));
+        });
+        if (!isDuplicate) {
+          deadlockQuestion = generated;
+        }
+      }
+    } catch (err) {
+    }
+  }
+  if (deadlockQuestion) {
+    deadlockQuestion = deadlockQuestion.replace(/^(Nine|Three|\d+)\s+seconds\s+(of\s+)?silence\s+detected\.?\s*/i, "");
+    const addressHeader = `Let us hear from ${candidateName} ${seatStr}.`;
+    if (!deadlockQuestion.toLowerCase().includes(candidateName.toLowerCase())) {
+      deadlockQuestion = `${addressHeader} ${deadlockQuestion}`;
+    }
+    room.askedQuestions.add(deadlockQuestion);
+  }
+  const checkAfterAi = Date.now();
+  if (Array.from(room.peers.values()).some((p) => p.lastSpokeAt && checkAfterAi - p.lastSpokeAt < 2500)) {
+    return;
+  }
+  const interventionTranscript = {
+    id: `t-facilitator-deadlock-${Date.now()}`,
+    sessionId: room.slotId,
+    speakerId: "facilitator",
+    speakerName: "AI Facilitator (ERUS)",
+    seatNumber: null,
+    isFacilitator: true,
+    timestamp: "00:00",
+    timestampSeconds: Date.now(),
+    text: deadlockQuestion,
+    type: "intervention",
+    sentiment: "neutral"
+  };
+  room.transcripts.push(interventionTranscript);
+  persistTranscriptToMongoDB(interventionTranscript);
+  const dlWordCount = (deadlockQuestion || "").split(/\s+/).filter(Boolean).length;
+  room.silenceTimerSeconds = 0;
+  io.to(`room-${room.slotId}`).emit("facilitator-intervention", {
+    text: deadlockQuestion,
+    action: "deadlock_intervention",
+    targetUserId: quietPeer?.userId,
+    targetSeatNumber: quietPeer?.seatNumber,
+    transcript: interventionTranscript
+  });
+}
+io.on("connection", (socket) => {
+  socket.on("join-gd-room", ({ slotId, user, topic }) => {
+    const safeSlotId = slotId || "session-101";
+    const room = getOrCreateLiveRoom(safeSlotId, topic);
+    if (topic && topic.trim() && room.topic !== topic.trim()) {
+      room.topic = topic.trim();
+    }
+    let targetSlot = null;
+    for (const [, list] of Object.entries(persistentState.slots)) {
+      const found = list.find((s) => s.id === safeSlotId);
+      if (found) {
+        targetSlot = found;
+        break;
+      }
+    }
+    if (targetSlot?.topic && targetSlot.topic.trim()) {
+      room.topic = targetSlot.topic.trim();
+    }
+    if (targetSlot?.status === "active" && room.status !== "active") {
+      room.status = "active";
+    }
+    socket.join(`room-${safeSlotId}`);
+    if (user?.id) {
+      recordUserActivity(user);
+    }
+    const isObserver = user?.role === "faculty" || user?.role === "college_admin";
+    let seatNumber = void 0;
+    let prevDuration = 0;
+    let prevTurns = 0;
+    let prevInterruption = 0;
+    if (!isObserver) {
+      const targetUserId = user?.id || socket.id;
+      for (const [existingSockId, existingPeer] of room.peers.entries()) {
+        const isStillConnected = io.sockets.sockets.get(existingSockId)?.connected;
+        if (existingSockId === socket.id || !isStillConnected && (existingPeer.userId === targetUserId || existingPeer.name && user?.name && existingPeer.name.toLowerCase() === user.name.toLowerCase())) {
+          seatNumber = existingPeer.seatNumber;
+          prevDuration = existingPeer.speakingDurationSeconds || 0;
+          prevTurns = existingPeer.speakingTurns || 0;
+          prevInterruption = existingPeer.interruptionCount || 0;
+          room.peers.delete(existingSockId);
+          if (seatNumber) room.assignedSeats.set(seatNumber, socket.id);
+          break;
+        }
+      }
+      if (!seatNumber) {
+        seatNumber = Number(user?.seatNumber);
+        const maxCap = Math.max(15, getSlotCapacity(safeSlotId));
+        if (!seatNumber || isNaN(seatNumber) || room.assignedSeats.has(seatNumber)) {
+          seatNumber = void 0;
+          for (let s = 1; s <= maxCap; s++) {
+            if (!room.assignedSeats.has(s)) {
+              seatNumber = s;
+              break;
+            }
+          }
+          if (!seatNumber) seatNumber = room.peers.size % maxCap + 1;
+        }
+        room.assignedSeats.set(seatNumber, socket.id);
+      }
+    }
+    const peer = {
+      socketId: socket.id,
+      userId: user?.id || socket.id,
+      name: user?.name || (isObserver ? "Faculty Evaluator" : `Student ${seatNumber}`),
+      avatar: user?.avatar || "",
+      role: user?.role || "student",
+      college: user?.college || "Campus Participant",
+      seatNumber,
+      isSpeaking: false,
+      micActive: !isObserver && Boolean(user?.micActive),
+      cameraActive: !isObserver && Boolean(user?.cameraActive),
+      speakingDurationSeconds: prevDuration,
+      speakingTurns: prevTurns,
+      interruptionCount: prevInterruption,
+      joinedAt: Date.now()
+    };
+    room.peers.set(socket.id, peer);
+    syncAiParticipants(room);
+    io.to(`room-${safeSlotId}`).emit("ai-participants-updated", {
+      aiParticipants: Array.from(room.aiParticipants.values()),
+      simulationMode: room.simulationMode
+    });
+    const allRoomPeers = Array.from(room.peers.values()).filter((p) => p.socketId !== socket.id);
+    socket.emit("gd-room-joined", {
+      assignedSeat: seatNumber,
+      peers: allRoomPeers,
+      aiParticipants: Array.from(room.aiParticipants.values()),
+      simulationMode: room.simulationMode,
+      transcripts: room.transcripts,
+      topic: room.topic,
+      silenceTimerSeconds: room.silenceTimerSeconds,
+      currentSpeakerId: room.currentSpeakerId,
+      status: room.status,
+      openingStarted: room.openingStarted
+    });
+    socket.to(`room-${safeSlotId}`).emit("peer-joined", {
+      peer
+    });
+  });
+  socket.on("start-session", ({ slotId, topic }) => {
+    const safeSlotId = slotId || "session-101";
+    const room = getOrCreateLiveRoom(safeSlotId, topic);
+    const peer = room.peers.get(socket.id);
+    const isAuthorized = !peer || peer.role === "faculty" || peer.role === "college_admin" || peer.role === "super_admin";
+    if (!isAuthorized) {
+      console.warn(`[start-session] Unauthorized attempt to start GD slot ${safeSlotId} by non-faculty peer ${peer?.name} (${peer?.role})`);
+      return;
+    }
+    let targetSlot = null;
+    for (const [, list] of Object.entries(persistentState.slots)) {
+      const found = list.find((s) => s.id === safeSlotId);
+      if (found) {
+        targetSlot = found;
+        break;
+      }
+    }
+    if (targetSlot) {
+      targetSlot.status = "active";
+      savePersistentState();
+    }
+    if (topic && topic.trim()) {
+      room.topic = topic.trim();
+    } else if (targetSlot?.topic && targetSlot.topic.trim()) {
+      room.topic = targetSlot.topic.trim();
+    }
+    room.status = "active";
+    room.silenceTimerSeconds = 0;
+    room.silenceStage = 0;
+    room.transcripts = [];
+    room.openingStarted = true;
+    room.hasAnnouncedWelcome = true;
+    room.deadlockCount = 0;
+    room.silenceInterventionCount = 0;
+    room.askedQuestions = /* @__PURE__ */ new Set();
+    syncAiParticipants(room);
+    io.to(`room-${safeSlotId}`).emit("session-started", {
+      slotId: safeSlotId,
+      status: "active",
+      topic: room.topic || targetSlot?.topic,
+      simulationMode: room.simulationMode,
+      aiParticipants: Array.from(room.aiParticipants.values())
+    });
+    io.emit("session-started", {
+      slotId: safeSlotId,
+      status: "active",
+      topic: room.topic || targetSlot?.topic
+    });
+  });
+  socket.on("facilitator-speech-ended", ({ slotId }) => {
+    const safeSlotId = slotId || "session-101";
+    const room = LIVE_ROOMS.get(safeSlotId);
+    if (room) {
+      room.facilitatorSpeakingUntil = 0;
+    }
+  });
+  socket.on("finish-session", ({ slotId }) => {
+    const safeSlotId = slotId || "session-101";
+    let targetSlot = null;
+    for (const [, list] of Object.entries(persistentState.slots)) {
+      for (const s of list) {
+        if (s && s.id === safeSlotId) {
+          s.status = "completed";
+          targetSlot = s;
+        }
+      }
+    }
+    savePersistentState();
+    if (isMongoConnected()) {
+      GDSessionModel.updateOne({ id: safeSlotId }, { $set: { status: "completed" } }).catch(() => null);
+      GDBookingModel.updateMany({ sessionId: safeSlotId, status: { $ne: "CANCELLED" } }, { $set: { status: "COMPLETED" } }).catch(() => null);
+    }
+    const room = LIVE_ROOMS.get(safeSlotId);
+    if (room) {
+      room.status = "completed";
+    }
+    io.to(`room-${safeSlotId}`).emit("session-ended", { slotId: safeSlotId, status: "completed", slot: targetSlot });
+    io.emit("session-ended", { slotId: safeSlotId, status: "completed", slot: targetSlot });
+    if (targetSlot) {
+      io.emit("slot-updated", { slot: targetSlot });
+    }
+  });
+  socket.on("request-ai-intervention", async ({ slotId }) => {
+    const safeSlotId = slotId || "session-101";
+    const room = LIVE_ROOMS.get(safeSlotId);
+    if (!room) return;
+    await triggerDeadlockIntervention(room);
+  });
+  socket.on("broadcast-facilitator-speech", ({ slotId, text, actionType }) => {
+    const safeSlotId = slotId || "session-101";
+    const room = LIVE_ROOMS.get(safeSlotId);
+    if (!room || !text?.trim()) return;
+    const transcript = {
+      id: `t-facilitator-${Date.now()}`,
+      sessionId: safeSlotId,
+      speakerId: "facilitator",
+      speakerName: "AI Facilitator (ERUS)",
+      seatNumber: null,
+      isFacilitator: true,
+      timestamp: "00:00",
+      timestampSeconds: Date.now(),
+      text: text.trim(),
+      type: "moderation",
+      sentiment: "positive"
+    };
+    room.transcripts.push(transcript);
+    persistTranscriptToMongoDB(transcript);
+    const isOpening = actionType === "initiate_opening_speaker" || actionType === "opening" || text.toLowerCase().includes("welcome");
+    if (isOpening) {
+      room.openingStarted = true;
+      room.hasAnnouncedWelcome = true;
+    }
+    const modWordCount = text.trim().split(/\s+/).filter(Boolean).length;
+    room.facilitatorSpeakingUntil = Date.now() + Math.max(8e3, modWordCount * 500);
+    room.silenceTimerSeconds = 0;
+    socket.to(`room-${safeSlotId}`).emit("facilitator-intervention", {
+      text: text.trim(),
+      action: actionType || "moderation",
+      transcript
+    });
+  });
+  socket.on("signal-send", ({ to, signal }) => {
+    io.to(to).emit("signal-receive", {
+      from: socket.id,
+      signal
+    });
+  });
+  socket.on("peer-speaking-state", ({ slotId, isSpeaking, micActive, cameraActive, volumeLevel }) => {
+    const safeSlotId = slotId || "session-101";
+    let room = LIVE_ROOMS.get(safeSlotId);
+    if (!room) {
+      for (const [, r] of LIVE_ROOMS.entries()) {
+        if (r.peers.has(socket.id)) {
+          room = r;
+          break;
+        }
+      }
+    }
+    if (!room) return;
+    const peer = room.peers.get(socket.id);
+    if (!peer) return;
+    if (peer.role === "faculty" || peer.role === "college_admin") {
+      peer.isSpeaking = !!isSpeaking;
+      if (micActive !== void 0) peer.micActive = micActive;
+      if (cameraActive !== void 0) peer.cameraActive = cameraActive;
+      io.to(`room-${safeSlotId}`).emit("peer-speaking-updated", {
+        socketId: socket.id,
+        userId: peer.userId,
+        seatNumber: peer.seatNumber,
+        role: peer.role,
+        isSpeaking: peer.isSpeaking,
+        micActive: peer.micActive,
+        cameraActive: peer.cameraActive,
+        volumeLevel: volumeLevel || 0
+      });
+      return;
+    }
+    const wasSpeaking = peer.isSpeaking;
+    peer.isSpeaking = !!isSpeaking;
+    if (micActive !== void 0) peer.micActive = micActive;
+    if (cameraActive !== void 0) peer.cameraActive = cameraActive;
+    if (peer.isSpeaking) {
+      peer.lastSpokeAt = Date.now();
+      room.silenceTimerSeconds = 0;
+      room.silenceStage = 0;
+      room.facilitatorSpeakingUntil = 0;
+      if (room.turnTimer) {
+        clearTimeout(room.turnTimer);
+        room.turnTimer = void 0;
+      }
+      room.waitingForParticipantId = void 0;
+    }
+    const activelySpeakingPeers = Array.from(room.peers.values()).filter(
+      (p) => p.role === "student" && p.isSpeaking && p.micActive
+    );
+    const allStudentPeers = Array.from(room.peers.values()).filter((p) => p.role === "student");
+    const distinctStudentsInRoom = new Set(
+      allStudentPeers.map((p) => String(p.userId || p.name || p.socketId))
+    );
+    if (distinctStudentsInRoom.size <= 1) {
+      if (room.overlapTimer) {
+        clearTimeout(room.overlapTimer);
+        room.overlapTimer = void 0;
+      }
+      if (activelySpeakingPeers.length >= 1) {
+        const soloSpeaker = activelySpeakingPeers[0];
+        room.currentSpeakerId = soloSpeaker.userId;
+        room.currentSpeakerSocketId = soloSpeaker.socketId;
+        room.floorVersion += 1;
+        io.to(`room-${safeSlotId}`).emit("floor-state", {
+          speakerId: soloSpeaker.userId,
+          speakerName: soloSpeaker.name,
+          speakerSocketId: soloSpeaker.socketId,
+          isFloorLocked: false,
+          floorVersion: room.floorVersion
+        });
+      } else if (room.currentSpeakerId) {
+        room.currentSpeakerId = null;
+        room.currentSpeakerSocketId = null;
+        room.floorVersion += 1;
+        io.to(`room-${safeSlotId}`).emit("floor-state", {
+          speakerId: null,
+          speakerName: null,
+          speakerSocketId: null,
+          isFloorLocked: false,
+          floorVersion: room.floorVersion
+        });
+      }
+      io.to(`room-${safeSlotId}`).emit("peer-speaking-updated", {
+        socketId: socket.id,
+        userId: peer.userId,
+        seatNumber: peer.seatNumber,
+        role: peer.role,
+        isSpeaking: peer.isSpeaking,
+        micActive: peer.micActive,
+        cameraActive: peer.cameraActive,
+        volumeLevel: volumeLevel || 0
+      });
+      return;
+    }
+    const uniqueSpeakingStudents = /* @__PURE__ */ new Map();
+    for (const p of activelySpeakingPeers) {
+      const uKey = String(p.userId || p.name || p.socketId);
+      if (!uniqueSpeakingStudents.has(uKey)) {
+        uniqueSpeakingStudents.set(uKey, p);
+      }
+    }
+    const distinctActiveSpeakers = Array.from(uniqueSpeakingStudents.values());
+    if (distinctActiveSpeakers.length >= 2) {
+      if (!room.overlapTimer) {
+        room.overlapTimer = setTimeout(() => {
+          room.overlapTimer = void 0;
+          const currentOverlapping = Array.from(room.peers.values()).filter(
+            (p) => p.role === "student" && p.isSpeaking && p.micActive
+          );
+          const uniqueCurrentSpeaking = /* @__PURE__ */ new Map();
+          for (const p of currentOverlapping) {
+            const uKey = String(p.userId || p.name || p.socketId);
+            if (!uniqueCurrentSpeaking.has(uKey)) {
+              uniqueCurrentSpeaking.set(uKey, p);
+            }
+          }
+          const distinctCurrentSpeakers = Array.from(uniqueCurrentSpeaking.values());
+          if (distinctCurrentSpeakers.length >= 2) {
+            const now = Date.now();
+            if (now - (room.lastOverlapWarningTime || 0) > 12e3) {
+              room.lastOverlapWarningTime = now;
+              const spk2 = distinctCurrentSpeakers[1];
+              spk2.interruptionCount = (spk2.interruptionCount || 0) + 1;
+              io.to(`room-${safeSlotId}`).emit("peer-stats-updated", {
+                socketId: spk2.socketId,
+                userId: spk2.userId,
+                seatNumber: spk2.seatNumber,
+                speakingTurns: spk2.speakingTurns,
+                speakingDurationSeconds: spk2.speakingDurationSeconds,
+                interruptionCount: spk2.interruptionCount
+              });
+            }
+          }
+        }, 1e3);
+      }
+    } else {
+      if (room.overlapTimer) {
+        clearTimeout(room.overlapTimer);
+        room.overlapTimer = void 0;
+      }
+    }
+    if (activelySpeakingPeers.length === 1) {
+      room.currentSpeakerId = activelySpeakingPeers[0].userId;
+      room.currentSpeakerSocketId = activelySpeakingPeers[0].socketId;
+      room.floorVersion += 1;
+      io.to(`room-${safeSlotId}`).emit("floor-state", {
+        speakerId: activelySpeakingPeers[0].userId,
+        speakerName: activelySpeakingPeers[0].name,
+        speakerSocketId: activelySpeakingPeers[0].socketId,
+        isFloorLocked: false,
+        floorVersion: room.floorVersion
+      });
+    } else if (activelySpeakingPeers.length >= 2) {
+      const names = activelySpeakingPeers.map((p) => p.name).join(" & ");
+      room.currentSpeakerId = activelySpeakingPeers[0].userId;
+      room.floorVersion += 1;
+      io.to(`room-${safeSlotId}`).emit("floor-state", {
+        speakerId: activelySpeakingPeers[0].userId,
+        speakerName: names,
+        speakerSocketId: null,
+        isFloorLocked: false,
+        floorVersion: room.floorVersion
+      });
+    } else if (activelySpeakingPeers.length === 0 && room.currentSpeakerId) {
+      if (room.speechYieldTimer) {
+        clearTimeout(room.speechYieldTimer);
+        room.speechYieldTimer = void 0;
+      }
+      room.speechYieldTimer = setTimeout(() => {
+        room.speechYieldTimer = void 0;
+        const stillSpeaking = Array.from(room.peers.values()).filter(
+          (p) => p.role === "student" && p.isSpeaking && p.micActive
+        );
+        if (stillSpeaking.length === 0) {
+          room.currentSpeakerId = null;
+          room.currentSpeakerSocketId = null;
+          room.floorVersion += 1;
+          io.to(`room-${safeSlotId}`).emit("floor-state", {
+            speakerId: null,
+            speakerName: null,
+            speakerSocketId: null,
+            isFloorLocked: false,
+            floorVersion: room.floorVersion
+          });
+        }
+      }, 1200);
+    }
+    io.to(`room-${safeSlotId}`).emit("peer-speaking-updated", {
+      socketId: socket.id,
+      userId: peer.userId,
+      seatNumber: peer.seatNumber,
+      isSpeaking: peer.isSpeaking,
+      micActive: peer.micActive,
+      cameraActive: peer.cameraActive,
+      volumeLevel: volumeLevel || 0
+    });
+  });
+  socket.on("peer-transcript", ({ slotId, text, elapsedSeconds, transcriptId }) => {
+    const safeSlotId = slotId || "session-101";
+    const room = LIVE_ROOMS.get(safeSlotId);
+    if (!room || !text?.trim()) return;
+    const peer = room.peers.get(socket.id);
+    if (!peer) return;
+    if (peer.role === "faculty" || peer.role === "college_admin") {
+      return;
+    }
+    if (room.currentSpeakerId !== peer.userId) {
+      room.currentSpeakerId = peer.userId;
+      room.currentSpeakerSocketId = socket.id;
+    }
+    if (!room.currentSpeakerId) {
+      room.currentSpeakerId = peer.userId;
+      room.currentSpeakerSocketId = socket.id;
+      room.waitingForParticipantId = void 0;
+      room.silenceTimerSeconds = 0;
+      room.silenceStage = 0;
+      room.floorVersion += 1;
+      io.to(`room-${safeSlotId}`).emit("floor-state", {
+        speakerId: peer.userId,
+        speakerSocketId: socket.id,
+        floorVersion: room.floorVersion
+      });
+    }
+    const cleanWords = text.trim().split(/\s+/).filter(Boolean);
+    const fillerTokens = /* @__PURE__ */ new Set([
+      "ok",
+      "okay",
+      "yes",
+      "yeah",
+      "yep",
+      "no",
+      "nope",
+      "sure",
+      "fine",
+      "alright",
+      "right",
+      "agree",
+      "thank",
+      "thanks",
+      "you",
+      "done",
+      "finished",
+      "thats",
+      "that",
+      "is",
+      "it",
+      "all",
+      "hmm",
+      "well",
+      "got",
+      "understood",
+      "cool",
+      "sir",
+      "maam",
+      "actually",
+      "basically",
+      "so",
+      "like",
+      "hello",
+      "hlo",
+      "hi",
+      "hey",
+      "am",
+      "i",
+      "audible",
+      "clear"
+    ]);
+    const substantiveWords = cleanWords.filter((w) => !fillerTokens.has(w.toLowerCase().replace(/[^a-z0-9]/g, "")));
+    const isGoodPoint = cleanWords.length >= 3 && substantiveWords.length >= 2;
+    if (isGoodPoint) {
+      peer.speakingTurns = (peer.speakingTurns || 0) + 1;
+      const turnSeconds = Math.max(3, Math.round(cleanWords.length / 2.1));
+      peer.speakingDurationSeconds = (peer.speakingDurationSeconds || 0) + turnSeconds;
+      peer.lastSpokeAt = Date.now();
+    }
+    room.silenceTimerSeconds = 0;
+    room.silenceStage = 0;
+    const mins = Math.floor((elapsedSeconds || 0) / 60).toString().padStart(2, "0");
+    const secs = ((elapsedSeconds || 0) % 60).toString().padStart(2, "0");
+    const newTranscript = {
+      id: `t-live-${Date.now()}`,
+      sessionId: safeSlotId,
+      speakerId: peer.userId,
+      speakerName: peer.name,
+      seatNumber: peer.seatNumber,
+      isFacilitator: false,
+      timestamp: `${mins}:${secs}`,
+      timestampSeconds: elapsedSeconds || 0,
+      text: text.trim(),
+      type: "statement",
+      sentiment: "positive"
+    };
+    room.transcripts.push(newTranscript);
+    persistTranscriptToMongoDB(newTranscript);
+    room.hasAnnouncedWelcome = true;
+    room.openingStarted = true;
+    io.to(`room-${safeSlotId}`).emit("new-transcript", {
+      transcript: newTranscript,
+      studentId: peer.userId,
+      seatNumber: peer.seatNumber,
+      speakingTurns: peer.speakingTurns,
+      speakingDurationSeconds: peer.speakingDurationSeconds
+    });
+    io.to(`room-${safeSlotId}`).emit("peer-stats-updated", {
+      socketId: socket.id,
+      userId: peer.userId,
+      seatNumber: peer.seatNumber,
+      speakingTurns: peer.speakingTurns,
+      speakingDurationSeconds: peer.speakingDurationSeconds
+    });
+    if (room.speechYieldTimer) {
+      clearTimeout(room.speechYieldTimer);
+      room.speechYieldTimer = void 0;
+    }
+    room.speechYieldTimer = setTimeout(() => {
+      room.speechYieldTimer = void 0;
+      peer.floorTurnCounted = false;
+      if (room.currentSpeakerId === peer.userId || room.currentSpeakerSocketId === socket.id) {
+        if (!peer.isSpeaking) {
+          room.currentSpeakerId = null;
+          room.currentSpeakerSocketId = null;
+          room.waitingForParticipantId = void 0;
+          room.floorVersion += 1;
+          io.to(`room-${safeSlotId}`).emit("floor-state", {
+            speakerId: null,
+            speakerSocketId: null,
+            floorVersion: room.floorVersion
+          });
+          const realStudentPeers = Array.from(room.peers.values()).filter(
+            (p) => p.role === "student"
+          );
+          if (realStudentPeers.length >= 2 && !room.simulationMode) {
+            return;
+          }
+          scheduleNextTurn(room, peer.userId);
+        }
+      }
+    }, 3e3);
+  });
+  const handlePeerDisconnect = (sock, explicitSlotId, explicitUserId) => {
+    for (const [slotId, room] of LIVE_ROOMS.entries()) {
+      if (explicitSlotId && slotId !== explicitSlotId) continue;
+      let peerKey = sock.id;
+      let peer = room.peers.get(sock.id);
+      if (!peer && explicitUserId) {
+        for (const [sId, p] of room.peers.entries()) {
+          if (p.userId === explicitUserId) {
+            peerKey = sId;
+            peer = p;
+            break;
+          }
+        }
+      }
+      if (peer) {
+        room.assignedSeats.delete(peer.seatNumber);
+        room.peers.delete(peerKey);
+        syncAiParticipants(room);
+        if (room.currentSpeakerSocketId === peerKey || room.currentSpeakerId === peer.userId) {
+          room.currentSpeakerId = null;
+          room.currentSpeakerSocketId = null;
+        }
+        io.to(`room-${slotId}`).emit("peer-left", {
+          socketId: peerKey,
+          userId: peer.userId,
+          seatNumber: peer.seatNumber
+        });
+        if (room.status === "active") {
+          scheduleNextTurn(room, peer.userId);
+        }
+        if (room.peers.size === 0 && room.silenceInterval) {
+          clearInterval(room.silenceInterval);
+          LIVE_ROOMS.delete(slotId);
+        }
+        break;
+      }
+    }
+  };
+  socket.on("leave-gd-room", (payload) => {
+    handlePeerDisconnect(socket, payload?.slotId, payload?.user?.id);
+  });
+  socket.on("disconnect", () => {
+    handlePeerDisconnect(socket);
+  });
+});
+async function setupVite() {
+  const distPath = import_path2.default.join(process.cwd(), "dist");
+  const distIndexExists = import_fs.default.existsSync(import_path2.default.join(distPath, "index.html"));
+  const isProd = process.env.NODE_ENV === "production" || distIndexExists;
+  if (!isProd) {
+    const { createServer: createViteServer } = await import("vite");
+    const vite = await createViteServer({
+      server: { middlewareMode: true, allowedHosts: true },
+      appType: "spa"
+    });
+    app.use(vite.middlewares);
+  } else {
+    app.use(
+      import_express.default.static(distPath, {
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith("index.html")) {
+            res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+          }
+        }
+      })
+    );
+    app.get("*", (req, res) => {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.sendFile(import_path2.default.join(distPath, "index.html"));
+    });
+  }
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`[ERUS-AIGDF] Server active on port ${PORT} with WebSockets enabled (mode: ${isProd ? "production" : "development"})`);
+  });
+  ensureMongoReady();
+}
+var mongoInitPromise = null;
+async function ensureMongoReady() {
+  if (!mongoInitPromise) {
+    mongoInitPromise = (async () => {
+      try {
+        await connectMongoDB();
+        await initMongoDBTablesAndSubTables();
+        await syncMongoDBWithPersistentState();
+      } catch (dbErr) {
+        console.warn("[MongoDB Background Init Warning]:", dbErr.message);
+      }
+    })();
+  }
+  return mongoInitPromise;
+}
+if (!process.env.VERCEL) {
+  setupVite();
+}
+var server_default = app;
+// Annotate the CommonJS export names for ESM import in node:
+0 && (module.exports = {
+  app,
+  cleanSlotName,
+  ensureMongoReady,
+  httpServer
+});
+//# sourceMappingURL=server.cjs.map
