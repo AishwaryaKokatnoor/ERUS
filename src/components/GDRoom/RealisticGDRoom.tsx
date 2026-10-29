@@ -5180,6 +5180,7 @@ export const StudentPodCard: React.FC<{
   seatAngle?: number;
   leftPct?: number;
   topPct?: number;
+  isCompactGrid?: boolean;
 }> = ({
   student,
   isCurrentSpeaker,
@@ -5195,6 +5196,7 @@ export const StudentPodCard: React.FC<{
   seatAngle,
   leftPct,
   topPct,
+  isCompactGrid = false,
 }) => {
   const isUser = !isFaculty && !!student.isUser;
   const isZoomedSpeaker = isCurrentSpeaker || zoomLevel === 'zoomed' || student.isSpeaking;
@@ -5276,6 +5278,7 @@ export const StudentPodCard: React.FC<{
             seatAngle={seatAngle}
             leftPct={leftPct}
             topPct={topPct}
+            isCompactGrid={isCompactGrid}
           />
 
           {!student.isEmptySeat && onEnlarge && (
